@@ -164,6 +164,17 @@ official cooperation. Nothing network-facing is needed before M7.
 - Load a DotA map in single player (custom game), select a hero, play a full match to the end
   screen: terrain/models/UI rendered, Miles audio, mouse and keyboard.
 - **Accept:** a full local match on the chosen DotA build, 3 runs, no fatal stop; replay saved.
+- **Work item (the user's request, 2026-10-25): native macOS fullscreen and Retina/HiDPI**, verified
+  separately, not a change to M5's gate:
+  - fullscreen ↔ windowed switching, borderless fullscreen first (macOS's native Spaces fullscreen
+    later if needed);
+  - logical (points) versus physical (pixels) sizing on Retina and scaled displays; the game keeps
+    its own resolution and the frame is scaled to the window;
+  - mouse coordinates mapped through the same scaled, letterboxed rectangle;
+  - the original 4:3 UI never stretched: aspect preserved with letter/pillarboxing; gameplay
+    correctness unaffected (the game sees only its own resolution);
+  - the existing 800×600 test mode unchanged;
+  - regression and mutation tests for fullscreen transitions, resizing and input mapping.
 
 ## M6 — AI bots
 - A DotA AI map (e.g. an "AI" build, or the map's own computer players) playing a full match
@@ -198,5 +209,37 @@ official cooperation. Nothing network-facing is needed before M7.
   - A full online match with Windows iCCup players, no desync.
   - iCCup's official anti-cheat approval, and its integration requirements met.
   - No regression in offline or LAN play (their acceptance tests re-run).
+
+## Release packaging *(future work item; not a milestone gate, not started)*
+- **Goal (the user's request, 2026-10-25):** a native macOS application players install and launch
+  like any other game, compatible with macOS Game Mode. It doesn't interrupt the milestones or
+  change their gates.
+- **Constraint that shapes it:** a distribution never includes a CD key, game code (original or
+  recompiled), assets or maps (AGENTS.md). The lifted C++ and its compiled form derive from the
+  player's own Warcraft III binaries, so the release ships the recompiler, the runtime and the
+  native installer only, and produces the game modules on the player's machine from their own
+  install (lift + compile there, or an equivalent the user approves). How that works without a
+  developer toolchain on the player's Mac is the first open question.
+- **Scope:**
+  - A native `.app` bundle: `Info.plist` with `LSApplicationCategoryType`
+    `public.app-category-games` (or a game subcategory) and `LSSupportsGameMode`; bundle id,
+    version, icon; minimum macOS version; arm64.
+  - Proper fullscreen (M5's fullscreen/HiDPI work item) and Retina/HiDPI handling.
+  - macOS Game Mode: verify that it activates on supported systems (macOS 14+ on Apple silicon)
+    when the game is frontmost and fullscreen (the menu-bar Game Mode indicator, and the system
+    log), and that the game runs correctly with it on and off.
+  - Code signing with a Developer ID Application certificate and the hardened runtime, every
+    nested dylib signed, minimal entitlements (no JIT is needed: the code is recompiled ahead of
+    time); notarization (`notarytool`) and stapling; Gatekeeper check on a clean machine.
+  - Distribution packaging: a signed, notarized DMG (or installer package) containing only
+    reFrozen; first-run flow that points at the player's own installers or install, runs the
+    native installer (CD keys as the official installer stores them, never transmitted), and
+    builds the game modules locally; uninstall and update paths; checksums and reproducible-build
+    evidence for what is shipped.
+- **Accept (when scheduled):** the bundle passes `codesign --verify --deep --strict` and
+  `spctl --assess`, is notarized and stapled; installs and launches on a clean supported Mac from
+  the player's own files; Game Mode activates in fullscreen; the shipped artifact contains no game
+  code, data, keys or maps (an automated content check); the offline and LAN acceptance tests pass
+  on the packaged build.
 
 Following `../game-port-knowledge/general/bring-up-checklist.md` throughout.
