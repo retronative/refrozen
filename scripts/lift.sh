@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Lift every Warcraft III 1.26a module in one recomp_lift run (M1; msvcr80.dll added in M2).
+# Lift every Warcraft III 1.26a module in one recomp_lift run (M1; msvcr80.dll added in M2,
+# ijl15.dll in M3).
 #
 #   scripts/lift.sh [install dir] [out dir]   # defaults: game/native-install game/generated/war3
 #
@@ -10,6 +11,8 @@
 #   - exports.tsv, imports.tsv: from the player's own binary (tools/x86recomp/tools/pe_symbols.py).
 #   - instructions.tsv, noncode.tsv: copied from game/symbols/<module>/ when present (development
 #     only, for scripts/validate_lift.py).
+#   - config/jumptable_corrections.tsv: case targets removed from the pinned jump tables, each
+#     with the evidence that its index cannot occur (Ghidra over-reads some computed jumps).
 # Manifests are config/<module>.manifest. The output is generated from the player's own files:
 # git-ignored, never committed.
 set -euo pipefail
@@ -24,7 +27,7 @@ PYTHON=/opt/homebrew/bin/python3
 
 # module file (relative to the install) : symbols/config name
 MODULES=(
-  "war3.exe:war3" "game.dll:game" "Storm.dll:storm" "Mss32.dll:mss32" "msvcr80.dll:msvcr80"
+  "war3.exe:war3" "game.dll:game" "Storm.dll:storm" "Mss32.dll:mss32" "msvcr80.dll:msvcr80" "ijl15.dll:ijl15"
   "redist/miles/Mp3dec.asi:mp3dec_asi" "redist/miles/Mssfast.m3d:mssfast_m3d"
   "redist/miles/Msseax2.m3d:msseax2_m3d" "redist/miles/Mssdolby.m3d:mssdolby_m3d"
   "redist/miles/Reverb3.flt:reverb3_flt"
@@ -35,7 +38,9 @@ for i in "${!MODULES[@]}"; do
   dir="$LIFTSYM/$name"
   rm -rf "$dir"
   mkdir -p "$dir"
-  cp "$PINNED/$name/functions.tsv" "$PINNED/$name/jumptables.tsv" "$dir/"
+  cp "$PINNED/$name/functions.tsv" "$dir/"
+  "$PYTHON" -I "$ROOT/scripts/jumptable_corrections.py" "$PINNED/$name/jumptables.tsv" \
+    "$CFG/jumptable_corrections.tsv" "$name" > "$dir/jumptables.tsv"
   PATH="/opt/homebrew/opt/llvm/bin:$PATH" "$PYTHON" -I "$ROOT/tools/x86recomp/tools/pe_symbols.py" \
     "$INSTALL/$file" --out "$dir" > /dev/null
   for f in instructions.tsv noncode.tsv; do

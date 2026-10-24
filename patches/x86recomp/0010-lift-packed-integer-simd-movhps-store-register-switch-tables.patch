@@ -1,0 +1,614 @@
+diff --git a/src/runtime/lifted.h b/src/runtime/lifted.h
+index a2f2a80..645290f 100644
+--- a/src/runtime/lifted.h
++++ b/src/runtime/lifted.h
+@@ -9,6 +9,7 @@
+ 
+ #include "runtime/ctx.h"
+ #include "runtime/sse.h"
++#include "runtime/simd64.h"
+ #include "runtime/x87.h"
+ 
+ namespace recomp {
+@@ -442,61 +443,9 @@ namespace mmx {
+ }
+ [[gnu::always_inline]] inline void Emms(x87::State& s) { s.empty = 0xFF; }
+ 
+-// PSLLQ / PSRLQ: counts above 63 clear the register.
+-[[gnu::always_inline]] inline uint64_t Sllq(uint64_t v, uint64_t n) {
+-  return n > 63 ? 0 : v << n;
+-}
+-[[gnu::always_inline]] inline uint64_t Srlq(uint64_t v, uint64_t n) {
+-  return n > 63 ? 0 : v >> n;
+-}
+-
+-// PADDUSB: eight unsigned bytes added with saturation at 0xFF.
+-inline uint64_t Paddusb(uint64_t a, uint64_t b) {
+-  uint64_t r = 0;
+-  for (int i = 0; i < 64; i += 8) {
+-    uint32_t s = uint32_t((a >> i) & 0xFF) + uint32_t((b >> i) & 0xFF);
+-    r |= uint64_t(s > 0xFF ? 0xFF : s) << i;
+-  }
+-  return r;
+-}
+-
+-// PSRAD / PSRAW: arithmetic right shift of each dword / word; counts above
+-// the lane width fill the lane with its sign bit.
+-inline uint64_t Psrad(uint64_t v, uint64_t n) {
+-  const int s = n > 31 ? 31 : int(n);
+-  uint64_t r = 0;
+-  for (int i = 0; i < 64; i += 32)
+-    r |= uint64_t(uint32_t(int32_t(uint32_t(v >> i)) >> s)) << i;
+-  return r;
+-}
+-inline uint64_t Psraw(uint64_t v, uint64_t n) {
+-  const int s = n > 15 ? 15 : int(n);
+-  uint64_t r = 0;
+-  for (int i = 0; i < 64; i += 16)
+-    r |= uint64_t(uint16_t(int16_t(uint16_t(v >> i)) >> s)) << i;
+-  return r;
+-}
+-
+-// PACKSSDW: the two signed dwords of a, then of b, saturated to words.
+-// PACKSSWB: the four signed words of a, then of b, saturated to bytes.
+-inline uint64_t Packssdw(uint64_t a, uint64_t b) {
+-  uint64_t r = 0;
+-  for (int i = 0; i < 4; i++) {
+-    int32_t x = int32_t(uint32_t((i < 2 ? a : b) >> (32 * (i & 1))));
+-    int32_t s = x > 32767 ? 32767 : x < -32768 ? -32768 : x;
+-    r |= uint64_t(uint16_t(s)) << (16 * i);
+-  }
+-  return r;
+-}
+-inline uint64_t Packsswb(uint64_t a, uint64_t b) {
+-  uint64_t r = 0;
+-  for (int i = 0; i < 8; i++) {
+-    int32_t x = int16_t(uint16_t((i < 4 ? a : b) >> (16 * (i & 3))));
+-    int32_t s = x > 127 ? 127 : x < -128 ? -128 : x;
+-    r |= uint64_t(uint8_t(s)) << (8 * i);
+-  }
+-  return r;
+-}
++// The packed-integer operations (Paddusb, Psrad, Packssdw, ...) are shared
++// with SSE2: runtime/simd64.h.
++using namespace ::recomp::simd;
+ 
+ }  // namespace mmx
+ }  // namespace recomp
+diff --git a/src/runtime/simd64.h b/src/runtime/simd64.h
+new file mode 100644
+index 0000000..a5a9383
+--- /dev/null
++++ b/src/runtime/simd64.h
+@@ -0,0 +1,154 @@
++#pragma once
++// Packed-integer operations on one 64-bit group of lanes, as MMX defines
++// them (Intel SDM vol. 2). MMX instructions use them directly
++// (recomp::mmx); SSE2's 128-bit forms apply them to each 64-bit half or
++// combine halves (runtime/sse.h).
++
++#include <cstdint>
++#include <limits>
++#include <type_traits>
++
++namespace recomp::simd {
++
++// r.lane[i] = f(a.lane[i], b.lane[i]) for lanes of type T (signed or not).
++template <typename T, typename F>
++inline uint64_t Map(uint64_t a, uint64_t b, F f) {
++  using U = std::make_unsigned_t<T>;
++  constexpr int kBits = 8 * sizeof(T);
++  uint64_t r = 0;
++  for (int i = 0; i < 64 / kBits; i++)
++    r |= uint64_t(U(f(T(U(a >> (kBits * i))), T(U(b >> (kBits * i)))))) << (kBits * i);
++  return r;
++}
++
++template <typename T>
++inline T Saturate(int64_t v) {
++  return v > std::numeric_limits<T>::max()   ? std::numeric_limits<T>::max()
++         : v < std::numeric_limits<T>::min() ? std::numeric_limits<T>::min()
++                                             : T(v);
++}
++
++// Wrapping, signed-saturating and unsigned-saturating add and subtract.
++template <typename T>
++inline uint64_t Add(uint64_t a, uint64_t b) {
++  return Map<T>(a, b, [](T x, T y) { return T(x + y); });
++}
++template <typename T>
++inline uint64_t Sub(uint64_t a, uint64_t b) {
++  return Map<T>(a, b, [](T x, T y) { return T(x - y); });
++}
++template <typename T>
++inline uint64_t AddSat(uint64_t a, uint64_t b) {
++  return Map<T>(a, b, [](T x, T y) { return Saturate<T>(int64_t(x) + int64_t(y)); });
++}
++template <typename T>
++inline uint64_t SubSat(uint64_t a, uint64_t b) {
++  return Map<T>(a, b, [](T x, T y) { return Saturate<T>(int64_t(x) - int64_t(y)); });
++}
++
++// PCMPEQB/W, PCMPGTW (signed): all ones where true.
++template <typename T>
++inline uint64_t CmpEq(uint64_t a, uint64_t b) {
++  return Map<T>(a, b, [](T x, T y) { return T(x == y ? ~T(0) : T(0)); });
++}
++template <typename T>
++inline uint64_t CmpGt(uint64_t a, uint64_t b) {
++  return Map<T>(a, b, [](T x, T y) { return T(x > y ? ~T(0) : T(0)); });
++}
++
++// PMULLW / PMULHW: the low / high 16 bits of each signed word product.
++inline uint64_t Pmullw(uint64_t a, uint64_t b) {
++  return Map<int16_t>(a, b, [](int16_t x, int16_t y) { return int16_t(int32_t(x) * y); });
++}
++inline uint64_t Pmulhw(uint64_t a, uint64_t b) {
++  return Map<int16_t>(a, b, [](int16_t x, int16_t y) { return int16_t((int32_t(x) * y) >> 16); });
++}
++
++// PMADDWD: each dword = the sum of its two signed word products (only
++// 8000h * 8000h twice overflows, to 80000000h).
++inline uint64_t Pmaddwd(uint64_t a, uint64_t b) {
++  uint64_t r = 0;
++  for (int i = 0; i < 2; i++) {
++    int64_t s = 0;
++    for (int j = 0; j < 2; j++) {
++      const int k = 16 * (2 * i + j);
++      s += int64_t(int16_t(uint16_t(a >> k))) * int16_t(uint16_t(b >> k));
++    }
++    r |= uint64_t(uint32_t(s)) << (32 * i);
++  }
++  return r;
++}
++
++// Logical shifts of each lane; counts of the lane width or more clear it.
++template <typename T>
++inline uint64_t Shl(uint64_t v, uint64_t n) {
++  if (n >= 8 * sizeof(T)) return 0;
++  return Map<T>(v, 0, [n](T x, T) { return T(x << n); });
++}
++template <typename T>
++inline uint64_t Shr(uint64_t v, uint64_t n) {
++  if (n >= 8 * sizeof(T)) return 0;
++  return Map<T>(v, 0, [n](T x, T) { return T(x >> n); });
++}
++
++// PSLLQ / PSRLQ: counts above 63 clear the register.
++inline uint64_t Sllq(uint64_t v, uint64_t n) { return n > 63 ? 0 : v << n; }
++inline uint64_t Srlq(uint64_t v, uint64_t n) { return n > 63 ? 0 : v >> n; }
++
++// PSRAD / PSRAW: arithmetic right shift of each dword / word; counts above
++// the lane width fill the lane with its sign bit.
++inline uint64_t Psrad(uint64_t v, uint64_t n) {
++  const int s = n > 31 ? 31 : int(n);
++  return Map<int32_t>(v, 0, [s](int32_t x, int32_t) { return int32_t(x >> s); });
++}
++inline uint64_t Psraw(uint64_t v, uint64_t n) {
++  const int s = n > 15 ? 15 : int(n);
++  return Map<int16_t>(v, 0, [s](int16_t x, int16_t) { return int16_t(x >> s); });
++}
++
++// PADDUSB: eight unsigned bytes added with saturation at FFh.
++inline uint64_t Paddusb(uint64_t a, uint64_t b) { return AddSat<uint8_t>(a, b); }
++
++// Unpacks: the low (or high) half's lanes of a and b, interleaved a, b.
++template <typename T>
++inline uint64_t UnpackLow(uint64_t a, uint64_t b, bool high = false) {
++  using U = std::make_unsigned_t<T>;
++  constexpr int kBits = 8 * sizeof(T), kHalf = 32 / kBits;
++  uint64_t r = 0;
++  for (int i = 0; i < kHalf; i++) {
++    const int src = kBits * (i + (high ? kHalf : 0));
++    r |= uint64_t(U(a >> src)) << (kBits * 2 * i);
++    r |= uint64_t(U(b >> src)) << (kBits * (2 * i + 1));
++  }
++  return r;
++}
++template <typename T>
++inline uint64_t UnpackHigh(uint64_t a, uint64_t b) { return UnpackLow<T>(a, b, true); }
++
++// Packs: the lanes of a, then of b, each saturated to half its width.
++// PACKSSDW: signed dwords to signed words. PACKSSWB: signed words to
++// signed bytes. PACKUSWB: signed words to unsigned bytes.
++template <typename From, typename To>
++inline uint64_t Pack(uint64_t a, uint64_t b) {
++  using UF = std::make_unsigned_t<From>;
++  using UT = std::make_unsigned_t<To>;
++  constexpr int kFrom = 8 * sizeof(From), kTo = 8 * sizeof(To), kN = 64 / kFrom;
++  uint64_t r = 0;
++  for (int i = 0; i < 2 * kN; i++) {
++    const From x = From(UF((i < kN ? a : b) >> (kFrom * (i % kN))));
++    r |= uint64_t(UT(Saturate<To>(x))) << (kTo * i);
++  }
++  return r;
++}
++inline uint64_t Packssdw(uint64_t a, uint64_t b) { return Pack<int32_t, int16_t>(a, b); }
++inline uint64_t Packsswb(uint64_t a, uint64_t b) { return Pack<int16_t, int8_t>(a, b); }
++inline uint64_t Packuswb(uint64_t a, uint64_t b) { return Pack<int16_t, uint8_t>(a, b); }
++
++// PSHUFW: word i of the result = word (imm >> 2i) & 3 of v.
++inline uint64_t Pshufw(uint64_t v, uint8_t imm) {
++  uint64_t r = 0;
++  for (int i = 0; i < 4; i++) r |= ((v >> (16 * ((imm >> (2 * i)) & 3))) & 0xFFFF) << (16 * i);
++  return r;
++}
++
++}  // namespace recomp::simd
+diff --git a/src/runtime/sse.h b/src/runtime/sse.h
+index ed29aac..6ad5a1e 100644
+--- a/src/runtime/sse.h
++++ b/src/runtime/sse.h
+@@ -22,6 +22,7 @@
+ #include <cstring>
+ 
+ #include "runtime/ctx.h"
++#include "runtime/simd64.h"
+ 
+ namespace recomp::sse {
+ 
+@@ -237,4 +238,40 @@ inline void ShufPd(Xmm& d, const Xmm& s, uint8_t imm) {
+   d = r;
+ }
+ 
++// SSE2 packed-integer forms on runtime/simd64.h's 64-bit operations:
++// lane-local ones per 64-bit half; packs, unpacks and the word shuffles
++// combine halves as the SDM defines them.
++inline uint64_t Lo(const Xmm& x) { return Lane<uint64_t>(x, 0); }
++inline uint64_t Hi(const Xmm& x) { return Lane<uint64_t>(x, 1); }
++inline void SetHalves(Xmm& d, uint64_t lo, uint64_t hi) {
++  SetLane<uint64_t>(d, 0, lo);
++  SetLane<uint64_t>(d, 1, hi);
++}
++template <uint64_t (*F)(uint64_t, uint64_t)>
++inline void PerHalf(Xmm& d, const Xmm& s) {
++  SetHalves(d, F(Lo(d), Lo(s)), F(Hi(d), Hi(s)));
++}
++template <uint64_t (*F)(uint64_t, uint64_t)>
++inline void ShiftHalves(Xmm& d, uint64_t count) {
++  SetHalves(d, F(Lo(d), count), F(Hi(d), count));
++}
++// PACKSSDW, PACKUSWB: d's lanes, then s's.
++template <uint64_t (*F)(uint64_t, uint64_t)>
++inline void PackHalves(Xmm& d, const Xmm& s) {
++  SetHalves(d, F(Lo(d), Hi(d)), F(Lo(s), Hi(s)));
++}
++// PUNPCKL*/PUNPCKH*: the low (high) halves of d and s interleaved.
++template <typename T>
++inline void Unpack(Xmm& d, const Xmm& s, bool high) {
++  const uint64_t a = high ? Hi(d) : Lo(d), b = high ? Hi(s) : Lo(s);
++  SetHalves(d, simd::UnpackLow<T>(a, b), simd::UnpackHigh<T>(a, b));
++}
++// PSHUFLW / PSHUFHW: the words of one half of s shuffled, the other copied.
++inline void Pshuflw(Xmm& d, const Xmm& s, uint8_t imm) {
++  SetHalves(d, simd::Pshufw(Lo(s), imm), Hi(s));
++}
++inline void Pshufhw(Xmm& d, const Xmm& s, uint8_t imm) {
++  SetHalves(d, Lo(s), simd::Pshufw(Hi(s), imm));
++}
++
+ }  // namespace recomp::sse
+diff --git a/tools/lifter/emit.cpp b/tools/lifter/emit.cpp
+index f5963ac..e7f3bab 100644
+--- a/tools/lifter/emit.cpp
++++ b/tools/lifter/emit.cpp
+@@ -1275,6 +1275,65 @@ bool InsnEmitter::EmitX87Double(X87Sim& sim, const std::string& fail, bool* can_
+   }
+ }
+ 
++// Packed-integer operations dst = f(dst, src) on runtime/simd64.h, shared by
++// the MMX forms (one 64-bit group) and the SSE2 forms (per 64-bit half, or
++// packed across halves: `pack`).
++struct PackedOp {
++  ZydisMnemonic m;
++  const char* fn;
++  bool pack;
++};
++const PackedOp kPackedOps[] = {
++    {ZYDIS_MNEMONIC_PADDW, "Add<uint16_t>", false},
++    {ZYDIS_MNEMONIC_PADDD, "Add<uint32_t>", false},
++    {ZYDIS_MNEMONIC_PADDSW, "AddSat<int16_t>", false},
++    {ZYDIS_MNEMONIC_PADDUSW, "AddSat<uint16_t>", false},
++    {ZYDIS_MNEMONIC_PSUBW, "Sub<uint16_t>", false},
++    {ZYDIS_MNEMONIC_PSUBD, "Sub<uint32_t>", false},
++    {ZYDIS_MNEMONIC_PSUBSW, "SubSat<int16_t>", false},
++    {ZYDIS_MNEMONIC_PSUBUSB, "SubSat<uint8_t>", false},
++    {ZYDIS_MNEMONIC_PSUBUSW, "SubSat<uint16_t>", false},
++    {ZYDIS_MNEMONIC_PCMPEQB, "CmpEq<uint8_t>", false},
++    {ZYDIS_MNEMONIC_PCMPEQW, "CmpEq<uint16_t>", false},
++    {ZYDIS_MNEMONIC_PCMPGTW, "CmpGt<int16_t>", false},
++    {ZYDIS_MNEMONIC_PMULLW, "Pmullw", false},
++    {ZYDIS_MNEMONIC_PMULHW, "Pmulhw", false},
++    {ZYDIS_MNEMONIC_PMADDWD, "Pmaddwd", false},
++    {ZYDIS_MNEMONIC_PACKUSWB, "Packuswb", true},
++    {ZYDIS_MNEMONIC_PACKSSDW, "Packssdw", true},
++};
++const PackedOp* FindPackedOp(ZydisMnemonic m) {
++  for (const PackedOp& op : kPackedOps)
++    if (op.m == m) return &op;
++  return nullptr;
++}
++
++// PUNPCKL*/PUNPCKH*: (lane type, high half).
++bool UnpackOp(ZydisMnemonic m, const char** type, bool* high) {
++  switch (m) {
++    case ZYDIS_MNEMONIC_PUNPCKLBW: *type = "uint8_t"; *high = false; return true;
++    case ZYDIS_MNEMONIC_PUNPCKLWD: *type = "uint16_t"; *high = false; return true;
++    case ZYDIS_MNEMONIC_PUNPCKLDQ: *type = "uint32_t"; *high = false; return true;
++    case ZYDIS_MNEMONIC_PUNPCKHBW: *type = "uint8_t"; *high = true; return true;
++    case ZYDIS_MNEMONIC_PUNPCKHWD: *type = "uint16_t"; *high = true; return true;
++    case ZYDIS_MNEMONIC_PUNPCKHDQ: *type = "uint32_t"; *high = true; return true;
++    default: return false;
++  }
++}
++
++// PSLLW/PSLLD/PSRLW/PSRLD/PSRAW (by an immediate or a 64-bit count): the
++// simd64.h function.
++const char* ShiftOp(ZydisMnemonic m) {
++  switch (m) {
++    case ZYDIS_MNEMONIC_PSLLW: return "Shl<uint16_t>";
++    case ZYDIS_MNEMONIC_PSLLD: return "Shl<uint32_t>";
++    case ZYDIS_MNEMONIC_PSRLW: return "Shr<uint16_t>";
++    case ZYDIS_MNEMONIC_PSRLD: return "Shr<uint32_t>";
++    case ZYDIS_MNEMONIC_PSRAW: return "Psraw";
++    default: return nullptr;
++  }
++}
++
+ // MMX onto runtime/lifted.h's recomp::mmx (the registers live in the x87
+ // physical registers). Only the forms games were seen to use; any other
+ // form is Unimplemented.
+@@ -1313,10 +1372,23 @@ void InsnEmitter::EmitMmx() {
+       return Unimpl();
+     case ZYDIS_MNEMONIC_PSLLQ: case ZYDIS_MNEMONIC_PSRLQ:
+     case ZYDIS_MNEMONIC_PSRAD: case ZYDIS_MNEMONIC_PSRAW:
++    case ZYDIS_MNEMONIC_PSLLW: case ZYDIS_MNEMONIC_PSLLD:
++    case ZYDIS_MNEMONIC_PSRLW: case ZYDIS_MNEMONIC_PSRLD:
+       if (dst_mm && (IsImm(1) || !q(1).empty())) break;
+       return Unimpl();
+-    default:
++    case ZYDIS_MNEMONIC_PSHUFW:
++      if (dst_mm && !q(1).empty() && IsImm(2)) break;
+       return Unimpl();
++    default: {
++      const char* type;
++      bool high;
++      // PUNPCKL* read only 32 bits from memory (mm, mm/m32).
++      if (UnpackOp(m, &type, &high) && dst_mm &&
++          (!q(1).empty() || (!high && IsMem(1) && Bytes(1) == 4)))
++        break;
++      if (FindPackedOp(m) && dst_mm && !q(1).empty()) break;
++      return Unimpl();
++    }
+   }
+   if (!PrepareMem()) return Unimpl();
+   const std::string d = dst_mm ? Fmt("::recomp::mmx::Get(c.fpu, %d)", mm(0)) : "";
+@@ -1351,18 +1423,36 @@ void InsnEmitter::EmitMmx() {
+               m == ZYDIS_MNEMONIC_PACKSSDW ? "Packssdw" : "Packsswb", d.c_str(), q(1).c_str());
+       break;
+     case ZYDIS_MNEMONIC_PSLLQ: case ZYDIS_MNEMONIC_PSRLQ:
+-    case ZYDIS_MNEMONIC_PSRAD: case ZYDIS_MNEMONIC_PSRAW: {
++    case ZYDIS_MNEMONIC_PSRAD: case ZYDIS_MNEMONIC_PSRAW:
++    case ZYDIS_MNEMONIC_PSLLW: case ZYDIS_MNEMONIC_PSLLD:
++    case ZYDIS_MNEMONIC_PSRLW: case ZYDIS_MNEMONIC_PSRLD: {
+       std::string n =
+           IsImm(1) ? "uint64_t(" + Hex(uint32_t(Op(1).imm.value.u & 0xFF)) + ")" : q(1);
+       const char* fn = m == ZYDIS_MNEMONIC_PSLLQ   ? "Sllq"
+                        : m == ZYDIS_MNEMONIC_PSRLQ ? "Srlq"
+                        : m == ZYDIS_MNEMONIC_PSRAD ? "Psrad"
+-                                                   : "Psraw";
++                                                   : ShiftOp(m);
+       v = Fmt("::recomp::mmx::%s(%s, %s)", fn, d.c_str(), n.c_str());
+       break;
+     }
+-    default:
+-      return Unimpl();
++    case ZYDIS_MNEMONIC_PSHUFW:
++      v = Fmt("::recomp::mmx::Pshufw(%s, %s)", q(1).c_str(),
++              Hex(uint32_t(Op(2).imm.value.u & 0xFF)).c_str());
++      break;
++    default: {
++      const char* type;
++      bool high;
++      if (UnpackOp(m, &type, &high)) {
++        std::string src = q(1).empty() ? "uint64_t(::recomp::lift::Rd<uint32_t>(B, m1))" : q(1);
++        v = Fmt("::recomp::mmx::%s<%s>(%s, %s)", high ? "UnpackHigh" : "UnpackLow", type, d.c_str(),
++                src.c_str());
++      } else if (const PackedOp* op = FindPackedOp(m)) {
++        v = Fmt("::recomp::mmx::%s(%s, %s)", op->fn, d.c_str(), q(1).c_str());
++      } else {
++        return Unimpl();
++      }
++      break;
++    }
+   }
+   L(Fmt("const uint64_t v = %s;", v.c_str()));
+   L("::recomp::mmx::Enter(c.fpu);");
+@@ -1479,10 +1569,16 @@ void InsnEmitter::EmitSse() {
+       else
+         L(Fmt("::recomp::sse::St(B, m0, %s, 8);", XmmRef(1).c_str()));
+       return;
+-    case ZYDIS_MNEMONIC_MOVHPS:  // load form: m64 into the high quadword
+-      if (!IsXmm(0)) return Unimpl();
+-      L(Fmt("::recomp::sse::SetLane<uint64_t>(%s, 1, ::recomp::lift::Rd<uint64_t>(B, m1));",
+-            XmmRef(0).c_str()));
++    case ZYDIS_MNEMONIC_MOVHPS:  // m64 into the high quadword, or the high quadword to m64
++      if (IsXmm(0)) {
++        L(Fmt("::recomp::sse::SetLane<uint64_t>(%s, 1, ::recomp::lift::Rd<uint64_t>(B, m1));",
++              XmmRef(0).c_str()));
++      } else if (IsMem(0) && IsXmm(1)) {
++        L(Fmt("::recomp::lift::Wr<uint64_t>(B, m0, ::recomp::sse::Lane<uint64_t>(%s, 1));",
++              XmmRef(1).c_str()));
++      } else {
++        return Unimpl();
++      }
+       return;
+     case ZYDIS_MNEMONIC_SFENCE:
+       // Earlier stores (non-temporal ones included) before later ones: a
+@@ -1670,8 +1766,36 @@ void InsnEmitter::EmitSse() {
+     case ZYDIS_MNEMONIC_PREFETCHNTA: case ZYDIS_MNEMONIC_PREFETCHT0:
+     case ZYDIS_MNEMONIC_PREFETCHT1: case ZYDIS_MNEMONIC_PREFETCHT2:
+       return;  // a hint
+-    default:
+-      return Unimpl();
++    case ZYDIS_MNEMONIC_PSHUFLW: case ZYDIS_MNEMONIC_PSHUFHW: {
++      if (!IsXmm(0) || Nvis() < 3) return Unimpl();
++      std::string s = src(1);
++      L(Fmt("::recomp::sse::%s(%s, %s, %s);", m == ZYDIS_MNEMONIC_PSHUFLW ? "Pshuflw" : "Pshufhw",
++            XmmRef(0).c_str(), s.c_str(), imm8(2).c_str()));
++      return;
++    }
++    default: {
++      // The packed-integer operations shared with MMX (kPackedOps), unpacks
++      // and lane shifts by an immediate.
++      if (!IsXmm(0)) return Unimpl();
++      const char* type;
++      bool high;
++      if (const char* fn = ShiftOp(m)) {
++        if (!IsImm(1)) return Unimpl();
++        L(Fmt("::recomp::sse::ShiftHalves<::recomp::simd::%s>(%s, %s);", fn, XmmRef(0).c_str(),
++              imm8(1).c_str()));
++      } else if (UnpackOp(m, &type, &high)) {
++        std::string s = src(1);
++        L(Fmt("::recomp::sse::Unpack<%s>(%s, %s, %s);", type, XmmRef(0).c_str(), s.c_str(),
++              b(high)));
++      } else if (const PackedOp* op = FindPackedOp(m)) {
++        std::string s = src(1);
++        L(Fmt("::recomp::sse::%s<::recomp::simd::%s>(%s, %s);", op->pack ? "PackHalves" : "PerHalf",
++              op->fn, XmmRef(0).c_str(), s.c_str()));
++      } else {
++        return Unimpl();
++      }
++      return;
++    }
+   }
+ }
+ 
+diff --git a/tools/lifter/function.cpp b/tools/lifter/function.cpp
+index febc67b..0f117f6 100644
+--- a/tools/lifter/function.cpp
++++ b/tools/lifter/function.cpp
+@@ -139,11 +139,32 @@ const Insn* Before(const Function& f, uint32_t va) {
+ 
+ }  // namespace
+ 
++static bool IsTableOperand(const ZydisDecodedOperand& m) {
++  return m.type == ZYDIS_OPERAND_TYPE_MEMORY && m.mem.base == ZYDIS_REGISTER_NONE &&
++         m.mem.index != ZYDIS_REGISTER_NONE && m.mem.scale == 4 && m.size == 32;
++}
++
+ static bool IsTableJmp(const Insn& jmp) {
+-  const auto& m = jmp.ops[0];
+-  return jmp.ok && jmp.d.mnemonic == ZYDIS_MNEMONIC_JMP &&
+-         m.type == ZYDIS_OPERAND_TYPE_MEMORY && m.mem.base == ZYDIS_REGISTER_NONE &&
+-         m.mem.index != ZYDIS_REGISTER_NONE && m.mem.scale == 4;
++  return jmp.ok && jmp.d.mnemonic == ZYDIS_MNEMONIC_JMP && IsTableOperand(jmp.ops[0]);
++}
++
++// `jmp reg` whose register a `mov reg, [table+index*4]` loaded (the
++// straight-line code in between leaves it alone): that mov, else null.
++static const Insn* TableLoadFor(const Function& f, const Insn& jmp) {
++  if (!jmp.ok || jmp.d.mnemonic != ZYDIS_MNEMONIC_JMP ||
++      jmp.ops[0].type != ZYDIS_OPERAND_TYPE_REGISTER)
++    return nullptr;
++  const ZydisRegister r = jmp.ops[0].reg.value;
++  const Insn* in = &jmp;
++  for (int steps = 0; steps < 8; steps++) {
++    in = Before(f, in->va);
++    if (!in) return nullptr;
++    if (in->d.mnemonic == ZYDIS_MNEMONIC_MOV && in->ops[0].type == ZYDIS_OPERAND_TYPE_REGISTER &&
++        in->ops[0].reg.value == r && IsTableOperand(in->ops[1]))
++      return in;
++    if (WritesReg(*in, r) || in->d.meta.branch_type != ZYDIS_BRANCH_TYPE_NONE) return nullptr;
++  }
++  return nullptr;
+ }
+ 
+ // A switch whose index range the compiler proved has no bound check in
+@@ -169,14 +190,27 @@ static bool RecoverRelocatedTable(const Program& p, const Function& f, const Ins
+   return !targets->empty();
+ }
+ 
+-static bool RecoverBoundedTable(const Program& p, const Function& f, const Insn& jmp,
+-                                std::vector<uint32_t>* targets) {
+-  const auto& m = jmp.ops[0];
+-  // MSVC places the tables in .text after the function.
++// `load`: the instruction reading the table (the jmp itself, or the mov of
++// `mov reg, [table+index*4]; jmp reg`); m: its table operand.
++static bool RecoverBoundedTable(const Program& p, const Function& f, const Insn& load,
++                                const ZydisDecodedOperand& m, std::vector<uint32_t>* targets) {
++  const Insn& jmp = load;
++  // MSVC places the tables in .text after the function. Elsewhere in the
++  // image (Intel's compiler: .data) every slot must carry a base
++  // relocation, which marks it as a pointer.
+   const Module* mod = p.TextOf(jmp.va);
+   auto in_text = [&](uint32_t a, uint32_t n) {
+     return n && p.TextOf(a) == mod && p.TextOf(a + n - 1) == mod;
+   };
++  auto table_ok = [&](uint32_t a, uint32_t n) {
++    if (in_text(a, n)) return true;
++    const auto& img = mod->img;
++    if (!n || a - img.image_base >= img.image_size || a + n - img.image_base > img.image_size)
++      return false;
++    for (uint32_t s = a; s < a + n; s += 4)
++      if (!std::binary_search(img.relocs.begin(), img.relocs.end(), s)) return false;
++    return true;
++  };
+   // Walk back from the jmp through the straight-line code before it
+   // (the compiler schedules unrelated instructions in between): an
+   // optional movzx from the byte index table, the ja, then the cmp that
+@@ -224,7 +258,7 @@ static bool RecoverBoundedTable(const Program& p, const Function& f, const Insn&
+       for (uint32_t i = 0; i < n; i++)
+         cases = std::max<uint32_t>(cases, p.mem.read<uint8_t>(index + i) + 1u);
+     }
+-    if (!in_text(static_cast<uint32_t>(m.mem.disp.value), cases * 4)) return false;
++    if (!table_ok(static_cast<uint32_t>(m.mem.disp.value), cases * 4)) return false;
+     targets->clear();
+     for (uint32_t i = 0; i < cases; i++) {
+       uint32_t t = p.mem.read<uint32_t>(static_cast<uint32_t>(m.mem.disp.value) + 4 * i);
+@@ -240,9 +274,12 @@ static bool RecoverBoundedTable(const Program& p, const Function& f, const Insn&
+ 
+ bool RecoverJumpTable(const Program& p, const Function& f, const Insn& jmp,
+                       std::vector<uint32_t>* targets) {
+-  if (!IsTableJmp(jmp)) return false;
+-  return RecoverBoundedTable(p, f, jmp, targets) ||
+-         RecoverRelocatedTable(p, f, jmp, targets);
++  if (IsTableJmp(jmp))
++    return RecoverBoundedTable(p, f, jmp, jmp.ops[0], targets) ||
++           RecoverRelocatedTable(p, f, jmp, targets);
++  if (const Insn* load = TableLoadFor(f, jmp))
++    return RecoverBoundedTable(p, f, *load, load->ops[1], targets);
++  return false;
+ }
+ 
+ void BuildFunction(const Program& p, const Decoder& dec, uint32_t entry,
+diff --git a/tools/lifter/main.cpp b/tools/lifter/main.cpp
+index b50fa0a..6bcba3a 100644
+--- a/tools/lifter/main.cpp
++++ b/tools/lifter/main.cpp
+@@ -222,13 +222,23 @@ int main(int argc, char** argv) {
+     work.push_back(t);
+     (*counter)++;
+   };
+-  for (const auto& m : p.modules)
++  for (const auto& m : p.modules) {
++    if (!only.empty()) break;
++    if (!m.img.relocs.empty()) {
++      // Every relocated dword outside the executable sections is a stored
++      // address, whatever its section is called (Intel's compiler: .data1).
++      for (uint32_t at : m.img.relocs)
++        for (const auto& sec : m.img.sections)
++          if (at - sec.va < sec.vsize && !(sec.characteristics & 0x20000000))
++            candidate(&m, p.mem.read<uint32_t>(at), at, &from_data_ptrs);
++      continue;
++    }
+     for (const auto& sec : m.img.sections) {
+-      if (!only.empty()) break;
+       if (sec.name != ".rdata" && sec.name != ".data") continue;
+       for (uint32_t a = sec.va; a + 4 <= sec.va + sec.vsize; a += 4)
+         candidate(&m, p.mem.read<uint32_t>(a), a, &from_data_ptrs);
+     }
++  }
+   size_t recovered_tables = 0, completed_tables = 0;
+   while (!work.empty()) {
+     uint32_t e = work.front();

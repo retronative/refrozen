@@ -1,0 +1,2 @@
+module	jmp	removed_target	reason
+ijl15	6002D1C5	6002D1BF	jmp eax after lea eax,[8*eax+6002D1C7]: eax is a 4-bit mask of the non-zero words among two word pairs (6002D167..6002D1B6), minus 1; mask 0 branches away at 6002D161 (je 6002D23C, ebx|ecx == 0), so the index is 0..14 and the targets are 6002D1C7+8k. Ghidra also listed index -1 (6002D1BF, inside the lea: undecodable).

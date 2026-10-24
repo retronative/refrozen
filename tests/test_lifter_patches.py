@@ -16,8 +16,9 @@ import sys
 import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-X86 = os.path.join(ROOT, "tools", "x86recomp")
-BUILD = os.path.join(X86, "out", "build", "debug")
+# tests/mutate.py points these at its scratch tree.
+X86 = os.environ.get("REFROZEN_X86RECOMP", os.path.join(ROOT, "tools", "x86recomp"))
+BUILD = os.environ.get("REFROZEN_X86RECOMP_BUILD", os.path.join(X86, "out", "build", "debug"))
 LIFT = os.path.join(BUILD, "tools", "lifter", "recomp_lift")
 CXX = "/opt/homebrew/opt/llvm/bin/clang++"
 BASE = 0x00100000            # image base: everything below the 4 MiB test arena
@@ -516,12 +517,260 @@ def test_sse2():
         check("0006 integer ops and rcpss leave MXCSR alone", ints[1] if ints else None, "mxcsr=1F80")
 
 
+
+# ---- 0010: switch through a register, table in .data -----------------------------
+
+def test_jump_table_load():
+    # f3: cmp eax,2 / ja default / mov eax,[eax*4+tbl] / jmp eax; cases at +14, +15, +16,
+    # default +17. f4: the same, but jmp ecx (not the loaded register).
+    t3, t4, tbl = TEXT, TEXT + 0x40, DATA
+    text = bytearray(b"\xCC" * 0x100)
+    for t, jmp in ((t3, b"\xFF\xE0"), (t4, b"\xFF\xE1")):
+        f = b"\x83\xF8\x02" + b"\x77\x0C" + b"\x8B\x04\x85" + struct.pack("<I", tbl) + jmp + b"\xC3\xC3\xC3\xC3"
+        text[t - TEXT:t - TEXT + len(f)] = f
+    data = struct.pack("<III", t3 + 14, t3 + 15, t3 + 16) + b"\0" * 4
+    slots = [tbl, tbl + 4, tbl + 8]
+    with tempfile.TemporaryDirectory() as tmp:
+        r, _, out = lift(tmp, pe(bytes(text), data, [t3 + 8, t4 + 8] + slots), [t3, t4])
+        check("0010 lift succeeds", r.returncode, 0)
+        check("0010 mov reg,[table+idx*4]; jmp reg: table in .data recovered", switch_cases(out, t3 + 12),
+              [t3 + 14, t3 + 15, t3 + 16])
+        check("0010 jmp through another register is not a table jump", switch_cases(out, t4 + 12), None)
+    with tempfile.TemporaryDirectory() as tmp:
+        r, _, out = lift(tmp, pe(bytes(text), data, [t3 + 8, t4 + 8]), [t3, t4])
+        check("0010 a table outside .text needs relocated slots", switch_cases(out, t3 + 12), None)
+
+
+# ---- 0010: stored addresses in every data section --------------------------------
+
+def test_data_section_pointers():
+    # Three functions only data refers to: f1 from an aligned relocated slot in
+    # .data1 (a third data section), f2 from an unaligned relocated slot in
+    # .data. Without relocations only .rdata/.data are scanned (by value).
+    text = bytearray(b"\xCC" * 0x40)
+    text[0] = 0xC3
+    f1, f2 = TEXT + 0x10, TEXT + 0x20
+    text[0x10] = text[0x20] = 0xC3
+    data = b"\0" + struct.pack("<I", f2) + b"\0" * 3
+    data1 = struct.pack("<I", f1) + b"\0" * 4
+    secs = [(b".text", bytes(text), EXEC), (b".data", data, RW), (b".data1", data1, RW)]
+    with tempfile.TemporaryDirectory() as tmp:
+        r, fns, out = lift(tmp, pe_sections(secs, [DATA + 1, DATA + 0x1000]), [TEXT])
+        check("0010 lift succeeds", r.returncode, 0)
+        check("0010 relocated slot in another data section lifts its target", f1 in fns, True)
+        check("0010 unaligned relocated slot lifts its target", f2 in fns, True)
+    with tempfile.TemporaryDirectory() as tmp:
+        r, fns, out = lift(tmp, pe_sections(secs, None), [TEXT])
+        check("0010 without relocations .data1 is not scanned", f1 in fns, False)
+
+
+# ---- 0010: packed-integer MMX/SSE2 forms, movhps store ------------------------
+# Each case: (asm, kind, a, b, expected). kind "mm": mm0 = a, mm1 = b, result
+# mm0; "xmm": xmm0 = a, xmm1 = b (each (hi, lo)), result xmm0; "mem": memory
+# operand [ebx] = b (8 or 16 bytes), mm0/xmm0 = a; "store": xmm1 = b, result
+# the qword at [ebx]. Expected values worked out by hand from the SDM's lane
+# definitions (lanes listed low to high in the comments).
+SIMD_CASES = [
+    # paddw: 0001+FFFF=0000, FFFF+0001=0000, 8000+FFFF=7FFF, 7FFF+0001=8000 (wrap)
+    ("paddw mm0, mm1", "mm", 0x7FFF8000FFFF0001, 0x0001FFFF0001FFFF, 0x80007FFF00000000),
+    # paddd: 00000001+7FFFFFFF=80000000, FFFFFFFF+1=0
+    ("paddd mm0, mm1", "mm", 0xFFFFFFFF00000001, 0x000000017FFFFFFF, 0x0000000080000000),
+    # paddsw: 1+2=3, -1+-32768 -> -32768, -32768+-1 -> -32768, 32767+1 -> 32767
+    ("paddsw mm0, mm1", "mm", 0x7FFF8000FFFF0001, 0x0001FFFF80000002, 0x7FFF800080000003),
+    # paddusw: 1234+1=1235, 1+FFFE=FFFF, 8000+8000 -> FFFF, FFFF+1 -> FFFF
+    ("paddusw mm0, mm1", "mm", 0xFFFF800000011234, 0x00018000FFFE0001, 0xFFFFFFFFFFFF1235),
+    # psubw: 5-3=2, 1-2=FFFF, 8000-1=7FFF, 0-1=FFFF
+    ("psubw mm0, mm1", "mm", 0x0000800000010005, 0x0001000100020003, 0xFFFF7FFFFFFF0002),
+    # psubd: 80000000-1=7FFFFFFF, 0-1=FFFFFFFF
+    ("psubd mm0, mm1", "mm", 0x0000000080000000, 0x0000000100000001, 0xFFFFFFFF7FFFFFFF),
+    # psubsw: 5-7=-2, 0-(-32768) -> 32767, 32767-(-1) -> 32767, -32768-1 -> -32768
+    ("psubsw mm0, mm1", "mm", 0x80007FFF00000005, 0x0001FFFF80000007, 0x80007FFF7FFFFFFE),
+    # psubusb bytes: 04-03, 03-02, 02-01 = 1; 01-02 -> 0; 80-80 = 0; 10-20 -> 0; FF-01 = FE; 00-01 -> 0
+    ("psubusb mm0, mm1", "mm", 0x00FF108001020304, 0x0101208002010203, 0x00FE000000010101),
+    # psubusw: FFFF-1=FFFE, 1-1=0, 8000-1=7FFF, 5-6 -> 0
+    ("psubusw mm0, mm1", "mm", 0x000580000001FFFF, 0x0006000100010001, 0x00007FFF0000FFFE),
+    # pcmpeqb bytes 77 66 55/AA 44 33 22 11/FF 00
+    ("pcmpeqb mm0, mm1", "mm", 0x0011223344556677, 0x00FF223344AA6677, 0xFF00FFFFFF00FFFF),
+    # pcmpeqw: 8000/0000 no, FFFF/FFFF yes, 0000/0001 no, 1234/1234 yes
+    ("pcmpeqw mm0, mm1", "mm", 0x12340000FFFF8000, 0x12340001FFFF0000, 0xFFFF0000FFFF0000),
+    # pcmpgtw signed: 0>0 no, 7FFF>-32768 yes, -32768>7FFF no, 1>0 yes
+    ("pcmpgtw mm0, mm1", "mm", 0x000180007FFF0000, 0x00007FFF80000000, 0xFFFF0000FFFF0000),
+    # pmullw: 3*5=000F, 100*100=10000 -> 0000, -1*-1=0001, 8000*2=10000 -> 0000
+    ("pmullw mm0, mm1", "mm", 0x8000FFFF01000003, 0x0002FFFF01000005, 0x000000010000000F),
+    # pmulhw: 7FFF^2=3FFF0001 -> 3FFF, 4000^2=10000000 -> 1000, -1*2=-2 -> FFFF, (-32768)^2=40000000 -> 4000
+    ("pmulhw mm0, mm1", "mm", 0x8000FFFF40007FFF, 0x8000000240007FFF, 0x4000FFFF10003FFF),
+    # pmaddwd: 2*4+3*5=17h; (-32768)^2*2 = 80000000h (the one overflow)
+    ("pmaddwd mm0, mm1", "mm", 0x8000800000030002, 0x8000800000050004, 0x8000000000000017),
+    # pmaddwd: 3*6+(-2)*5=8; 1*4+(-1)*2=2
+    ("pmaddwd mm0, mm1", "mm", 0xFFFF0001FFFE0003, 0x0002000400050006, 0x0000000200000008),
+    # packuswb: 80, FF, 0100 -> FF, 7FFF -> FF | 00, 01, -1 -> 00, -32768 -> 00
+    ("packuswb mm0, mm1", "mm", 0x7FFF010000FF0080, 0x8000FFFF00010000, 0x00000100FFFFFF80),
+    # punpcklbw: a 11 22 33 44, b 88 99 AA BB interleaved
+    ("punpcklbw mm0, mm1", "mm", 0x8877665544332211, 0xFFEEDDCCBBAA9988, 0xBB44AA3399228811),
+    ("punpcklwd mm0, mm1", "mm", 0x4444333322221111, 0x8888777766665555, 0x6666222255551111),
+    ("punpckldq mm0, mm1", "mm", 0x2222222211111111, 0x4444444433333333, 0x3333333311111111),
+    # punpckhbw: a 55 66 77 88, b CC DD EE FF interleaved
+    ("punpckhbw mm0, mm1", "mm", 0x8877665544332211, 0xFFEEDDCCBBAA9988, 0xFF88EE77DD66CC55),
+    ("punpckhwd mm0, mm1", "mm", 0x4444333322221111, 0x8888777766665555, 0x8888444477773333),
+    ("punpckhdq mm0, mm1", "mm", 0x2222222211111111, 0x4444444433333333, 0x4444444422222222),
+    # pshufw 1Bh = words 3, 2, 1, 0 of the source; 00h = word 0 four times
+    ("pshufw mm0, mm1, 0x1B", "mm", 0, 0x4444333322221111, 0x1111222233334444),
+    ("pshufw mm0, mm1, 0x00", "mm", 0, 0x4444333322221111, 0x1111111111111111),
+    # psllw 4: F00F->00F0, 00FF->0FF0, 1234->2340, 8001->0010; 16 clears
+    ("psllw mm0, 4", "mm", 0x8001123400FFF00F, 0, 0x001023400FF000F0),
+    ("psllw mm0, 16", "mm", 0x8001123400FFF00F, 0, 0),
+    # pslld 8: 00FF00FF->FF00FF00, 80000001->00000100
+    ("pslld mm0, 8", "mm", 0x8000000100FF00FF, 0, 0x00000100FF00FF00),
+    # psrlw 4: F00F->0F00, 00FF->000F, 1234->0123, 8001->0800; by mm1 = 4 the same
+    ("psrlw mm0, 4", "mm", 0x8001123400FFF00F, 0, 0x08000123000F0F00),
+    ("psrlw mm0, mm1", "mm", 0x8001123400FFF00F, 4, 0x08000123000F0F00),
+    # psrld 31: 7FFFFFFF->0, 80000000->1
+    ("psrld mm0, 31", "mm", 0x800000007FFFFFFF, 0, 0x0000000100000000),
+    # counts of exactly the lane width (32 for dwords) clear every lane
+    ("pslld mm0, 32", "mm", 0x8000000100FF00FF, 0, 0),
+    ("psrld mm0, 32", "mm", 0x800000007FFFFFFF, 0, 0),
+    # memory forms (m64; PUNPCKLBW's is m32)
+    ("paddd mm0, qword ptr [ebx]", "mem", 0x0000000100000002, 0x0000001000000020, 0x0000001100000022),
+    ("pmaddwd mm0, qword ptr [ebx]", "mem", 0x8000800000030002, 0x8000800000050004, 0x8000000000000017),
+    ("punpcklbw mm0, dword ptr [ebx]", "mem", 0x8877665544332211, 0xDEADBEEFBBAA9988, 0xBB44AA3399228811),
+    # SSE2 (hi, lo): per 64-bit half
+    ("paddsw xmm0, xmm1", "xmm", (0x7FFF, 0x7FFF8000FFFF0001), (0x0001, 0x0001FFFF80000002),
+     (0x7FFF, 0x7FFF800080000003)),
+    ("pmaddwd xmm0, xmm1", "xmm", (0x0001000100010001, 0x8000800000030002),
+     (0x0002000200020002, 0x8000800000050004), (0x0000000400000004, 0x8000000000000017)),
+    ("pmulhw xmm0, xmm1", "xmm", (0x0100, 0x8000FFFF40007FFF), (0x0100, 0x8000000240007FFF),
+     (0x0001, 0x4000FFFF10003FFF)),
+    ("pmullw xmm0, xmm1", "xmm", (0xFFFF, 0x8000FFFF01000003), (0x0002, 0x0002FFFF01000005),
+     (0xFFFE, 0x000000010000000F)),
+    ("psubsw xmm0, xmm1", "xmm", (0x8000, 0x80007FFF00000005), (0x0001, 0x0001FFFF80000007),
+     (0x8000, 0x80007FFF7FFFFFFE)),
+    # packssdw: dwords 1, 32768, -1, -32769 | 2, 7FFFFFFF, 3, 80000000 to words
+    ("packssdw xmm0, xmm1", "xmm", (0xFFFF7FFFFFFFFFFF, 0x0000800000000001),
+     (0x8000000000000003, 0x7FFFFFFF00000002), (0x800000037FFF0002, 0x8000FFFF7FFF0001)),
+    # packuswb: words 80 FF 100 7FFF 0 FFFF 1 2 | 6 5 4 3 8 7 0 100 to bytes
+    ("packuswb xmm0, xmm1", "xmm", (0x00020001FFFF0000, 0x7FFF010000FF0080),
+     (0x0100000000070008, 0x0003000400050006), (0xFF00070803040506, 0x02010000FFFFFF80)),
+    ("punpckldq xmm0, xmm1", "xmm", (0x4444444433333333, 0x2222222211111111),
+     (0x8888888877777777, 0x6666666655555555), (0x6666666622222222, 0x5555555511111111)),
+    ("punpckhdq xmm0, xmm1", "xmm", (0x4444444433333333, 0x2222222211111111),
+     (0x8888888877777777, 0x6666666655555555), (0x8888888844444444, 0x7777777733333333)),
+    ("pshuflw xmm0, xmm1, 0x1B", "xmm", (0, 0), (0x8888777766665555, 0x4444333322221111),
+     (0x8888777766665555, 0x1111222233334444)),
+    ("pshufhw xmm0, xmm1, 0x1B", "xmm", (0, 0), (0x8888777766665555, 0x4444333322221111),
+     (0x5555666677778888, 0x4444333322221111)),
+    ("psllw xmm0, 4", "xmm", (0x0001000200030004, 0x8001123400FFF00F), (0, 0),
+     (0x0010002000300040, 0x001023400FF000F0)),
+    # psrlw 15: 0001->0, FFFF->1, 7FFF->0, 8000->1; 16 clears
+    ("psrlw xmm0, 15", "xmm", (0, 0x80007FFFFFFF0001), (0, 0), (0, 0x0001000000010000)),
+    ("psrlw xmm0, 16", "xmm", (0x1234, 0x80007FFFFFFF0001), (0, 0), (0, 0)),
+    # psraw 3: 0010->0002, FFF0->FFFE, 7FFF->0FFF, 8000->F000; FFFF->FFFF
+    ("psraw xmm0, 3", "xmm", (0xFFFF000000000000, 0x80007FFFFFF00010), (0, 0),
+     (0xFFFF000000000000, 0xF0000FFFFFFE0002)),
+    # the 16-byte aligned memory form
+    ("paddsw xmm0, xmmword ptr [ebx]", "mem", (0x7FFF, 0x7FFF8000FFFF0001), (0x0001, 0x0001FFFF80000002),
+     (0x7FFF, 0x7FFF800080000003)),
+    # movhps m64, xmm: the high quadword stored
+    ("movhps qword ptr [ebx], xmm1", "store", 0, (0x0123456789ABCDEF, 0x1111111122222222), 0x0123456789ABCDEF),
+]
+
+SIMD_HARNESS = r"""
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include "runtime/lifted.h"
+namespace recomp {
+uint8_t* g_guest_base = nullptr;
+void Unimplemented(Ctx&, uint32_t va, const char* w) { std::printf("unimplemented %08X %s\n", va, w); std::exit(3); }
+void BadJump(Ctx&, uint32_t a, uint32_t b) { std::printf("bad jump %08X %08X\n", a, b); std::exit(3); }
+void RaiseDivideError(Ctx&, uint32_t) { std::exit(3); }
+void CheckAligned(Ctx&, uint32_t a, uint32_t va) { if (a & 15) { std::printf("misaligned %08X\n", va); std::exit(3); } }
+namespace gen {
+@DECLS@
+}
+}
+using namespace recomp;
+static void SetX(Xmm& x, unsigned long long hi, unsigned long long lo) {
+  std::memcpy(x.b, &lo, 8); std::memcpy(x.b + 8, &hi, 8);
+}
+int main() {
+  g_guest_base = static_cast<uint8_t*>(std::calloc(1, 0x400000));
+  unsigned long long lo, hi;
+@BODY@
+}
+"""
+
+
+def test_simd():
+    text = ""
+    for i, (asm, *_rest) in enumerate(SIMD_CASES):
+        text += f".org {16 * i:#x}, 0xCC\n  {asm}\n  ret\n"
+    with tempfile.TemporaryDirectory() as tmp:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import test_loader
+        code = test_loader.assemble(tmp, text)
+        entries = [TEXT + 16 * i for i in range(len(SIMD_CASES))]
+        r, fns, out = lift(tmp, pe(code + b"\xCC" * (-len(code) % 16), b"\0" * 0x40, None), entries)
+        check("0010 lift succeeds", r.returncode, 0)
+        report = open(os.path.join(out, "lift_report.txt")).read() if os.path.isdir(out) else ""
+        unimpl = re.search(r"unimplemented:\n((\s+\S.*\n)*)warnings", report)
+        check("0010 no unimplemented sites", unimpl.group(1).strip() if unimpl else "?", "")
+        decls, body = "", ""
+        for i, (asm, kind, a, b, want) in enumerate(SIMD_CASES):
+            f = f"f_{TEXT + 16 * i:08X}"
+            decls += f"void {f}(Ctx&);\n"
+            body += "  { Ctx c{}; c.esp = 0x2FFFF0; lift::Wr<uint32_t>(g_guest_base, c.esp, 0xDEADBEEF);\n"
+            body += f"    c.ebx = 0x{DATA:X}; c.fpu.cw = 0x27F; c.fpu.empty = 0xFF; c.mxcsr = 0x1F80;\n"
+            body += f"    std::memset(g_guest_base + 0x{DATA:X}, 0, 32);\n"
+            wide = isinstance(a, tuple) or isinstance(b, tuple)
+            if kind == "mm":
+                body += f"    c.fpu.r[0].sig = 0x{a:X}ull; c.fpu.r[1].sig = 0x{b:X}ull;\n"
+            elif kind == "xmm":
+                body += f"    SetX(c.xmm[0], 0x{a[0]:X}ull, 0x{a[1]:X}ull); SetX(c.xmm[1], 0x{b[0]:X}ull, 0x{b[1]:X}ull);\n"
+            elif kind == "mem" and wide:
+                body += (f"    SetX(c.xmm[0], 0x{a[0]:X}ull, 0x{a[1]:X}ull);\n"
+                         f"    lift::Wr<uint64_t>(g_guest_base, 0x{DATA:X}, 0x{b[1]:X}ull);"
+                         f" lift::Wr<uint64_t>(g_guest_base, 0x{DATA + 8:X}, 0x{b[0]:X}ull);\n")
+            elif kind == "mem":
+                body += (f"    c.fpu.r[0].sig = 0x{a:X}ull;"
+                         f" lift::Wr<uint64_t>(g_guest_base, 0x{DATA:X}, 0x{b:X}ull);\n")
+            else:  # store
+                body += f"    SetX(c.xmm[1], 0x{b[0]:X}ull, 0x{b[1]:X}ull);\n"
+            body += f"    gen::{f}(c);\n"
+            if kind == "store":
+                body += f"    std::printf(\"{i} %016llX\\n\", (unsigned long long)lift::Rd<uint64_t>(g_guest_base, 0x{DATA:X}));\n"
+            elif wide:
+                body += "    std::memcpy(&lo, c.xmm[0].b, 8); std::memcpy(&hi, c.xmm[0].b + 8, 8);\n"
+                body += f"    std::printf(\"{i} %016llX:%016llX\\n\", hi, lo);\n"
+            else:
+                body += f"    std::printf(\"{i} %016llX\\n\", (unsigned long long)c.fpu.r[0].sig);\n"
+            body += "  }\n"
+        with open(os.path.join(tmp, "harness.cpp"), "w") as f:
+            f.write(SIMD_HARNESS.replace("@DECLS@", decls).replace("@BODY@", body))
+        srcs = [os.path.join(out, n) for n in sorted(os.listdir(out)) if n.startswith("gen_")]
+        binp = os.path.join(tmp, "t")
+        cc = subprocess.run([CXX, "-std=c++20", "-O1", "-w", "-I", os.path.join(X86, "src"),
+                             os.path.join(tmp, "harness.cpp"), *srcs, "-L", BUILD, "-lrecomp_x87",
+                             "-lrecomp_image", "-Wl,-rpath," + BUILD, "-o", binp], capture_output=True, text=True)
+        check("0010 lifted code compiles", cc.returncode, 0)
+        if cc.returncode:
+            print(cc.stderr[:3000])
+            return
+        res = dict(l.split(" ", 1) for l in subprocess.run([binp], capture_output=True, text=True).stdout.splitlines()
+                   if " " in l)
+        for i, (asm, kind, a, b, want) in enumerate(SIMD_CASES):
+            w = f"{want[0]:016X}:{want[1]:016X}" if isinstance(want, tuple) else f"{want:016X}"
+            check(f"0010 {asm}", res.get(str(i)), w)
+
+
 def main():
     test_reloc_discovery()
     test_mmx_sse()
     test_code_span()
     test_jump_tables()
     test_sse2()
+    test_simd()
+    test_jump_table_load()
+    test_data_section_pointers()
     print("lifter patches:", "FAILED" if failures else "ok")
     return 1 if failures else 0
 
