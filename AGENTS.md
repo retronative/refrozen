@@ -16,7 +16,7 @@ ReCarbon (`../recarbon`); reusable lessons are in `../game-port-knowledge`.
 | `patches/x86recomp/` | Our x86recomp patches 0001–0010, applied in order by `scripts/setup_tools.sh` | Each with tests that fail under mutation: lifter patches in `tests/test_lifter_patches.py` (hand-computed) and x86recomp's `lift_atomic_test`; runtime/loader/HLE patches in `tests/test_loader.py` and `tests/test_win32.py`. A patch is a diff against the tree with the earlier ones applied. |
 | `CMakeLists.txt`, `src/` | The game project: `refrozen` = lifted code + x86recomp runtime (`GameConfig` in `src/main.cpp`) | Lifted DLLs listed in dependency order. Win32 functions are added to the runtime (a patch), never stubbed to succeed. |
 | `config/` | Lifter manifests per module (`<module>.manifest`), `unreachable.tsv`, `jumptable_corrections.tsv`, and the pinned lift input `symbols/<module>/functions.tsv`, `jumptables.tsv` | Addresses, flags and evidence only, no game bytes. Every manifest entry and correction says why. Refresh `symbols/` only deliberately (Ghidra varies between runs) and record the new lift hash. |
-| `scripts/` | Install/patch (incl. the CD-key step, `font_keydata.py`), lift (`lift.sh`, `jumptable_corrections.py`), audit (`validate_lift.py`), import coverage (`import_coverage.py`), launches (`run_attempt.sh`, `m3_accept.sh`), Ghidra scripts (`ghidra/`), map checks | |
+| `scripts/` | Install/patch (incl. the CD-key step, `font_keydata.py`), lift (`lift.sh`, `jumptable_corrections.py`), audit (`validate_lift.py`), import coverage (`import_coverage.py`), launches (`run_attempt.sh`, `m3_accept.sh`, `m4_accept.sh`), Wine oracle (`oracle_menus.sh`, `oracle_keys.c`, `m4_compare.sh`, `wine_loadtest.sh`), Ghidra scripts (`ghidra/`), map checks | |
 | `tests/` | Regression tests and the mutation gate (`mutate.py`, registry `mutants.py`) | See "Mutation gate". |
 | `reference/` | Feasibility, roadmap, research (`research/`) | |
 
@@ -28,6 +28,7 @@ ctest --test-dir tools/x86recomp/out/build/debug   # "pacing" is a known timing 
 /opt/homebrew/bin/python3 -I tests/test_lifter_patches.py
 /opt/homebrew/bin/python3 -I tests/test_loader.py
 /opt/homebrew/bin/python3 -I tests/test_win32.py
+/opt/homebrew/bin/python3 -I tests/test_gl_context.py         # x86recomp's gl_fog/gl_texture tests
 /opt/homebrew/bin/python3 -I tests/test_font_keydata.py       # needs game/wine-oracle + the readme
 /opt/homebrew/bin/python3 -I tests/test_jumptable_corrections.py
 /opt/homebrew/bin/python3 -I tests/mutate.py [--milestone M3]  # the mutation gate (scratch tree)
@@ -67,7 +68,18 @@ REFROZEN_TRACE=1 scripts/run_attempt.sh <name>-trace 120   # every HLE call, Dll
 scripts/m3_accept.sh [launches] [secs]  # M3: main menu loop, no fatal, frames presented (defaults 3, 60)
 # Background runs never get host focus: REFROZEN_TEST_FOCUS=follow activates the game guest-side.
 # REFROZEN_SHOT_EVERY=N REFROZEN_SHOT_DIR=<dir> saves every Nth presented frame (local only: game imagery).
+# REFROZEN_TEST_INPUT=<file> replays scripted input (key, click, dblclick, goto, move, focus, minimize,
+# restore, resize, and "shot <name>": the next frame as <SHOT_DIR>/<name>.bmp, independent of host load).
+scripts/m4_accept.sh [launches] [secs]  # M4: tests/m4/native_path.txt, fresh profile each (defaults 3, 110)
+# Development oracle (Wine): the same menu path by keys on both of the client's renderers, compared.
+scripts/oracle_menus.sh <name> d3d|opengl tests/m4/oracle_path.txt [secs]   # game/attempts/oracle-<name>/
+scripts/m4_compare.sh <native shots> <oracle d3d dir> <oracle gl dir> <out dir>
 ```
+
+- Scripted menu runs never open Battle.net or Local Area Network (network-facing: M7, the user's
+  approval first) and never press Start Game or Return on the Custom Game screen (loading a map
+  is gameplay: M5). Oracle runs work on APFS clones; `game/wine-oracle` is the native installer's
+  `--verify` reference and is never written.
 
 ```sh
 # Native install + 1.26a patch (the player's path; no Wine), optional check against the oracle.

@@ -105,14 +105,14 @@ official cooperation. Nothing network-facing is needed before M7.
   fallbacks; no DLL_THREAD_ATTACH/DETACH; indirect targets validated only when taken;
   DirectSoundCreate, CD-key data, DirectShow movies, memory ordering.
 
-## M3 — Runtime initialization *(Passed 2026-10-24, pending the user's sign-off)*
+## M3 — Runtime initialization *(Passed 2026-10-24, signed off by the user 2026-10-25)*
 - **Scope:** CRT, threads, registry seed, file I/O and Storm's MPQ access on the native install;
   the CD-key data the game reads at startup; intro movies skipped (`seenintromovie`).
 - **Accept → Evidence** (FEASIBILITY §10):
   - Main menu loop, 3 consecutive launches, no fatal stop → `scripts/m3_accept.sh 3 60`: 3/3 PASS
     (no FATAL, no watchdog report, alive at 60 s, frames saved); the frames show the TFT main menu
     with the game's "sound is disabled" dialog. A foreground launch (no test hook) likewise.
-  - CD keys per the installer → the cipher of `fontont.*` recovered from game.dll; the native
+  - CD keys per the installer → the cipher of `font\font.*` recovered from game.dll; the native
     installer's files are byte-identical to the official installer's for the same keys and name;
     `--verify` PASS except `font.ccd` (not reproduced; the game rejects both versions). The game's
     own key check runs unchanged.
@@ -132,9 +132,33 @@ official cooperation. Nothing network-facing is needed before M7.
   HLE; Direct3D 8 absent); input untested; upstream fake-success no-ops (`InvalidateRect`,
   `UpdateWindow`, `FillRect`, `DrawTextA`); `font.ccd`; game.dll's threads' memory ordering.
 
-## M4 — Menus on screen
-- D3D8 or the `-opengl` renderer on x86recomp's `gfx::Device` (Metal), input, the main menu
-  and the custom game screen rendered; frame dumps checked.
+## M4 — Interactive menus and rendering correctness *(Passed 2026-10-25, pending the user's sign-off)*
+- **Scope (the user's 2026-10-25 request):** main menu and Custom Game interface fully interactive
+  and visually correct: mouse, keyboard, focus, resize, minimize/restore, menu navigation;
+  rendering compared with the official 1.26a Wine oracle; observed GL defects fixed;
+  `InvalidateRect`/`UpdateWindow`/`FillRect`/`DrawTextA` audited, no fake successes; the existing
+  OpenGL path preferred, Direct3D 8 deferred unless required. Audio stays M5.
+- **Accept → Evidence** (FEASIBILITY §11):
+  - Interactive menus → `scripts/m4_accept.sh 3 110`: 3/3 PASS. Each launch (fresh profile)
+    walks main menu → new profile → Single Player → Custom Game → next map → Download folder
+    (mouse) → DotA 6.85oz LoD selected → Cancel → Options → Video → Cancel → focus out/in →
+    minimize/restore → Quit: all 14 shots saved, no FATAL, no watchdog report, Quit exits 0.
+  - Rendering against the oracle → both oracle renderers (Direct3D 8/wined3d and `-opengl`)
+    walk the same path by keys; UI, text, layout and previews match. Fixed: GL fog (absent), the
+    lifter's PUSH/POP slot size (a crash at Quit; ~1,900 sites), 16-bit texel precision. The
+    oracle's longer thin chains come from macOS GL's default anisotropic filtering, which the
+    game does not request: documented, not copied.
+  - Win32 audit → real painting (update regions, WM_PAINT order and validation, UpdateWindow,
+    BeginPaint/EndPaint, WM_ERASEBKGND); GDI drawing a strict stop (only movie/dialog paths
+    use it); minimize/restore/resize/focus per Wine's message sequences; DllMain exceptions
+    caught as Wine's loader does; execute faults through the guest SEH chain.
+  - Tests and mutation gate → 361 checks (lifter 122, loader 23, Win32 151, GL 37, key files 23,
+    jump-table corrections 5); mutation gate 120 mutants (M2–M4): 119 KILLED, 1 documented EQUIVALENT, 0 survivors; lift byte-identical twice (`416c0514…7688d`),
+    validator HARD PASS; ctest 17/18 under host load (`pacing`, timing-only).
+- **Verify:** FEASIBILITY §11.
+- **Risks carried to M5:** a menu-scene object lit pale natively vs dark in both oracles
+  (unexplained, lighting-related); isotropic vs macOS's anisotropic filtering; Start Game
+  initialises winsock (first stop `wsock32!htons`); Direct3D 8 absent; 315 strict stubs.
 
 ## M5 — Playable local match (offline)
 - Load a DotA map in single player (custom game), select a hero, play a full match to the end

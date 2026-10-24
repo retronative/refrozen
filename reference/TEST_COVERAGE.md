@@ -14,20 +14,21 @@ equivalent with the reason it cannot change behaviour.
 
 | Test | Covers | Checks | Expected values from |
 |---|---|---|---|
-| `tests/test_lifter_patches.py` | x86recomp lifter patches 0002–0006, 0010: relocated-pointer discovery, MMX/SSE/SSE2 forms, code sections, jump tables (incl. `mov reg,[t+i*4]; jmp reg` with a `.data` table), stored addresses in every data section | 108 | Intel SDM lane definitions, worked by hand in the comments; the 53 packed-integer cases of 0010 also agree 53/53 with real x86-64 execution under Rosetta 2 (a one-off development check, not a test dependency) |
-| `tests/test_loader.py` | patches 0007–0009: name/ordinal binding, DllMain order dependencies-first, static loads pinned, DllMain `lpReserved` non-NULL for static and NULL for dynamic loads, strict stubs, indirect-branch diagnostics, kernel32 functions of 0008, GetDiskFreeSpaceA, imm32, stack balance | 18 (one of them 14 results, one 24) | MSDN (DllMain, the functions' documented results), Wine's conformance tests (GetDiskFreeSpace), ReactOS imm32 |
-| `tests/test_win32.py` | patch 0009: REG_DWORD seeding, GetProfileStringA, system language, named events/mutexes and type mismatch, I/O completion ports incl. a woken worker thread, TryEnterCriticalSection across threads, waveOutOpen without a device, EnumDisplayDevicesA, ChangeDisplaySettingsExA, window size-message sequences, glTexGeni, wglSwapLayerBuffers, five stops for unimplemented forms | 95 | MSDN; Wine's `user32/tests/msg.c` sequences (verified there on Windows); Wine's winmm/display tests; the GL 1.1 specification |
+| `tests/test_lifter_patches.py` | x86recomp lifter patches 0002–0006, 0010, 0011: relocated-pointer discovery, MMX/SSE/SSE2 forms, code sections, jump tables (incl. `mov reg,[t+i*4]; jmp reg` with a `.data` table), stored addresses in every data section, PUSH/POP slot sizes (segment registers, 66h forms) | 122 | Intel SDM lane definitions, worked by hand in the comments; the 53 packed-integer cases of 0010 also agree 53/53 with real x86-64 execution under Rosetta 2 (a one-off development check, not a test dependency) |
+| `tests/test_loader.py` | patches 0007–0009, 0012: name/ordinal binding, DllMain order dependencies-first, static loads pinned, DllMain `lpReserved` non-NULL for static and NULL for dynamic loads, strict stubs, indirect-branch diagnostics, kernel32 functions of 0008, GetDiskFreeSpaceA, imm32, stack balance; an execute fault through the guest SEH chain (search pass, then unwind) and the loader's frame around DllMain (detach caught, FreeLibrary TRUE; attach a strict stop) | 23 (one of them 14 results, one 24) | MSDN (DllMain, the functions' documented results, EXCEPTION_ACCESS_VIOLATION's information), Wine's conformance tests (GetDiskFreeSpace), Wine's loader (`MODULE_InitDLL` catches entry-point exceptions), ReactOS imm32 |
+| `tests/test_win32.py` | patches 0009, 0012: REG_DWORD seeding, GetProfileStringA, system language, named events/mutexes and type mismatch, I/O completion ports incl. a woken worker thread, TryEnterCriticalSection across threads, waveOutOpen without a device, EnumDisplayDevicesA, ChangeDisplaySettingsExA, window size-message sequences, glTexGeni, wglSwapLayerBuffers; painting (update regions, WM_PAINT synthesis order and validation, UpdateWindow, BeginPaint's PAINTSTRUCT and WM_ERASEBKGND, show/resize invalidation, DefWindowProc); minimize/restore by ShowWindow and system commands; nine stops for unimplemented forms (incl. GDI drawing) | 151 | MSDN; Wine's `user32/tests/msg.c` sequences (verified there on Windows); Wine's winmm/display tests; the GL 1.1 specification |
+| `tests/test_gl_context.py` | patch 0012 via x86recomp's `gl_fog_test` and `gl_texture_test`: the fog factor the device gets from glFog (linear/exp/exp2, translated and rotated eye space, off axis, colour, disabled); texel precision of RGBA4/RGB5_A1/RGB4/RGB5 and TexSubImage2D | 37 (29 + 8) | GL 1.5 §3.10 (fog coordinate = eye distance, \|z_e\| allowed) and D3D9's vertex-fog rules for the device; GL's float-to-fixed conversion, worked by hand |
 | `tests/test_font_keydata.py` | the installed key files' cipher, the installer's key step | 23 | MSVC `rand()` and IDEA published vectors, IDEA multiplication by definition, SDM shift semantics; the official installer's output (Wine oracle, test keys of the player's readme): decodes with valid checksums, holds exactly those keys, re-encodes byte for byte (key material compared, never printed) |
 | `tests/test_jumptable_corrections.py` | lift-input correction of over-read jump tables | 5 | the script's documented contract |
 | `tests/test_bnupdate_patch.py` | the 1.26a patcher (M0) | – | M0 |
-| `ctest` (x86recomp) | upstream's tests (x87, SSE, atomics, Miles DSP, GL draw path, pacing, …) | 16 | upstream (`pacing` is a known timing flake on this Mac, FEASIBILITY §7) |
+| `ctest` (x86recomp) | upstream's tests (x87, SSE, atomics, Miles DSP, GL draw path, pacing, …) and M4's `gl_fog`, `gl_texture` | 18 | upstream (`pacing` is a known timing flake on this Mac, FEASIBILITY §7) |
 
 M1's 15 lifter mutations (patches 0001–0005) were run by hand before the gate existed and only
 their counts were recorded (FEASIBILITY §7); they are not in the registry.
 
 ## Mutants (last full run: all milestones)
 
-87 mutants: 1 EQUIVALENT, 86 KILLED.
+120 mutants: 1 EQUIVALENT, 119 KILLED.
 
 | Id | Area | Fault planted | File | Test | Expected failure | Result |
 |---|---|---|---|---|---|---|
@@ -49,7 +50,7 @@ their counts were recorded (FEASIBILITY §7); they are not in the registry.
 | M3-F6 | game initialization | encoder adds the SHA bytes in forward order | `scripts/font_keydata.py` | test_font_keydata.py | RoC key file re-encodes byte for byte | KILLED |
 | M3-F7 | error handling | decoder skips the trailer checksum | `scripts/font_keydata.py` | test_font_keydata.py | bit flipped is rejected | KILLED |
 | M3-F8 | game initialization | IDEA multiplication: 0 not taken as 65536 | `scripts/font_keydata.py` | test_font_keydata.py | IDEA multiplication modulo 65537 | KILLED |
-| M3-F9 | game initialization | key string keeps zero rand() bytes | `scripts/font_keydata.py` | test_font_keydata.py | RoC key file decodes | EQUIVALENT: after srand(0x150B) the first 19 rand() low bytes are all non-zero, so the filter never drops one |
+| M3-F9 | game initialization | key string keeps zero rand() bytes | `scripts/font_keydata.py` | test_font_keydata.py | RoC key file decodes | EQUIVALENT |
 | M3-F10 | game initialization | IDEA key expansion rotates by 8, not 25 | `scripts/font_keydata.py` | test_font_keydata.py | IDEA reference vector | KILLED |
 | M3-F11 | game initialization | decoder uses the encryption subkeys | `scripts/font_keydata.py` | test_font_keydata.py | RoC key file decodes | KILLED |
 | M3-F12 | game initialization | encoder writes the plaintext length off by one | `scripts/font_keydata.py` | test_font_keydata.py | RoC key file re-encodes byte for byte | KILLED |
@@ -118,6 +119,39 @@ their counts were recorded (FEASIBILITY §7); they are not in the registry.
 | M3-Y2 | synchronization | TryEnterCriticalSection by the owner is not counted | `x86recomp/src/runtime/hle/kernel32.cpp` | test_win32.py | cs: RecursionCount 2 | KILLED |
 | M3-T3 | module loading | relocated slots scanned only in sections named .rdata/.data | `x86recomp/tools/lifter/main.cpp` | test_lifter_patches.py | 0010 relocated slot in another data section lifts its target | KILLED |
 | M3-T4 | module loading | unaligned relocated slots skipped | `x86recomp/tools/lifter/main.cpp` | test_lifter_patches.py | 0010 unaligned relocated slot lifts its target | KILLED |
+| M4-P1 | memory operations | segment register pushed as a zero-extended dword | `x86recomp/tools/lifter/emit.cpp` | test_lifter_patches.py | 0011 push ds | KILLED |
+| M4-P2 | memory operations | segment register pushed into a 2-byte slot (the original bug) | `x86recomp/tools/lifter/emit.cpp` | test_lifter_patches.py | 0011 push ds | KILLED |
+| M4-P3 | memory operations | pop with a 16-bit operand size takes 4 bytes | `x86recomp/tools/lifter/emit.cpp` | test_lifter_patches.py | 0011 pop ax | KILLED |
+| M4-P4 | memory operations | push imm16 (66h) takes 4 bytes | `x86recomp/tools/lifter/emit.cpp` | test_lifter_patches.py | 0011 push word 1234h | KILLED |
+| M4-L1 | error handling | the loader's frame does not catch (exception reaches the top) | `x86recomp/src/runtime/hle/kernel32_seh.cpp` | test_loader.py | exception in DllMain(DETACH): handler, unwind, FreeLibrary TRUE | KILLED |
+| M4-L2 | error handling | the loader's frame skips the unwind of the frames above it | `x86recomp/src/runtime/hle/kernel32_seh.cpp` | test_loader.py | exception in DllMain(DETACH): handler, unwind, FreeLibrary TRUE | KILLED |
+| M4-L3 | error handling | execute access violation reported as a read | `x86recomp/src/runtime/hle/kernel32_seh.cpp` | test_loader.py | exception in DllMain(DETACH): handler, unwind, FreeLibrary TRUE | KILLED |
+| M4-L4 | error handling | an exception in DllMain(ATTACH) is swallowed | `x86recomp/src/runtime/hle/kernel32.cpp` | test_loader.py | exception in DllMain(ATTACH) stops the process | KILLED |
+| M4-L5 | error handling | a branch to unmapped memory stops without dispatching an exception | `x86recomp/src/runtime/dispatch.cpp` | test_loader.py | exception in DllMain(DETACH): handler, unwind, FreeLibrary TRUE | KILLED |
+| M4-D1 | window messages | WM_PAINT never synthesised | `x86recomp/src/runtime/hle/user32_window.cpp` | test_win32.py | D: shown popup: paint count 1 | KILLED |
+| M4-D2 | window messages | PM_REMOVE removes WM_PAINT (validates without painting) | `x86recomp/src/runtime/hle/user32_window.cpp` | test_win32.py | D: PM_REMOVE leaves WM_PAINT queued | KILLED |
+| M4-D3 | window messages | BeginPaint does not validate | `x86recomp/src/runtime/hle/user32_window.cpp` | test_win32.py | D: validated: PeekMessage finds nothing | KILLED |
+| M4-D4 | window messages | fErase inverted | `x86recomp/src/runtime/hle/user32_window.cpp` | test_win32.py | D: shown popup: fErase 1 | KILLED |
+| M4-D5 | window messages | InvalidateRect ignores its rect (whole client) | `x86recomp/src/runtime/hle/user32_window.cpp` | test_win32.py | D: two rects: rcPaint (10,5)-(60,40) | KILLED |
+| M4-D6 | window messages | a second rect replaces the update region instead of joining it | `x86recomp/src/runtime/hle/user32_window.cpp` | test_win32.py | D: two rects: rcPaint (10,5)-(60,40) | KILLED |
+| M4-D7 | window messages | hidden windows keep an update region | `x86recomp/src/runtime/hle/user32_window.cpp` | test_win32.py | D: hidden: InvalidateRect left no update region | KILLED |
+| M4-D8 | window messages | UpdateWindow does not paint | `x86recomp/src/runtime/hle/user32_window.cpp` | test_win32.py | D: two rects: paint count 2 | KILLED |
+| M4-D9 | error handling | bad window handle reported with the wrong error | `x86recomp/src/runtime/hle/win32.h` | test_win32.py | D: InvalidateRect(bad hwnd): 1400 | KILLED |
+| M4-D10 | window messages | a resize invalidates the whole client whatever the class style | `x86recomp/src/runtime/hle/user32_window.cpp` | test_win32.py | D: grown, class style 0: rcPaint (100,0)-(150,50) | KILLED |
+| M4-D11 | window messages | CS_HREDRAW ignored on resize | `x86recomp/src/runtime/hle/user32_window.cpp` | test_win32.py | D: grown, CS_HREDRAW: rcPaint (0,0)-(120,50) | KILLED |
+| M4-D12 | window messages | DefWindowProc(WM_PAINT) does not validate | `x86recomp/src/runtime/hle/user32_window.cpp` | test_win32.py | D: DefWindowProc's WM_PAINT validated it | KILLED |
+| M4-D13 | window messages | DefWindowProc(WM_ERASEBKGND) claims to erase without a brush | `x86recomp/src/runtime/hle/user32_window.cpp` | test_win32.py | D: shown popup: fErase 1 | KILLED |
+| M4-D14 | error handling | FillRect succeeds without drawing (fake success) | `x86recomp/src/runtime/hle/user32_window.cpp` | test_win32.py | stop 6: an unimplemented form stops the process | KILLED |
+| M4-D15 | error handling | DrawTextA succeeds without drawing (fake success) | `x86recomp/src/runtime/hle/user32_window.cpp` | test_win32.py | stop 7: an unimplemented form stops the process | KILLED |
+| M4-M1 | window messages | minimizing sends WM_SIZE(SIZE_RESTORED) | `x86recomp/src/runtime/hle/user32_window.cpp` | test_win32.py | M: ShowWindow(SW_MINIMIZE) | KILLED |
+| M4-M2 | window messages | a minimized window keeps the activation | `x86recomp/src/runtime/hle/user32_window.cpp` | test_win32.py | M: ShowWindow(SW_MINIMIZE) | KILLED |
+| M4-M3 | window messages | restoring sends no WM_SIZE | `x86recomp/src/runtime/hle/user32_window.cpp` | test_win32.py | M: ShowWindow(SW_RESTORE) | KILLED |
+| M4-M4 | window messages | DefWindowProc ignores SC_MINIMIZE | `x86recomp/src/runtime/hle/user32_window.cpp` | test_win32.py | M: DefWindowProc(SC_MINIMIZE) minimizes | KILLED |
+| M4-G1 | rendering | GL fog on the device's view-space z (no range fog: the original bug) | `x86recomp/src/runtime/gl/context.cpp` | test_gl_context.py | linear on axis | KILLED |
+| M4-G2 | rendering | sized formats stored at 8 bits | `x86recomp/src/runtime/gl/context.cpp` | test_gl_context.py | RGBA4 | KILLED |
+| M4-G3 | rendering | RGB5_A1 keeps 8-bit alpha | `x86recomp/src/runtime/gl/context.cpp` | test_gl_context.py | RGB5_A1 alpha 127 | KILLED |
+| M4-G4 | rendering | glTexSubImage2D forgets the sized format | `x86recomp/src/runtime/gl/context.cpp` | test_gl_context.py | TexSubImage2D on RGB5_A1 | KILLED |
+| M4-G5 | rendering | fixed-point conversion truncates instead of rounding | `x86recomp/src/runtime/gl/context.cpp` | test_gl_context.py | RGBA4 | KILLED |
 
 ## Survivors, equivalents and fixes found by the gate
 
@@ -139,3 +173,9 @@ their counts were recorded (FEASIBILITY §7); they are not in the registry.
 - Not observable, not mutated: `PUNPCKL*` reading 64 instead of 32 bits from memory gives the same
   result except at the end of mapped memory (the mutant that removes the m32 form, M3-X11, is
   killed by the unimplemented-site check instead).
+- **M4-D7 survived its first run:** a hidden window keeping an update region was invisible to the
+  checks (painting needs a visible window, and showing one invalidates it whole). It is observable
+  on Windows through BeginPaint on the hidden window; mode D now checks that its rcPaint is empty.
+- **M4-L4 was killed by the wrong check:** with the attach-time exception swallowed, the test EXE
+  ended itself with code 4, which "stops the process" accepted. The check now excludes the EXE's
+  own exit code, as the stop modes already do.

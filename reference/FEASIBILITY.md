@@ -10,9 +10,10 @@ UNRESOLVED. The full research report with sources is
 | Question | Answer |
 |---|---|
 | Is the input the right release? | **Yes.** WC3 RoC + TFT 1.21b (enGB), patched with the official 1.26a English patch to build 1.26.0.6401. All binaries are x86 Win32 PE, MSVC 2005 (linker 8.0), unpacked (§2). |
-| Recompile toolchain | **x86recomp + 10 reFrozen patches.** All eleven modules (war3.exe, game.dll, Storm.dll, Mss32.dll, msvcr80.dll, ijl15.dll, 5 Miles providers) lift with 0 reachable unimplemented sites, pass the structural audit, are byte-identical across runs and compile for arm64 (§7, §9, §10). |
+| Recompile toolchain | **x86recomp + 12 reFrozen patches.** All eleven modules (war3.exe, game.dll, Storm.dll, Mss32.dll, msvcr80.dll, ijl15.dll, 5 Miles providers) lift with 0 reachable unimplemented sites, pass the structural audit, are byte-identical across runs and compile for arm64 (§7, §9, §10). |
 | Native process (M2) | **Reaches `GameMain`.** One arm64 executable (`build/main/refrozen`) maps all ten modules at their preferred bases, binds all 675 cross-module imports (Storm by ordinal, Miles by name) to the lifted exports, runs the DllMains dependencies-first and calls `game.dll!GameMain`; every Win32 import without a handler is a strict stub (§9). |
 | Runtime initialization (M3) | **Reaches the main menu loop** on the player's native install (CD keys stored as the official installer stores them), with the game's own OpenGL renderer on x86recomp's GL HLE; 3 consecutive launches, no fatal stop; sound is off (no wave device until M5) (§10). |
+| Interactive menus (M4) | **Fully interactive and checked against the official client:** mouse/keyboard navigation through profiles, Single Player, Custom Game (DotA 6.85oz LoD selected), Options, focus, minimize/restore and Quit, 3 consecutive launches; fixed on the way: GL fog, the lifter's PUSH/POP slot size (the Quit crash), 16-bit texel precision; real Win32 painting, GDI drawing a strict stop (§11). |
 | DotA target | **DotA 6.85oz LoD** (pure JASS) for the offline milestones; iCCup native-plugin builds (6.83se/6.83s/6.85.308) deferred to M8, iCCup online compatibility, which needs M7 and iCCup's official cooperation (§5). |
 | Miles | **Recompile Mss32.dll 6.1d and its providers** rather than extend x86recomp's Miles HLE (§8). |
 | Reimplementation instead? | **No** for this goal. No open-source engine plays DotA 6.83 or keeps lockstep with real 1.26a clients. |
@@ -582,3 +583,112 @@ scripts/m3_accept.sh 3 60
   DLL_THREAD_ATTACH/DETACH.
 - `font.ccd` not reproduced; the installer's key checksum not reproduced (the game checks keys).
 - Memory ordering in game.dll's threads (16 network workers now exist) is not audited.
+
+## 11. M4: interactive menus and rendering correctness (VERIFIED 2026-10-25)
+
+Toolchain: x86recomp `ad1b16b` + `patches/x86recomp/0001`–`0012` (0011: the lifter's PUSH/POP
+slot size; 0012: the M4 runtime). Renderer: the game's OpenGL path on x86recomp's GL HLE
+(Direct3D 8 not needed: the OpenGL path renders every menu screen; deferred).
+
+**Acceptance (`scripts/m4_accept.sh 3 110`, `tests/m4/native_path.txt`):** 3 consecutive
+launches, each from a fresh per-user tree (new profile) on an APFS clone of the native install
+with the DotA map added. Each walks, with scripted mouse and keyboard: dismiss the sound dialog
+(Return), Single Player (S), type a profile name and create it (Return), Custom Game (G), the
+next map (Down), the Download folder (mouse double-click), DotA v6.85oz LoD (click; preview,
+10 players, Sentinel/Scourge slots), Cancel twice (A), Options (O), Video (V), Cancel; then the
+window loses and regains focus, is minimized and restored; then Quit (Q). Pass = all 14 named
+shots saved, no FATAL, no watchdog report, and the process ends by itself from the Quit button
+with status 0. **Result: 3/3 PASS.** Battle.net and Local Area Network are never opened
+(network-facing, M7); Start Game is never pressed (loading a map is gameplay, M5).
+
+**Oracle comparison (`scripts/oracle_menus.sh`, `scripts/oracle_keys.c`, `scripts/m4_compare.sh`):**
+the official 1.26a client under Wine (development only), on fresh APFS clones of the oracle
+install and prefix, walks the same path by keys at the same times (`tests/m4/oracle_path.txt`)
+on both of its renderers: its default Direct3D 8 (wined3d) and `-opengl`. The window is resized
+to an 800x600 client first: a `-window` window is `CW_USEDEFAULT`-sized (3/4 of the host screen),
+whose aspect changes the 3D projection, and Wine's Mac driver has no virtual desktop. Keys are
+posted to the game window by a freestanding i686 helper (clang + llvm-dlltool + lld-link), so the
+host pointer is never moved. A difference counts as a port defect only where the two oracle
+renderers agree with each other and native does not. SSIM of native against the D3D8 oracle on
+the static screens is 0.75–0.83 (the 3D background animates); the two oracles agree less with each
+other (0.48–0.72: Wine's GL path draws no text and garbles chains). UI chrome, text, layout,
+minimap previews and map details match the D3D8 oracle on every screen.
+
+**Defects found and fixed (each with a deterministic test and mutants):**
+
+| Symptom | Root cause | Fix |
+|---|---|---|
+| No fog over the menu's 3D scene (both oracles show a lavender haze) | the device's vertex fog uses view-space z (D3D: positive forward); the GL context passes GL eye space (forward is −z), so the distance was negative and the linear factor clamped to 1 | range fog: the eye distance, GL 1.5 §3.10's fog coordinate (`gl_fog_test`) |
+| Fault at Quit in Miles (`RIB_unregister_interface` called with 0x78 for three arguments) | **lifter**: `push ds/es` (32-bit operand size) lifted as a 2-byte push while `pop` takes 4, so ESP drifted 2 bytes per segment push; Miles' `MIXER_shutdown` (`push ebx/esi/edi/ds/es … pop`) returned with EBX = its return address and EDI = 0x78. Also `push imm16` and `pop r16` (66h) took 4 bytes. Sites: game.dll 1,233 segment pushes, Mss32 334, war3.exe 147, Storm 87, Mp3dec 99, msvcr80 24 | the slot is the instruction's operand size; a segment push writes its 16-bit selector into a 4-byte slot (SDM vol. 2, PUSH) — patch 0011, `test_stack_forms` (12 SDM cases; the old lifter fails 9) |
+| …then an indirect branch to 35800000 at exit | game.dll's own exit-time destructors (registered in its CRT order) call through a base-class vtable's float constant; under Wine (and Windows) that access violation happens too, but the loader catches exceptions escaping a DLL entry point (Wine's `MODULE_InitDLL`: `__TRY … __EXCEPT_ALL`), so FreeLibrary returns and the process exits; the runtime stopped on the branch instead | a call to unmapped memory raises EXCEPTION_ACCESS_VIOLATION (execute) through the guest SEH chain; DLL entry points run inside a loader frame that unwinds the inner frames and catches (detach: FreeLibrary still succeeds; attach: a strict stop, the failed-load status is not modelled) |
+| Thin alpha-keyed geometry (the throne's long chains) missing | not a port defect: macOS's GL driver, under both oracle renderers, filters anisotropically by default; forcing 16x anisotropy natively reproduces the oracle exactly; the game requests none, so GL semantics (and a Windows driver without forced anisotropy) give native's result | none (documented oracle artifact) |
+| 16-bit textures stored at 8 bits per channel | the game asks for `GL_RGBA4` / `GL_RGB5_A1` (Texture Quality Medium); the context kept full precision | texels kept at the requested precision (GL's fixed-point conversion), as period drivers and both oracles store them (`gl_texture_test`) |
+
+**Win32 behaviour made real (no fake successes):**
+- Painting: per-window update region (bounding box), `InvalidateRect` (bad hwnd: FALSE,
+  ERROR_INVALID_WINDOW_HANDLE), WM_PAINT synthesised after posted messages and input, before
+  WM_TIMER (Wine's `get_message` order) and kept until validated, `UpdateWindow` (synchronous),
+  `BeginPaint` (validates, sends WM_ERASEBKGND when due, `fErase`, `rcPaint`), `DefWindowProc`
+  WM_PAINT (validates) and WM_ERASEBKGND (0 without a class brush). Invalidation by creation
+  with WS_VISIBLE, show, restore and resize (CS_HREDRAW/CS_VREDRAW: whole; else the exposed
+  strips). The game's main window procedure answers WM_PAINT with BeginPaint/EndPaint only.
+- GDI drawing (`FillRect`, `DrawTextA`, `DefWindowProc` erasing with a class brush) and
+  `InvalidateRect(NULL)` are strict stops (DrawTextA's diagnostic prints the text). Static
+  audit of their callers: game.dll's movie backdrop ("BlockingWindow", black fill behind
+  DirectShow cinematics such as TutorialIn) and movie window, Storm's dialogs and war3.exe's
+  launcher window; none is reached on the menu paths (user32/gdi32 traces, default and `-window`).
+- Minimize/restore: `ShowWindow(SW_MINIMIZE)` sends WM_SIZE(SIZE_MINIMIZED, 0×0) and loses the
+  activation (WM_ACTIVATE(WA_INACTIVE, minimized), WM_ACTIVATEAPP(FALSE), WM_KILLFOCUS);
+  `SW_RESTORE` reactivates and sends WM_SIZE with the client size; `DefWindowProc` carries out
+  SC_MINIMIZE/SC_MAXIMIZE/SC_RESTORE; the host minimizing/restoring the window posts those system
+  commands (the game may handle them itself, as on Windows); a resizable (WS_THICKFRAME) window
+  resized by the host gets its new client size and WM_SIZE. The game's default window is a
+  maximized popup at the display mode's size: resolution changes go through Options/Video.
+- Test hooks (`<ID>_TEST_INPUT`): `shot <name>` (time-scripted named frames, independent of host
+  load), `dblclick`, `minimize`, `restore`, `resize w h`, `focus out|in`.
+
+**Findings for later milestones:**
+- **Start Game initialises networking** even for a local custom game: the first stop is
+  `wsock32.dll!#9` (htons). M5 must implement the winsock calls a local game makes.
+- The client under Wine with no audio driver faults at startup (an undispatchable exception), so
+  the "no sound device" model cannot be checked against that oracle; native shows the game's own
+  dialog and continues.
+- `import_coverage.py` counted wsock32's ordinal handlers ("#N") as stubs; corrected counts
+  (unchanged code, M3 and M4): 678 cross-module, 1,075 handled, 315 strict stubs (M3 stated
+  1,063 / 327).
+
+**Tests and mutation gate** (`reference/TEST_COVERAGE.md`): 361 checks (lifter 122, loader 23,
+Win32 151, GL context 37, key files 23, jump-table corrections 5), all passing; ctest 17/18 (`pacing`
+fails on a loaded host, a frame 98 ms late; timing only, code unchanged); 120 mutants over M2–M4:
+119 KILLED, 1 documented EQUIVALENT (M3-F9), 0 survivors (M4-D7 survived its first run and led to a
+stronger check; M4-L4 was first killed by the wrong check).
+
+**Lift:** 11 modules, 94,489 functions, 2,823,428 instructions, 241 files; two lifts byte-identical,
+tree hash `416c05148900f50b4a3d2eb79f62bd2908ba3cd0181ad2e644d0347525d7688d` (changed from M3's by
+the PUSH/POP fix); `validate_lift.py` HARD PASS on all eleven; 744 unimplemented sites, all in the
+documented-unreachable functions.
+
+**Verify:**
+```sh
+scripts/setup_tools.sh && scripts/lift.sh && ninja -C build/main refrozen
+for t in test_lifter_patches test_loader test_win32 test_gl_context test_font_keydata \
+         test_jumptable_corrections; do /opt/homebrew/bin/python3 -I tests/$t.py; done
+/opt/homebrew/bin/python3 -I tests/mutate.py
+scripts/m4_accept.sh 3 110
+scripts/oracle_menus.sh d3d-1 d3d tests/m4/oracle_path.txt 100     # development oracle
+scripts/oracle_menus.sh gl-1 opengl tests/m4/oracle_path.txt 100
+scripts/m4_compare.sh game/attempts/m4-accept-1-*/shots game/attempts/oracle-d3d-1 \
+    game/attempts/oracle-gl-1 game/attempts/m4-compare
+```
+
+**Remaining risks (for M5+):**
+- A foreground ice spike in the menu scene is lit pale natively and dark in both oracles; not
+  fog, culling, mip selection or anisotropy (bisected); lighting-related, unexplained. DotA's
+  lit models may show the same.
+- The native renderer is isotropic where macOS GL is anisotropic: thin alpha-tested geometry
+  (chains, foliage) minifies away sooner than in the oracle (faithful to GL; worth a user option
+  later, never a silent default).
+- Direct3D 8 absent (not needed so far); texture-coordinate generation still unmodelled.
+- The minimized window keeps its rect (Windows parks it at −32000,−32000); WM_SIZE from host
+  resizing is queued rather than sent from a sizing loop; WM_NCPAINT/WM_QUERYOPEN not sent.
+- 315 strict stubs; winsock for local games (above); `pacing` (ctest) fails under host load.
