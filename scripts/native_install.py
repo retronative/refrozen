@@ -12,9 +12,16 @@ Install: each installer's tome ("Installer Tome.mpq") carries the installer's
 own manifest, InstallCD/InstallerFileList/InstallerFileList.xml. Its Win32
 branch is interpreted: <repack_into type="file"> copies a tome file into the
 install folder, <repack_into type="mpq" container="X"> adds it to archive X.
-The CD-key steps (<encrypt object="cdkey26">, type="cdkey1encode", writing
-font\\font.* inside war3.mpq / War3x.mpq) are not implemented yet: those files
-keep their shipped contents, and --verify reports them separately.
+CD keys, as the installer stores them: <encrypt object="cdkey26"> writes the
+product's key (26 characters, upper case, no dashes) and <encrypt
+object="user"> the owner's name, each with its NUL, into font\\font.gid / font.exp /
+font.clh inside the MPQs, in the cipher game.dll reads them with
+(scripts/font_keydata.py; checked byte for byte against the official
+installer's output). The keys are asked for as the installer asks (or read
+from stdin when it is not a terminal), the name comes from --owner; neither is
+stored anywhere else. The game validates the keys itself when it starts.
+<repack type="cdkey1encode"> (font\\font.ccd) is not reproduced: the shipped
+file is kept (game.dll's decoder rejects both it and the official one).
 
 Patch: the 1.26a patch EXE embeds an MPQ holding Patch_War3x.mpq, BNUpdate's
 input. Each patch.lst line is "target;record[;flags]"; a record is applied by
@@ -30,6 +37,7 @@ Needs StormLib (brew install stormlib) and build/bnupdate_patch
 """
 import argparse
 import ctypes
+import getpass
 import hashlib
 import os
 import shutil
@@ -40,6 +48,8 @@ import tempfile
 import xml.etree.ElementTree as ET
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import font_keydata  # noqa: E402
 PATCHER = os.path.join(ROOT, "build", "bnupdate_patch")
 
 # ---- StormLib --------------------------------------------------------------
@@ -244,7 +254,29 @@ def evaluate(elem, actions):
             evaluate(child, actions)
 
 
-def install_product(installer_dir, out, work, log):
+KEY_ALPHABET = set("246789BCDEFGHJKMNPRTVWXYZ")
+
+
+def normalise_key(text):
+    """A 26-character Warcraft III key as the installer stores it, or None."""
+    k = "".join(text.split()).replace("-", "").upper()
+    return k if len(k) == 26 and set(k) <= KEY_ALPHABET else None
+
+
+def ask_key(product):
+    prompt = f"{product} CD key: "
+    text = getpass.getpass(prompt) if sys.stdin.isatty() else sys.stdin.readline()
+    key = normalise_key(text)
+    if key is None:
+        raise SystemExit(f"{product}: not a 26-character CD key")
+    return key
+
+
+def keyfile(plain):
+    return font_keydata.encode(plain, b"\0" * (64 - len(plain)))
+
+
+def install_product(installer_dir, out, work, log, secrets):
     tome = Mpq(os.path.join(installer_dir, "Installer Tome.mpq"))
     xml = tome.read("InstallCD\\InstallerFileList\\InstallerFileList.xml")
     actions = []
@@ -255,9 +287,13 @@ def install_product(installer_dir, out, work, log):
     for kind, container, src, to in actions:
         if kind == "cdkey":
             counts["cdkey"] += 1
-            log.append(f"skipped CD-key step: {src} -> {container}:{to}")
-            continue
-        data = tome.read(src)
+            if src not in secrets:  # cdkey1encode of a tome file
+                log.append(f"kept shipped file, cdkey1encode not reproduced: {container}:{to}")
+                continue
+            kind, data = "mpq", keyfile(secrets[src])
+            log.append(f"encoded {src} into {container}:{to}")
+        else:
+            data = tome.read(src)
         if data is None:
             raise RuntimeError(f"tome file missing: {src}")
         if kind == "file":
@@ -361,6 +397,8 @@ def patch(patch_exe, out, work, log):
 # Written by the Windows tools themselves, not game files.
 NOT_COMPARED = ("errors/", "bnupdate.exe", "bnupdate.log", "warcraft iii install log.html",
                 "warcraft iii - the frozen throne install log.html")
+# Written by the game when it runs (the oracle has been played), not installed.
+RUNTIME_WRITTEN = ("maps/download/", "save/", "tempreplay.w3g")
 MPQ_BOOKKEEPING = ("(listfile)", "(attributes)", "(signature)")
 CDKEY_FILES = ("font/font.gid", "font/font.clh", "font/font.ccd", "font/font.exp")
 
@@ -379,7 +417,7 @@ def verify(out, ref, listfile):
     report = {"identical": 0, "differ": [], "missing": [], "extra": []}
     mpq_names = []
     for rel, path in sorted(theirs.items()):
-        if rel.startswith(NOT_COMPARED[0]) or rel in NOT_COMPARED[1:]:
+        if rel.startswith(NOT_COMPARED[0]) or rel in NOT_COMPARED[1:] or rel.startswith(RUNTIME_WRITTEN):
             continue
         if rel not in ours:
             report["missing"].append(rel)
@@ -428,15 +466,21 @@ def main():
     ap.add_argument("--tft", required=True)
     ap.add_argument("--patch", required=True)
     ap.add_argument("--out", required=True)
+    ap.add_argument("--owner", required=True, help="the name the installer asks for (font.clh)")
     ap.add_argument("--verify")
     args = ap.parse_args()
+    owner = args.owner.encode("cp1252")
+    if not 0 < len(owner) < 63 or b"\0" in owner:
+        sys.exit("--owner: 1 to 62 characters")
+    keys = {"RoC": ask_key("Warcraft III"), "TFT": ask_key("The Frozen Throne")}
     if os.path.exists(args.out) and os.listdir(args.out):
         sys.exit(f"{args.out} is not empty")
     os.makedirs(args.out, exist_ok=True)
     log = []
     with tempfile.TemporaryDirectory(dir=os.path.dirname(os.path.abspath(args.out))) as work:
         for name, d in (("RoC", args.roc), ("TFT", args.tft)):
-            print(f"install {name}: {install_product(d, args.out, work, log)}")
+            secrets = {"cdkey26": keys[name].encode() + b"\0", "user": owner + b"\0"}
+            print(f"install {name}: {install_product(d, args.out, work, log, secrets)}")
         print(f"patch 1.26a: {patch(args.patch, args.out, work, log)}")
         for line in log:
             print("  " + line)
@@ -463,7 +507,7 @@ def main():
         print(f"{rel}: {r['identical']} files identical, {len(r['differ'])} differ, "
               f"{len(r['missing'])} missing, {len(r['extra'])} extra, "
               f"CD-key files differing: {len(r['cdkey'])}, archive bytes identical: {r['bytes_identical']}")
-        for k in ("differ", "missing", "extra"):
+        for k in ("differ", "missing", "extra", "cdkey"):
             for name in r[k]:
                 print(f"  {k}: {name}")
         ok = ok and not (r["differ"] or r["missing"])
