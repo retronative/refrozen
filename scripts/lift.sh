@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Lift every Warcraft III 1.26a module in one recomp_lift run (M1).
+# Lift every Warcraft III 1.26a module in one recomp_lift run (M1; msvcr80.dll added in M2).
 #
 #   scripts/lift.sh [install dir] [out dir]   # defaults: game/native-install game/generated/war3
 #
@@ -24,7 +24,7 @@ PYTHON=/opt/homebrew/bin/python3
 
 # module file (relative to the install) : symbols/config name
 MODULES=(
-  "war3.exe:war3" "game.dll:game" "Storm.dll:storm" "Mss32.dll:mss32"
+  "war3.exe:war3" "game.dll:game" "Storm.dll:storm" "Mss32.dll:mss32" "msvcr80.dll:msvcr80"
   "redist/miles/Mp3dec.asi:mp3dec_asi" "redist/miles/Mssfast.m3d:mssfast_m3d"
   "redist/miles/Msseax2.m3d:msseax2_m3d" "redist/miles/Mssdolby.m3d:mssdolby_m3d"
   "redist/miles/Reverb3.flt:reverb3_flt"
