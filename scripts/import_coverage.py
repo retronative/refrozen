@@ -27,7 +27,8 @@ import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 X86 = os.path.join(ROOT, "tools/x86recomp")
-HLE_RE = re.compile(r'^HLE(?:_NAMED)?\("([^"]+)",\s*"?([A-Za-z0-9_@?$]+)"?,', re.M)
+# Handler names: an export name, or "#N" for an export by ordinal (wsock32).
+HLE_RE = re.compile(r'^HLE(?:_NAMED)?\("([^"]+)",\s*"?(#?[A-Za-z0-9_@?$]+)"?,', re.M)
 TABLE_RE = re.compile(r"^void f_([0-9A-F]{8})\(", re.M)
 
 
