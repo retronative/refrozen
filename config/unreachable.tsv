@@ -1,0 +1,5 @@
+entry	module	reason
+26F07D10	Mp3dec.asi	3DNow! path, chosen only when (_AIL_MMX_available() & 2) (flag at 26F25C68, set at 26F02278-26F02280, tested at 26F0309F/26F030FE/26F031D2/26F03249/26F0334A/26F03446). Mss32.dll 6.1d's _AIL_MMX_available (21102330) returns only 0 or 1 (CPUID.1:EDX bit 23 at 2113D007), so bit 1 is never set, on any CPU. Unimplemented sites stay fatal.
+26F08A2D	Mp3dec.asi	3DNow! path, same flag and evidence as 26F07D10 (called at 26F0312A, 26F031FB).
+26F0904C	Mp3dec.asi	3DNow! path, same flag and evidence as 26F07D10 (called at 26F03399).
+26F09EFC	Mp3dec.asi	3DNow! path, same flag and evidence as 26F07D10 (called at 26F03462).

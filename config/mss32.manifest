@@ -1,0 +1,5 @@
+# recomp_lift manifest for Mss32.dll (Miles 6.1d, 1.26a).
+# Entries the pointer scans cannot see: Miles keeps a table of mixer routine
+# pointers inside its executable MSSMIXER section (relocated dwords at
+# 2113CDEA, 2113CDFA, 2113CEEA, 2113CEFA), which the data scan does not cover.
+entry 21139000  # mixer routine at the start of MSSMIXER (xor eax,eax; mov al,[esi]; ...)

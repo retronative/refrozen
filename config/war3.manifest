@@ -1,0 +1,13 @@
+# recomp_lift manifest for war3.exe 1.26a (SHA-256 28173101…9909).
+# war3.exe has no base relocations, so the lifter's pointer scan cannot tell
+# addresses from text. Each "data" line is a dword the scan found that is
+# ASCII in war3.exe's data, not a code address (evidence: where it occurs);
+# the lifter fails if any of them is a real entry.
+data 0040406F  # "o@@\0": tail of RTTI type names ("...Info@@") in .data at 00463C48, 00466178
+data 00414400  # "\0DA\0" in a list of short names in .rdata at 00462274
+data 0041786F  # "oxA\0" inside "MessageBoxA" in .rdata at 0045E35C
+data 00454400  # "\0DE\0" in the same short-name list in .rdata at 00462280
+data 00404045  # "E@@\0": RTTI type names ("...NODE@@") in .data at 00465AB0, 00465C5C
+data 00404074  # "t@@\0": RTTI type names ("...Text@@", "...OsNet@@") in .data at 00463E20, 00464028
+data 00410040  # "@\0A\0" in a list of one-letter names in .rdata at 00461B4C
+data 00444554  # "TED\0" inside "...CONNECTED" in .rdata at 00456E64
