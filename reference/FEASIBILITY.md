@@ -1,6 +1,6 @@
 # reFrozen — Feasibility
 
-Status: **M0 complete (2026-10-24), awaiting the user's sign-off.** Labels: VERIFIED (observed locally, reproducible),
+Status: **M0 passed (signed off 2026-10-24); M1 Partial (2026-10-24): all criteria met except end-to-end reproducibility (§7).** Labels: VERIFIED (observed locally, reproducible),
 OBSERVED (stated by a cited external source, not reproduced here), HYPOTHESIS, FALSIFIED,
 UNRESOLVED. The full research report with sources is
 [research/reports/WC3 native macOS port methods.md](research/reports/WC3%20native%20macOS%20port%20methods.md).
@@ -10,7 +10,9 @@ UNRESOLVED. The full research report with sources is
 | Question | Answer |
 |---|---|
 | Is the input the right release? | **Yes.** WC3 RoC + TFT 1.21b (enGB), patched with the official 1.26a English patch to build 1.26.0.6401. All binaries are x86 Win32 PE, MSVC 2005 (linker 8.0), unpacked (§2). |
-| Recompile toolchain | **None ready-made.** The only maintained Win32 x86 → portable C++ recompiler is x86recomp (MIT, ~1 week old, no playable title). Recommended: fork it, as ReCarbon forked SpeedBreaker (report §"Recommended approach"). |
+| Recompile toolchain | **x86recomp + 5 reFrozen patches.** All nine modules (war3.exe, game.dll, Storm.dll, Mss32.dll, 5 Miles providers) lift with 0 reachable unimplemented sites, pass the structural audit, are byte-identical across runs and compile for arm64 (§7). |
+| DotA target | **DotA 6.85oz LoD** (pure JASS) for the offline milestones; iCCup native-plugin builds (6.83se/6.83s/6.85.308) deferred (§5). |
+| Miles | **Recompile Mss32.dll 6.1d and its providers** rather than extend x86recomp's Miles HLE (§8). |
 | Reimplementation instead? | **No** for this goal. No open-source engine plays DotA 6.83 or keeps lockstep with real 1.26a clients. |
 | Native install path | **Done.** `scripts/native_install.py` installs RoC + TFT and applies the 1.26a patch with no Wine; it reproduces the official result (all loose files byte-identical, all MPQ contents identical except the CD-key files), deterministically (§1). |
 | DotA on 1.26a | **Pure-JASS DotA maps work** (6.85oz LoD plays, IMBA loads, in the official client). **`DotA v6.83se` does not**: it is an iCCup build whose logic is a native plugin DLL, and stock 1.26a crashes loading it (§5). |
@@ -191,3 +193,120 @@ Static: `scripts/map_check.py <map> game/native-install` (MPQ/HM3W/w3i headers; 
 - **Self-modifying or lock-free code in `game.dll`** relying on x86 ordering: UNRESOLVED (M1+).
 - **1.21b Mac builds in the tomes (`MAC*/`)**: symbols not checked; low priority now that the
   Windows path is fully native.
+
+## 7. M1: recompiling all modules (VERIFIED 2026-10-24)
+
+Toolchain: x86recomp `ad1b16b` + `patches/x86recomp/0001`–`0005` (`scripts/setup_tools.sh`; the
+series re-applies from a clean checkout to a tree identical to the one tested), LLVM 23.1.4,
+Ghidra 12.2 (JDK 25). Inputs are the native install's binaries (identical to the oracle, §1).
+
+**Modules** (one `recomp_lift` run, `scripts/lift.sh`, at their preferred bases, no overlaps):
+
+| Module | Base | Ghidra functions / jump tables (resolved, unresolved) | Lifted functions | Lifted instructions |
+|---|---|---|---|---|
+| war3.exe | 00400000 | 2,706 / 39, 107 | 3,081 | 86,067 |
+| game.dll | 6F000000 | 71,158 / 641, 2,709 | 84,321 | 2,283,363 |
+| Storm.dll | 15000000 | 1,085 / 37, 37 | 1,256 | 82,200 |
+| Mss32.dll | 21100000 | 1,070 / 55, 4 | 1,100 | 71,735 |
+| Mp3dec.asi | 26F00000 | 170 / 35, 9 | 196 | 19,275 |
+| Mssfast.m3d | 22600000 | 221 / 35, 36 | 276 | 11,917 |
+| Msseax2.m3d | 22C00000 | 233 / 37, 22 | 286 | 13,085 |
+| Mssdolby.m3d | 22700000 | 221 / 36, 36 | 276 | 12,350 |
+| Reverb3.flt | 24600000 | 153 / 35, 10 | 182 | 10,592 |
+
+Total: 90,974 functions (77,022 from Ghidra/exports/manifests, 13,952 discovered from pointers),
+2,590,584 instructions, 220 files (318 MB). Jump tables: 950 from Ghidra, 8 recovered, 8 completed.
+
+**Lifter defects found and fixed** (each with end-to-end, hand-computed tests in
+`tests/test_lifter_patches.py` on synthetic PE images, no game data; every listed mutation of
+the fix fails them):
+
+| Patch | Defect (evidence) | Fix | Mutations caught |
+|---|---|---|---|
+| 0001 | `lock xchg/cmpxchg/cmpxchg8b` unimplemented (Storm `SInterlocked*`, §3) | seq_cst CAS helpers | 2 (`lift_atomic_test`) |
+| 0002 | Pointer scans took ASCII and constants as code addresses: `game.dll` sits at 0x6F000000 ("o"), giving bogus weak entries and 382 unimplemented sites from text decoded as code | In images with base relocations only relocated dwords/immediates are candidates (exact); `data <va>` manifest directive for images without (fails if it names a real entry) | 1 |
+| 0003 | MMX not implemented (119 sites in game.dll blitters, 8 in Miles' MMX mixer), nor `movhps`/`movntps`/`sfence`; x87 runs could span MMX instructions | `recomp::mmx` on the x87 physical registers (SDM vol. 1 §9.5: TOP=0, tags valid, sign/exp FFFF, EMMS empty); the forms seen only; runs end at MMX | 6 |
+| 0004 | Only the section named `.text` was code: Miles' `MSSMIXER` (0x21139000, its mixer and CPU check) was never lifted; `pe_symbols.py` called exports outside `.text` data | `PeImage::CodeSpan` (all executable sections, contiguous) for lifter and runtime dispatch; `pe_symbols.py` by section flags | 2 |
+| 0005 | Switch tables Ghidra exported with cases missing were used as-is (game.dll 6F30B3B5: `cmp edi,4` but 3 targets; Storm 1500BD83; 8 tables); tables with no bound check were not recovered (game.dll 6F68E6A0, entered by `jmp [6F68E6C8+ecx*4]`) | Recovery also runs on Ghidra's tables and adds missing cases; unbounded tables in relocatable images = the run of relocated slots pointing back into [entry, table) | 2 |
+
+**Configuration** (committed, addresses only): `config/war3.manifest` (8 `data` entries: RTTI
+names and string lists that look like pointers in war3.exe, which has no relocations; each with
+where it occurs), `config/mss32.manifest` (1 `entry`: the MSSMIXER routine reached through a
+pointer table inside that executable section), `config/unreachable.tsv` (below).
+
+**Structural audit** (`scripts/validate_lift.py`, **HARD: PASS**, `game/generated/validate-summary.txt`):
+- **Unimplemented sites: 0 reachable.** The 738 left (3DNow!: `pfmul` 283, `pfadd` 274, `pfsub`
+  144, `pfsubr` 24, `femms` 8, `pf2id` 5) are in 4 Mp3dec.asi functions chosen only when
+  `_AIL_MMX_available() & 2`; Mss32.dll 6.1d's `_AIL_MMX_available` returns only 0 or 1
+  (CPUID.1:EDX bit 23), so they cannot run on any CPU (`config/unreachable.tsv`). They stay fatal.
+- **Every Ghidra function and every exported function is lifted** in all nine modules.
+- **Every relocated pointer into code is explained:** function entry, label inside a function,
+  non-code data, the operand of an inline `jmp [table+reg*4]` (CRT memcpy in Mss32 and the
+  providers), or a case target of a switch whose code nothing refers to (267 in game.dll).
+- **Every Ghidra instruction not lifted is explained:** game.dll 1,564 (1,301 table data Ghidra
+  decoded as code, 252 unreferenced code, 11 Ghidra decodes overlapping lifted instructions),
+  war3.exe 110 (unreferenced). "Unreferenced" means: no lifted instruction branches into it, and
+  no pointer to it exists outside code that is itself unreferenced (relocations, exact, in the
+  DLLs; any 4-byte value in the image for war3.exe, which has none). Coverage of Ghidra's code
+  bytes: 100% in seven modules, 99.927% game.dll, 99.877% war3.exe.
+
+**Determinism:**
+- **Lifter (VERIFIED):** two lifts from the same symbols are byte-identical; tree hash (sorted
+  `*.cpp`) `8a2a898dd1219c9bb4d66028d61698be1123336d0441a43af4eaaf1424dde288`.
+- **Ghidra (VERIFIED: not deterministic on game.dll):** a second analysis of game.dll defined 2
+  more functions (6F4B4110, 6F4B4130: small float-compare tail-jump functions, decoded in both
+  runs but unreferenced) and labelled 4 `jmp`s as call terminators; jump tables, instruction
+  addresses/lengths and non-code ranges were identical. With those symbols 6 generated files
+  differ (tree hash `e90c0681…56ef8`). Two single-threaded runs (`-max-cpu 1`, 410 s each) differ
+  the same way (71,161 vs 71,159 functions). Storm.dll's two runs were identical (§3).
+- **Consequence (UNRESOLVED):** the end-to-end pipeline (Ghidra, then lift) is not reproducible
+  on a player's machine as it stands. Proposed fix: commit each module's function and jump-table
+  address lists in `config/` (addresses and flags only, as ReCarbon commits its function and
+  jump-table addresses), so the lift input is pinned and players need no Ghidra; awaiting the
+  user's decision.
+
+**arm64 compile:** all 220 files with x86recomp's `recomp_add_lifted` flags (-O2, -fnon-call-exceptions,
+strict x87 FP), Homebrew LLVM 23.1.4, Ninja: 0 errors, 0 warnings; 238 s wall, 1,569 s CPU, peak
+RSS 845 MB; 128 MB of arm64 Mach-O objects defining exactly the 90,974 lifted functions. Not linked
+(no game project yet: M2).
+
+**Verify:**
+```sh
+scripts/setup_tools.sh
+ctest --test-dir tools/x86recomp/out/build/debug
+/opt/homebrew/bin/python3 -I tests/test_lifter_patches.py
+scripts/lift.sh                      # game/generated/war3 from game/native-install
+/opt/homebrew/bin/python3 -I scripts/validate_lift.py --generated game/generated/war3 \
+  --unreachable config/unreachable.tsv --module game/native-install/war3.exe game/symbols/war3 ...
+```
+(the Ghidra/`pe_symbols.py` commands that produce `game/symbols/` are in AGENTS.md).
+
+**Remaining risks (UNRESOLVED, for M2+):**
+- **Static imports between lifted modules:** x86recomp binds every static import to an HLE
+  thunk. war3.exe/game.dll import Storm (by ordinal) and Mss32 statically; the runtime must bind
+  them to the lifted DLLs' exports and run their DllMains in load order (M2).
+- **Indirect jumps:** game.dll has 2,535 `jmp reg` sites (and calls through pointers) dispatched
+  at run time; their targets are not checked statically. A target that is not a lifted entry is
+  a fatal stop naming the address (fix: manifest entries, as for MSSMIXER).
+- **Non-code bytes:** 730 KB of game.dll's `.text` is neither code nor relocated data nor
+  padding (mostly constants and strings Ghidra left undefined). Not reached by any lifted branch
+  or relocation; reaching one at run time would be the fatal stop above.
+- **Memory ordering:** lock-free hand-offs without locked instructions in game.dll's threads are
+  not audited (x86recomp's open item).
+- **x86recomp `pacing` test** fails intermittently on this Mac (pristine `ad1b16b` 2/20, patched
+  4/20 runs; the test is built from `pacing.cpp` and `platform.cpp`, which no patch touches).
+
+## 8. Miles: recompile Mss32.dll 6.1d rather than extend the HLE (decision 2026-10-24)
+
+| | Recompile Mss32.dll + providers | Extend x86recomp's Miles HLE |
+|---|---|---|
+| Coverage of WC3's 110 Miles imports | All (the real code) | 62 implemented; 48 missing: XMIDI/sequence and DLS (13+), `AIL_decompress_ASI` (MP3 music via Mp3dec.asi), ADPCM, 3D cone/occlusion/obstruction/velocity/speaker type, stream/sample pan and user data |
+| Fidelity | Exact 6.1d behaviour | HLE models Miles 6.5e/6.1c; 6.1d differences would need study |
+| Lift state | 0 reachable unimplemented, audit PASS (§7); integer/x87/MMX only | n/a |
+| New HLE needed | `dsound.dll!DirectSoundCreate` (Miles asks by name; only `DirectSoundCreate8` exists); IDirectSound v1 compatibility of the existing DirectSound 8 HLE | 48 functions |
+| Runtime work | Static-import binding to lifted DLLs (needed for Storm anyway) | none beyond the functions |
+
+**Decision:** recompile. Audio is outside the lockstep simulation, so exactness is not a sync
+requirement, but recompiling covers every call the game makes with the original behaviour, for
+the price of one HLE entry and the import binding Storm already needs. Revisit if the DirectSound
+HLE's gaps (no notifications) block Miles at M3/M5. x86recomp's `recomp_mss32` is not linked.

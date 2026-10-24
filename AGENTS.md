@@ -13,25 +13,43 @@ ReCarbon (`../recarbon`); reusable lessons are in `../game-port-knowledge`.
 | `../DOTA/` | The player's own game installers, client pack and maps | **Read-only.** Never commit anything from it. |
 | `game/` | Extracted tomes, 1.26a oracle binaries (`oracle-1.26a/`), Ghidra project, symbols, generated code | git-ignored, proprietary-derived |
 | `tools/` | x86recomp (pinned + patches), Wine (dev oracle only) | git-ignored |
-| `patches/x86recomp/` | Our x86recomp patches, applied by `scripts/setup_tools.sh` | Each with hand-computed tests in x86recomp's `tests/` |
-| `scripts/` | `setup_tools.sh`, `mpq_extract.c` | |
+| `patches/x86recomp/` | Our x86recomp patches 0001–0005, applied in order by `scripts/setup_tools.sh` | Each with hand-computed tests (`tests/test_lifter_patches.py`, x86recomp's `lift_atomic_test`) that fail under mutation. A patch is a diff against the tree with the earlier ones applied. |
+| `config/` | Lifter manifests per module (`<module>.manifest`) and `unreachable.tsv` | Addresses and evidence only, no game bytes. Every entry says why. |
+| `scripts/` | Install/patch, lift (`lift.sh`), audit (`validate_lift.py`), Ghidra scripts (`ghidra/`), map checks | |
 | `reference/` | Feasibility, roadmap, research (`research/`) | |
 
 ## Commands
 
 ```sh
-scripts/setup_tools.sh   # x86recomp (refrozen branch) + build/mpq_extract (idempotent)
-ctest --test-dir tools/x86recomp/out/build/debug
-# Ghidra export (JDK 25), then exports/imports, then lift; per module, e.g. Storm.dll:
-JAVA_HOME=/opt/homebrew/opt/openjdk@25 /opt/homebrew/opt/ghidra/libexec/support/analyzeHeadless \
-  game/ghidra reFrozen -import game/oracle-1.26a/Storm.dll -overwrite \
+scripts/setup_tools.sh   # x86recomp (refrozen branch) + build/mpq_extract, bnupdate_patch (idempotent)
+ctest --test-dir tools/x86recomp/out/build/debug   # "pacing" is a known timing flake (FEASIBILITY §7)
+/opt/homebrew/bin/python3 -I tests/test_lifter_patches.py
+# Per module (symbols dir names: war3 game storm mss32 mp3dec_asi mssfast_m3d msseax2_m3d
+# mssdolby_m3d reverb3_flt), e.g. game.dll: Ghidra analysis + exports (JDK 25, ~4 min for game.dll),
+JAVA_HOME=/opt/homebrew/opt/openjdk@25 MAXMEM=8G /opt/homebrew/opt/ghidra/libexec/support/analyzeHeadless \
+  game/ghidra reFrozen -import game/native-install/game.dll -overwrite \
   -scriptPath tools/x86recomp/tools/ghidra \
-  -postScript ExportFunctions.java game/symbols/storm/functions.tsv \
-  -postScript ExportJumpTables.java game/symbols/storm/jumptables.tsv
+  -postScript ExportFunctions.java game/symbols/game/functions.tsv \
+  -postScript ExportJumpTables.java game/symbols/game/jumptables.tsv
+# ... the instruction listing for the audit (read-only, after analysis),
+JAVA_HOME=/opt/homebrew/opt/openjdk@25 /opt/homebrew/opt/ghidra/libexec/support/analyzeHeadless \
+  game/ghidra reFrozen -process game.dll -noanalysis -readOnly \
+  -scriptPath scripts/ghidra -postScript ExportInstructions.java game/symbols/game
+# ... and exports/imports.
 PATH=/opt/homebrew/opt/llvm/bin:$PATH /opt/homebrew/bin/python3 -I \
-  tools/x86recomp/tools/pe_symbols.py game/oracle-1.26a/Storm.dll --out game/symbols/storm
-tools/x86recomp/out/build/debug/tools/lifter/recomp_lift --exe game/oracle-1.26a/Storm.dll \
-  --symbols game/symbols/storm --manifest game/symbols/storm/lifter.manifest --out game/generated/storm
+  tools/x86recomp/tools/pe_symbols.py game/native-install/game.dll --out game/symbols/game
+scripts/lift.sh          # all nine modules, one run -> game/generated/war3
+/opt/homebrew/bin/python3 -I scripts/validate_lift.py --generated game/generated/war3 \
+  --unreachable config/unreachable.tsv \
+  --module game/native-install/war3.exe game/symbols/war3 \
+  --module game/native-install/game.dll game/symbols/game \
+  --module game/native-install/Storm.dll game/symbols/storm \
+  --module game/native-install/Mss32.dll game/symbols/mss32 \
+  --module game/native-install/redist/miles/Mp3dec.asi game/symbols/mp3dec_asi \
+  --module game/native-install/redist/miles/Mssfast.m3d game/symbols/mssfast_m3d \
+  --module game/native-install/redist/miles/Msseax2.m3d game/symbols/msseax2_m3d \
+  --module game/native-install/redist/miles/Mssdolby.m3d game/symbols/mssdolby_m3d \
+  --module game/native-install/redist/miles/Reverb3.flt game/symbols/reverb3_flt
 ```
 
 ```sh
@@ -47,7 +65,9 @@ scripts/wine_loadtest.sh game/wine-oracle 'Maps\Download\<map>.w3x' 60 game/load
   never run them, under Wine or otherwise.
 - After changing a patch, delete the `refrozen` branch in `tools/x86recomp` and re-run
   `setup_tools.sh`. Lifter output must not change unintentionally: diff `game/generated/` before
-  and after any lifter change.
+  and after any lifter change, and keep two lifts byte-identical.
+- `validate_lift.py` must stay HARD PASS. Unimplemented sites may only remain in functions listed
+  in `config/unreachable.tsv` with evidence that they cannot run; they stay fatal at run time.
 
 ## Conventions
 

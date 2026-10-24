@@ -11,7 +11,7 @@ unknown documented). Diagnosing a failure is progress; it does not pass a criter
 **Order: offline first.** A playable local match comes first, then AI bots, then multiplayer.
 Nothing network-facing is needed before M6.
 
-## M0 — Correct input and feasibility *(Passed 2026-10-24, pending the user's sign-off)*
+## M0 — Correct input and feasibility *(Passed 2026-10-24, signed off by the user)*
 - **Accept → Evidence** (details and commands in FEASIBILITY §1–6):
   - Hashes and header facts of every input binary → VERIFIED (§1, §2).
   - Native install + 1.26a patch reproduce the official installers + patcher (Wine oracle) →
@@ -30,16 +30,37 @@ Nothing network-facing is needed before M6.
 - **Verify:** `scripts/setup_tools.sh`; `python3 -I tests/test_bnupdate_patch.py`;
   `python3 -I scripts/native_install.py … --verify <oracle>`; `python3 -I scripts/map_check.py
   <map> game/native-install`; `scripts/wine_loadtest.sh` (dev oracle only).
-- **Carried forward (not M0 blockers):** the CD-key encoding step; DirectShow intro movies (§6);
-  which DotA build is the target (decision for the user, §5): a pure-JASS build plays on stock
-  1.26a; iCCup plugin builds would add each map's DLL as a further module to recompile.
+- **Carried forward (not M0 blockers):** the CD-key encoding step; DirectShow intro movies (§6).
+  DotA target decided by the user: **DotA 6.85oz LoD** (pure JASS); iCCup native-plugin maps,
+  including 6.83se, deferred.
 
-## M1 — Recompile all modules *(not started; needs approval)*
-- Ghidra export + x86recomp lift of `war3.exe`, `game.dll`, `Storm.dll` (and `Mss32.dll` or its
-  HLE decided here) in one multi-module run, at their preferred bases.
-- **Accept:** 0 unimplemented sites (each new instruction: patch + hand-computed test +
-  mutation); structural checks (every Ghidra function and export lifted; jump tables resolved or
-  explained); generated code byte-identical across two runs; compiles for arm64.
+## M1 — Recompile all modules *(Partial 2026-10-24: end-to-end determinism open, see below)*
+- **Scope:** war3.exe, game.dll, Storm.dll, Mss32.dll and the five Miles providers (Mp3dec.asi,
+  Mssfast/Msseax2/Mssdolby.m3d, Reverb3.flt) in one lift at their preferred bases. Miles is
+  recompiled rather than HLE'd (FEASIBILITY §8).
+- **Accept → Evidence** (FEASIBILITY §7):
+  - 0 unimplemented sites → **0 reachable**; 738 3DNow! sites in 4 Mp3dec functions shown
+    unreachable on any CPU with WC3's Mss32 (`config/unreachable.tsv`), still fatal if reached.
+    New instructions and lifter defects → patches 0001–0005, each with hand-computed end-to-end
+    tests that fail under mutation (15 mutations).
+  - Structural checks → `scripts/validate_lift.py` HARD PASS: every Ghidra function and export
+    lifted; every relocated pointer into code and every unlifted Ghidra instruction explained
+    (entries, labels, table data, operands of inline tables, or provably unreferenced code);
+    jump tables resolved, completed (8) or recovered (8).
+  - Byte-identical across two runs → **lifter VERIFIED** (tree hash `8a2a898d…de288` from the same
+    symbols); **end-to-end NOT yet**: Ghidra's analysis of game.dll varies between runs (2
+    dead functions, even single-threaded), which changes 6 generated files. Fix proposed:
+    pin the per-module function/jump-table address lists in `config/` (user decision pending).
+  - Compiles for arm64 → all 220 files, 0 errors, 0 warnings, 238 s; objects define all
+    90,974 lifted functions (not linked: M2).
+- **Verify:** `scripts/setup_tools.sh`; `ctest --test-dir tools/x86recomp/out/build/debug`;
+  `python3 -I tests/test_lifter_patches.py`; `scripts/lift.sh`;
+  `python3 -I scripts/validate_lift.py --generated game/generated/war3 --unreachable
+  config/unreachable.tsv --module … ` (all nine; AGENTS.md has the full command).
+- **Risks carried to M2** (FEASIBILITY §7): static imports between lifted modules (Storm by
+  ordinal, Mss32) must bind to the lifted DLLs, not HLE thunks; `DirectSoundCreate` HLE for
+  Miles; run-time indirect jumps (2,535 `jmp reg` in game.dll) not checked statically; lock-free
+  memory ordering not audited.
 
 ## M2 — Native link and process start
 - A game project (`GameConfig`, `RunProcess`), strict import stubs generated from the imports,
