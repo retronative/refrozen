@@ -15,10 +15,18 @@ Modes (the command line's last character):
      first ShowWindow.
   L  OpenGL: glTexGeni's state and errors, wglSwapLayerBuffers.
   P  wglSwapLayerBuffers of a plane that does not exist (a stop).
+  M  minimize/restore (M4): the messages ShowWindow(SW_MINIMIZE /
+     SW_RESTORE) and DefWindowProc(WM_SYSCOMMAND, SC_MINIMIZE / SC_RESTORE)
+     send to an active window.
+  D  painting (M4): update regions, WM_PAINT synthesis and order,
+     UpdateWindow, BeginPaint's PAINTSTRUCT and WM_ERASEBKGND, invalidation
+     by show and resize, DefWindowProc's WM_PAINT. One 1/0 flag per check.
   1-5  the other forms M3 does not implement, each a stop with its diagnostic:
      monitor enumeration (EnumDisplayDevicesA), ChangeDisplaySettingsExA with
      an hwnd, CreateIoCompletionPort on a file handle, GetProfileStringA
      enumeration, CreateWindowExA(WS_MINIMIZE).
+  6-9  GDI drawing M4 does not implement, each a stop: FillRect, DrawTextA,
+     InvalidateRect(NULL), DefWindowProc erasing with a class brush.
 
 Expected values come from Windows' documented behaviour and Wine's
 conformance tests (which pass on Windows), ReactOS where named, and the
@@ -38,7 +46,7 @@ import test_loader as tl  # noqa: E402  (PE writer, assembler, paths)
 
 EXE = 0x00400000
 TEXT = EXE + 0x1000
-DATA_RVA, DATA_SIZE = 0x2000, 0x4000
+DATA_RVA, DATA_SIZE = 0x4000, 0x4000  # .text may use 0x1000-0x3FFF
 failures = 0
 
 
@@ -50,10 +58,11 @@ def check(name, got, want):
 
 
 def image(text, data, import_dir):
-    """PE32 EXE: .text at RVA 0x1000, .data (DATA_SIZE) at 0x2000."""
+    """PE32 EXE: .text at RVA 0x1000, .data (DATA_SIZE) at DATA_RVA."""
     pad = lambda blob, n=0x200: blob + b"\0" * (-len(blob) % n)
     body_data = bytes(data.b).ljust(DATA_SIZE, b"\0")
-    secs = [(b".text", 0x1000, pad(text), 0x1000, tl.EXEC),
+    assert len(text) <= DATA_RVA - 0x1000, "text overlaps .data"
+    secs = [(b".text", 0x1000, pad(text), DATA_RVA - 0x1000, tl.EXEC),
             (b".data", DATA_RVA, pad(body_data), DATA_SIZE, tl.RW)]
     hdr = bytearray(0x200)
     hdr[0:2] = b"MZ"
@@ -84,14 +93,17 @@ IMPORTS = [
                       "InitializeCriticalSection", "TryEnterCriticalSection", "LeaveCriticalSection"]),
     ("user32.dll", ["EnumDisplayDevicesA", "EnumDisplaySettingsA", "ChangeDisplaySettingsExA",
                     "RegisterClassA", "CreateWindowExA", "DefWindowProcA", "ShowWindow", "GetDC",
-                    "wsprintfA", "SystemParametersInfoA"]),
+                    "wsprintfA", "SystemParametersInfoA", "InvalidateRect", "UpdateWindow", "BeginPaint",
+                    "EndPaint", "FillRect", "DrawTextA", "PeekMessageA", "DispatchMessageA",
+                    "PostMessageA", "SetTimer", "SetWindowPos"]),
     ("advapi32.dll", ["RegOpenKeyExA", "RegQueryValueExA"]),
     ("winmm.dll", ["waveOutOpen"]),
     ("gdi32.dll", ["ChoosePixelFormat", "SetPixelFormat"]),
     ("opengl32.dll", ["wglCreateContext", "wglMakeCurrent", "wglSwapLayerBuffers", "glGetError",
                       "glTexGeni", "glBegin", "glEnd"]),
 ]
-WORKER, WNDPROC, TRYCS, MAIN = 0x10, 0x40, 0xC0, 0x100  # fixed text offsets (function entries)
+# fixed text offsets (function entries)
+WORKER, WNDPROC, TRYCS, PAINTPROC, MAIN = 0x10, 0x40, 0xC0, 0x100, 0x200
 REG_KEY, REG_VALUE, REG_DWORD = "Software\\reFrozen Test", "Dword", 0x12345678
 
 
@@ -100,6 +112,7 @@ class Guest:
 
     def __init__(self):
         self.d = tl.Data(EXE)
+        self.d.va0 = EXE + DATA_RVA
         self.iat, self.imp = self.d.imports(IMPORTS)
         self.dll = {s: dll for dll, syms in IMPORTS for s in syms}
         self.names = []
@@ -108,7 +121,18 @@ class Guest:
         self.tmp = self.d.put(b"\0" * 64)
         self.var = {k: self.d.put(b"\0" * 4) for k in
                     ("hk", "type", "size", "lang", "port", "bytes", "key", "ovl", "wkey", "thread",
-                     "hwave", "hwnd", "hdc", "logn", "seg0", "seg1", "seg2", "seg3", "hover", "tryres")}
+                     "hwave", "hwnd", "hdc", "logn", "seg0", "seg1", "seg2", "seg3", "hover", "tryres",
+                     "pcount", "perase", "pl", "pt", "pr", "pb", "phdc", "ecount", "hp", "hq")}
+        self.ps = self.d.put(b"\0" * 64)    # PAINTSTRUCT
+        self.msg = self.d.put(b"\0" * 28)   # MSG
+        self.r1 = self.d.put(struct.pack("<iiii", 10, 5, 30, 20))
+        self.r2 = self.d.put(struct.pack("<iiii", 20, 10, 60, 40))
+        self.r3 = self.d.put(struct.pack("<iiii", 200, 200, 300, 300))
+        self.r4 = self.d.put(struct.pack("<iiii", 1, 2, 3, 4))
+        self.wc2 = self.d.put(b"\0" * 40)
+        self.wc3 = self.d.put(b"\0" * 40)
+        self.wc4 = self.d.put(b"\0" * 40)
+        self.label = 0
         self.cs = self.d.put(b"\0" * 24)  # CRITICAL_SECTION
         self.dd = self.d.put(struct.pack("<I", 424) + b"\0" * 420)        # DISPLAY_DEVICEA
         dm = bytearray(156)  # DEVMODEA: dmSize (offset 36) = 156
@@ -306,6 +330,124 @@ def build_text(g):
   mov byte ptr [edi+1], 0
 """ + g.call("OutputDebugStringA", g.out) + g.call("ExitProcess", 0)
 
+    # mode D: painting. T2 (CS 0) and T3 (CS_HREDRAW | CS_VREDRAW) use
+    # paintproc, which records each BeginPaint's PAINTSTRUCT; T uses the
+    # logging wndproc (DefWindowProc paints); T4 has a background brush.
+    for va, style, name in ((g.wc2, 0, "T2"), (g.wc3, 3, "T3")):
+        g.d.b[va - g.d.va0:va - g.d.va0 + 40] = struct.pack("<IIIIIIIIII", style, TEXT + PAINTPROC, 0, 0, EXE,
+                                                            0, 0, 0, 0, g.str(name))
+    g.d.b[g.wc4 - g.d.va0:g.wc4 - g.d.va0 + 40] = struct.pack("<IIIIIIIIII", 0, TEXT + WNDPROC, 0, 0, EXE, 0, 0,
+                                                              0x00E00004, 0, g.str("T4"))
+    P = lambda k: f"dword ptr [{v[k]:#x}]"
+    NL = "\n"
+
+    def pump():
+        # Retrieves and dispatches until the queue is empty (at most 10).
+        g.label += 1
+        n = g.label
+        return (f"  mov dword ptr [{g.tmp:#x}], 10{NL}lp{n}:{NL}" + g.call("PeekMessageA", g.msg, 0, 0, 0, 1) +
+                f"  test eax, eax{NL}  jz ld{n}{NL}" + g.call("DispatchMessageA", g.msg) +
+                f"  dec dword ptr [{g.tmp:#x}]{NL}  jnz lp{n}{NL}ld{n}:{NL}")
+
+    def peek(remove):
+        return g.call("PeekMessageA", g.msg, 0, 0, 0, remove)
+
+    def paint_is(name, count, erase, l, t, r, b):
+        rc = (f"  cmp dword ptr [{v['pl']:#x}], {l}{NL}  jne 9f{NL}  cmp dword ptr [{v['pt']:#x}], {t}{NL}"
+              f"  jne 9f{NL}  cmp dword ptr [{v['pr']:#x}], {r}{NL}  jne 9f{NL}"
+              f"  cmp dword ptr [{v['pb']:#x}], {b}{NL}9:{NL}")
+        return (g.chk(f"{name}: paint count {count}", g.mem(v["pcount"], count)) +
+                g.chk(f"{name}: fErase {erase}", g.mem(v["perase"], erase)) +
+                g.chk(f"{name}: rcPaint ({l},{t})-({r},{b})", rc))
+
+    first_d = len(g.names)  # mode D's checks are split off g.names below
+    d = g.call("RegisterClassA", g.wc2) + g.call("RegisterClassA", g.wc3) + mkclass
+    # A visible popup: the whole client area is invalid and to be erased.
+    # (MSDN BeginPaint: fErase is TRUE when the background still needs
+    # erasing, i.e. WM_ERASEBKGND returned 0, as DefWindowProc does for a
+    # class without a background brush.)
+    d += g.call("CreateWindowExA", 0, g.str("T2"), g.str("d"), 0x90000000, 0, 0, 100, 50, 0, 0, EXE, 0)
+    d += f"  mov dword ptr [{v['hp']:#x}], eax{NL}" + pump()
+    d += paint_is("D: shown popup", 1, 1, 0, 0, 100, 50)
+    d += g.chk("D: shown popup: WM_ERASEBKGND sent once", g.mem(v["ecount"], 1))
+    d += g.chk("D: shown popup: BeginPaint returned a DC",
+               f"  cmp dword ptr [{v['phdc']:#x}], 0{NL}  setne al{NL}  cmp al, 1{NL}")
+    d += peek(0) + g.chk("D: validated: PeekMessage finds nothing", g.eq(0))
+    # Two rects, no erase: one paint of their bounding box, sent by
+    # UpdateWindow; a second UpdateWindow has nothing to paint.
+    d += g.call("InvalidateRect", P("hp"), g.r1, 0) + g.chk("D: InvalidateRect returns TRUE", g.eq(1))
+    d += g.call("InvalidateRect", P("hp"), g.r2, 0)
+    d += g.call("UpdateWindow", P("hp")) + g.chk("D: UpdateWindow returns TRUE", g.eq(1))
+    d += paint_is("D: two rects", 2, 0, 10, 5, 60, 40)
+    d += g.chk("D: two rects: no WM_ERASEBKGND without erase", g.mem(v["ecount"], 1))
+    d += g.call("UpdateWindow", P("hp")) + g.chk("D: UpdateWindow when valid: TRUE, no paint",
+                                                 g.eq(1) + f"  jne 9f{NL}" + g.mem(v["pcount"], 2) + f"9:{NL}")
+    # A bad window handle: FALSE and ERROR_INVALID_WINDOW_HANDLE (1400).
+    d += g.call("InvalidateRect", 0x12345, 0, 0) + g.chk("D: InvalidateRect(bad hwnd) fails", g.eq(0))
+    d += g.gle("D: InvalidateRect(bad hwnd): 1400", 1400)
+    d += g.call("UpdateWindow", 0x12345) + g.chk("D: UpdateWindow(bad hwnd) fails", g.eq(0))
+    d += g.gle("D: UpdateWindow(bad hwnd): 1400", 1400)
+    d += g.call("BeginPaint", 0x12345, g.ps) + g.chk("D: BeginPaint(bad hwnd) returns NULL", g.eq(0))
+    d += g.gle("D: BeginPaint(bad hwnd): 1400", 1400)
+    # A rect outside the client area invalidates nothing.
+    d += g.call("InvalidateRect", P("hp"), g.r3, 1) + peek(0)
+    d += g.chk("D: rect outside the client: nothing to paint", g.eq(0))
+    # Hidden windows are not painted; showing one invalidates it whole.
+    d += g.call("ShowWindow", P("hp"), 0) + g.call("InvalidateRect", P("hp"), 0, 1) + peek(0)
+    d += g.chk("D: hidden: no WM_PAINT", g.eq(0))
+    # ...and invalidating it had no effect: BeginPaint called on it directly
+    # reports an empty rcPaint (Wine's RedrawWindow does nothing for a window
+    # that is not visible).
+    d += g.call("InvalidateRect", P("hp"), g.r1, 0) + g.call("BeginPaint", P("hp"), g.ps)
+    d += g.chk("D: hidden: InvalidateRect left no update region",
+               f"  mov eax, dword ptr [{g.ps + 8:#x}]{NL}  or eax, dword ptr [{g.ps + 12:#x}]{NL}"
+               f"  or eax, dword ptr [{g.ps + 16:#x}]{NL}  or eax, dword ptr [{g.ps + 20:#x}]{NL}  cmp eax, 0{NL}")
+    d += g.call("EndPaint", P("hp"), g.ps)
+    d += g.call("ShowWindow", P("hp"), 5) + pump()
+    d += paint_is("D: shown again", 3, 1, 0, 0, 100, 50)
+    # Order (Wine's get_message: posted, then paint, then timers); WM_PAINT
+    # stays until validated, PM_REMOVE notwithstanding.
+    # (A 0 ms timer runs at Windows' minimum interval, USER_TIMER_MINIMUM,
+    # 10 ms: it is due after the Sleep.)
+    d += g.call("SetTimer", P("hp"), 1, 0, 0) + g.call("Sleep", 50)
+    d += g.call("PostMessageA", P("hp"), 0x400, 0, 0) + g.call("InvalidateRect", P("hp"), 0, 0)
+    d += peek(0) + g.chk("D: posted message first", g.mem(g.msg + 4, 0x400))
+    d += peek(1)
+    d += peek(0) + g.chk("D: then WM_PAINT", g.mem(g.msg + 4, 0xF))
+    d += peek(1) + peek(0) + g.chk("D: PM_REMOVE leaves WM_PAINT queued", g.mem(g.msg + 4, 0xF))
+    d += g.call("DispatchMessageA", g.msg) + peek(0)
+    d += g.chk("D: validated: WM_TIMER comes next", g.mem(g.msg + 4, 0x113))
+    d += paint_is("D: dispatched WM_PAINT", 4, 0, 0, 0, 100, 50)
+    # DefWindowProc(WM_PAINT) validates.
+    d += g.call("CreateWindowExA", 0, g.str("T"), g.str("q"), 0x90000000, 0, 0, 40, 40, 0, 0, EXE, 0)
+    d += f"  mov dword ptr [{v['hq']:#x}], eax{NL}" + g.call("PeekMessageA", g.msg, P("hq"), 0, 0, 0)
+    d += g.chk("D: DefWindowProc window: WM_PAINT due", g.mem(g.msg + 4, 0xF))
+    d += g.call("DispatchMessageA", g.msg) + g.call("PeekMessageA", g.msg, P("hq"), 0, 0, 0)
+    d += g.chk("D: DefWindowProc's WM_PAINT validated it", g.eq(0))
+    # Growing a CS 0 window exposes the new strip; with CS_HREDRAW the
+    # whole window is invalid (MSDN, Window Class Styles). The timer of
+    # hp (still due) is dispatched by the pumps too.
+    d += g.call("SetWindowPos", P("hp"), 0, 0, 0, 150, 50, 0x16) + pump()
+    d += paint_is("D: grown, class style 0", 5, 1, 100, 0, 150, 50)
+    d += g.call("CreateWindowExA", 0, g.str("T3"), g.str("h"), 0x90000000, 0, 0, 100, 50, 0, 0, EXE, 0)
+    d += f"  mov dword ptr [{v['hp']:#x}], eax{NL}" + pump()
+    d += g.call("SetWindowPos", P("hp"), 0, 0, 0, 120, 50, 0x16) + pump()
+    d += paint_is("D: grown, CS_HREDRAW", 7, 1, 0, 0, 120, 50)
+    g.d_code = d
+    g.d_names, g.names = g.names[first_d:], g.names[:first_d]
+
+    # mode M: a shown (active) popup minimized and restored, by ShowWindow
+    # and by the system commands; the log is printed as in mode W.
+    m = mkclass + win("n", 0x90000000, 10, 20, 100, 50) + f"  mov dword ptr [{v['hover']:#x}], eax{NL}"
+    m += g.call("ShowWindow", P("hover"), 1) + seg("seg0")
+    m += g.call("ShowWindow", P("hover"), 6) + seg("seg1")
+    m += g.call("ShowWindow", P("hover"), 9) + seg("seg2")
+    m += g.call("DefWindowProcA", P("hover"), 0x112, 0xF020, 0) + seg("seg3")
+    m += g.call("DefWindowProcA", P("hover"), 0x112, 0xF120, 0)
+    m += g.call("wsprintfA", g.out, g.str("S%X,%X,%X,%X:"), P("seg0"), P("seg1"), P("seg2"), P("seg3"))
+    # (wsprintfA here takes 6 arguments; mode W's printing then follows.)
+    g.m_code = m + "  add esp, 24\n" + w[w.index("  add esp, 32") + len("  add esp, 32\n"):]
+
     # mode L: a GL context on a popup's DC
     gl = mkclass + win("g", 0x80000000, 0, 0, 64, 64) + f"  mov dword ptr [{v['hwnd']:#x}], eax\n"
     gl += g.call("GetDC", f"dword ptr [{v['hwnd']:#x}]") + f"  mov dword ptr [{v['hdc']:#x}], eax\n"
@@ -345,6 +487,11 @@ def build_text(g):
         g.call("CreateIoCompletionPort", 0x1234, 0, 0, 0),
         g.call("GetProfileStringA", 0, 0, 0, g.tmp, 64),
         mkclass + win("z", 0xA0000000, 0, 0, 64, 64),
+        g.call("FillRect", 0x00D00001, g.r4, 0x00E00004),
+        g.call("DrawTextA", 0x00D00001, g.str("hi"), -1, g.r4, 0x25),
+        g.call("InvalidateRect", 0, 0, 1),
+        g.call("RegisterClassA", g.wc4) + g.call("CreateWindowExA", 0, g.str("T4"), g.str("b"), 0x90000000,
+                                                0, 0, 64, 64, 0, 0, EXE, 0) + pump(),
     ]
     g.stop_modes = "".join(f"  cmp eax, {0x31 + i:#x}\n  je stop_{i}\n" for i in range(len(stops)))
     g.stop_code = "".join(f"stop_{i}:\n{code}" + g.call("ExitProcess", 9) for i, code in enumerate(stops))
@@ -387,6 +534,36 @@ trycs:
   call dword ptr [{g.iat[('kernel32.dll', 'TryEnterCriticalSection')]:#x}]
   mov dword ptr [{v['tryres']:#x}], eax
   ret 4
+.org {PAINTPROC:#x}, 0xCC
+paintproc:
+  cmp dword ptr [esp+8], 0x14
+  jne 1f
+  inc dword ptr [{v['ecount']:#x}]
+1:
+  cmp dword ptr [esp+8], 0xF
+  jne 2f
+  push {g.ps:#x}
+  push dword ptr [esp+8]
+  call dword ptr [{g.iat[('user32.dll', 'BeginPaint')]:#x}]
+  mov dword ptr [{v['phdc']:#x}], eax
+  inc dword ptr [{v['pcount']:#x}]
+  mov eax, dword ptr [{g.ps + 4:#x}]
+  mov dword ptr [{v['perase']:#x}], eax
+  mov eax, dword ptr [{g.ps + 8:#x}]
+  mov dword ptr [{v['pl']:#x}], eax
+  mov eax, dword ptr [{g.ps + 12:#x}]
+  mov dword ptr [{v['pt']:#x}], eax
+  mov eax, dword ptr [{g.ps + 16:#x}]
+  mov dword ptr [{v['pr']:#x}], eax
+  mov eax, dword ptr [{g.ps + 20:#x}]
+  mov dword ptr [{v['pb']:#x}], eax
+  push {g.ps:#x}
+  push dword ptr [esp+8]
+  call dword ptr [{g.iat[('user32.dll', 'EndPaint')]:#x}]
+  xor eax, eax
+  ret 16
+2:
+  jmp dword ptr [{g.iat[('user32.dll', 'DefWindowProcA')]:#x}]
 .org {MAIN:#x}, 0xCC
 main:
 {g.call("GetCommandLineA")}
@@ -403,7 +580,15 @@ main:
   je mode_l
   cmp eax, 0x50
   je mode_p
+  cmp eax, 0x44
+  je mode_d
+  cmp eax, 0x4D
+  je mode_m
 {g.stop_modes}{a}{finish}
+mode_d:
+{g.d_code}{finish}
+mode_m:
+{g.m_code}
 mode_w:
 {w}
 mode_l:
@@ -447,7 +632,7 @@ def build_and_link(tmp):
     os.makedirs(sym, exist_ok=True)
     with open(os.path.join(sym, "functions.tsv"), "w") as f:
         f.write("entry\tmin\tmax\tchunks\tthunk\tnoreturn\tcallconv\tname\n")
-        for o in (0, WORKER, WNDPROC, TRYCS):
+        for o in (0, WORKER, WNDPROC, TRYCS, PAINTPROC):
             e = TEXT + o
             f.write(f"{e:08X}\t{e:08X}\t{e:08X}\t1\t0\t0\t__stdcall\tFUN_{e:08X}\n")
     for n, h in (("exports.tsv", "va\tkind\tmangled\tdemangled\n"), ("jumptables.tsv", "jmp\ttargets\n")):
@@ -550,6 +735,32 @@ def main():
                 check("W: overlapped: its first ShowWindow ends with SIZE(RESTORED), MOVE",
                       [(x[0], x[1]) for x in segs[3]][-2:], [(0x05, 0), (0x03, 0)])
 
+            code, out, fatal = run(tmp, binp, "M")
+            check("M: runs to the end", (code, fatal), (0, None))
+            mm = re.match(r"S([0-9A-F]+),([0-9A-F]+),([0-9A-F]+),([0-9A-F]+):(.*)", out[0] if out else "")
+            check("M: log printed", bool(mm), True)
+            if mm:
+                cuts = [int(x, 16) for x in mm.groups()[:4]]
+                log = [tuple(int(x, 16) for x in e.split("/")) for e in mm.group(5).split()]
+                cuts.append(len(log))
+                keep = {0x05, 0x06, 0x07, 0x08, 0x1C}  # SIZE, ACTIVATE, SETFOCUS, KILLFOCUS, ACTIVATEAPP
+                segs = [[x for x in log[cuts[i]:cuts[i + 1]] if x[0] in keep] for i in range(4)]
+                # Wine msg.c's minimize/restore sequences (verified there on
+                # Windows): minimized, WM_SIZE(SIZE_MINIMIZED) with an empty
+                # client, then deactivation (WM_ACTIVATE(WA_INACTIVE) with the
+                # minimized flag, WM_ACTIVATEAPP(FALSE), WM_KILLFOCUS); restored,
+                # activation and WM_SIZE(SIZE_RESTORED) with the 100x50 client.
+                minimized = [(0x05, 1, 0), (0x06, 0x10000, 0), (0x1C, 0, 0), (0x08, 0, 0)]
+                restored = [(0x1C, 1, 0), (0x06, 1, 0), (0x07, 0, 0), (0x05, 0, 100 | 50 << 16)]
+                check("M: ShowWindow(SW_MINIMIZE)", segs[0], minimized)
+                check("M: ShowWindow(SW_RESTORE)", segs[1], restored)
+                check("M: DefWindowProc(SC_MINIMIZE) minimizes", segs[2], minimized)
+                check("M: DefWindowProc(SC_RESTORE) restores", segs[3], restored)
+
+            code, out, fatal = run(tmp, binp, "D")
+            check("D: runs to the end", (code, fatal), (0, None))
+            flags(g.d_names, out, "D")
+
             code, out, fatal = run(tmp, binp, "L")
             check("L: runs to the end", (code, fatal), (0, None))
             flags(g.gl_names, out, "L")
@@ -563,7 +774,12 @@ def main():
                     "ChangeDisplaySettingsExA: hwnd 00001234 / CDS_VIDEOPARAMETERS not supported",
                     "CreateIoCompletionPort(file 00001234): associating a handle (overlapped I/O) is not implemented",
                     "GetProfileStringA: enumerating sections or keys is not implemented",
-                    "CreateWindowExA: WS_MINIMIZE (created minimized) is not implemented"]):
+                    "CreateWindowExA: WS_MINIMIZE (created minimized) is not implemented",
+                    "FillRect(hdc 00D00001, (1,2)-(3,4), brush 00E00004): GDI drawing is not implemented",
+                    'DrawTextA(hdc 00D00001, "hi", format 00000025): GDI drawing is not implemented',
+                    "InvalidateRect(NULL, ...): invalidating the whole desktop is not implemented",
+                    "DefWindowProc(WM_ERASEBKGND): erasing with class brush 00E00004 is GDI drawing, "
+                    "which is not implemented"]):
                 code, out, fatal = run(tmp, binp, str(i + 1))
                 check(f"stop {i + 1}: an unimplemented form stops the process", code != 0 and code != 9, True)
                 check(f"stop {i + 1}: diagnostic", fatal, want)

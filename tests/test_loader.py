@@ -139,7 +139,7 @@ def image(base, text, data, dll, import_dir, export_dir=(0, 0)):
     return bytes(hdr) + body
 
 
-A, B, C, EXE = 0x10000000, 0x10100000, 0x10200000, 0x00400000
+A, B, C, D, E, EXE = 0x10000000, 0x10100000, 0x10200000, 0x10300000, 0x10400000, 0x00400000
 
 # DllMain(h, reason, reserved) at .text+0 logging `ch` on attach, lower case
 # on detach, then S if lpReserved is non-NULL (a static load) or D if NULL
@@ -162,6 +162,49 @@ dllmain:
   call dword ptr [{log}]
   mov eax, 1
   ret 12
+"""
+
+
+# d.dll / e.dll: in DllMain for `reason` (0 detach, 1 attach) they register an
+# SEH frame and call 7FFF0000, where nothing is mapped. The handler logs V when
+# the search pass brings EXCEPTION_ACCESS_VIOLATION (C0000005) with
+# ExceptionInformation 8 (execute) and 7FFF0000, v for anything else, and U in
+# the unwind pass; it always continues the search (returns 1).
+FAULTING_DLLMAIN = """
+  cmp dword ptr [esp+8], {reason}
+  jne 1f
+  push {handler:#x}
+  push dword ptr fs:[0]
+  mov dword ptr fs:[0], esp
+  mov eax, 0x7FFF0000
+  call eax
+  pop dword ptr fs:[0]
+  add esp, 4
+1:
+  mov eax, 1
+  ret 12
+.org 0x40, 0xCC
+  mov eax, dword ptr [esp+4]
+  test dword ptr [eax+4], 6
+  jnz 3f
+  mov ecx, 0x76
+  cmp dword ptr [eax], 0xC0000005
+  jne 2f
+  cmp dword ptr [eax+0x14], 8
+  jne 2f
+  cmp dword ptr [eax+0x18], 0x7FFF0000
+  jne 2f
+  mov ecx, 0x56
+2:
+  push ecx
+  call dword ptr [{log}]
+  mov eax, 1
+  ret
+3:
+  push 0x55
+  call dword ptr [{log}]
+  mov eax, 1
+  ret
 """
 
 
@@ -229,6 +272,12 @@ log:
     iat, imp = d.imports([("a.dll", ["Log"])])
     emit("c.dll", C, DLLMAIN.format(ch=ord("C"), log=hex(iat[("a.dll", "Log")])), d, imp)
 
+    for name, base, reason in (("d.dll", D, 0), ("e.dll", E, 1)):
+        d = Data(base)
+        iat, imp = d.imports([("a.dll", ["Log"])])
+        src = FAULTING_DLLMAIN.format(reason=reason, handler=base + 0x1040, log=hex(iat[("a.dll", "Log")]))
+        emit(name, base, src, d, imp, funcs=(0, 0x40))
+
     d = Data(EXE)
     k32 = ["LoadLibraryA", "FreeLibrary", "GetModuleHandleA", "OutputDebugStringA", "ExitProcess",
            "GetCommandLineA", "Beep", "GetLastError", "InterlockedCompareExchange", "GetWindowsDirectoryA",
@@ -239,7 +288,8 @@ log:
     # b.dll first: a.dll must still attach first, being b.dll's dependency.
     iat, imp = d.imports([("b.dll", ["BFn"]), ("a.dll", [2, "Log"]), ("kernel32.dll", k32),
                           ("imm32.dll", imm)])
-    s = {k: d.put(k.encode() + b"\0", 1) for k in ("a.dll", "b.dll", "c.dll", "C:\\T", "C:\\T\\a.dll")}
+    s = {k: d.put(k.encode() + b"\0", 1) for k in ("a.dll", "b.dll", "c.dll", "d.dll", "e.dll", "C:\\T",
+                                                    "C:\\T\\a.dll")}
     var, wbuf, espv = d.put(b"\0" * 4), d.put(b"\0" * 64), d.put(b"\0" * 4)
     for k in ("\\", "/", "c:\\", "", "Q:\\"):
         s[k] = d.put(k.encode() + b"\0", 1)
@@ -287,7 +337,34 @@ log:
   je hle
   cmp eax, 0x47
   je m3
+  cmp eax, 0x58
+  je detachfault
+  cmp eax, 0x59
+  je attachfault
   push 0
+  call {K("ExitProcess")}
+detachfault:
+  push {s["d.dll"]:#x}
+  call {K("LoadLibraryA")}
+  push eax
+  call {K("FreeLibrary")}
+  add eax, 0x30
+  push eax
+  call {I("a.dll", "Log")}
+  push 0x5A
+  call {I("a.dll", "Log")}
+  push 0x0A
+  call {I("a.dll", "Log")}
+  call {I("a.dll", 2)}
+  add eax, 11
+  push eax
+  call {K("OutputDebugStringA")}
+  push 0
+  call {K("ExitProcess")}
+attachfault:
+  push {s["e.dll"]:#x}
+  call {K("LoadLibraryA")}
+  push 4
   call {K("ExitProcess")}
 stub:
   push 100
@@ -509,7 +586,7 @@ int main(int argc, char** argv) {
 def lift_and_link(tmp, entries):
     inst, gen = os.path.join(tmp, "install"), os.path.join(tmp, "gen")
     args = []
-    for name in ("t.exe", "a.dll", "b.dll", "c.dll"):
+    for name in ("t.exe", "a.dll", "b.dll", "c.dll", "d.dll", "e.dll"):
         sym = os.path.join(tmp, "sym", name)
         os.makedirs(sym, exist_ok=True)
         with open(os.path.join(sym, "functions.tsv"), "w") as f:
@@ -524,7 +601,7 @@ def lift_and_link(tmp, entries):
         args += ["--exe" if name == "t.exe" else "--module", os.path.join(inst, name), "--symbols", sym,
                  "--manifest", man]
     r = subprocess.run([LIFT, *args, "--out", gen], capture_output=True, text=True)
-    check("lift of the four modules succeeds", r.returncode, 0)
+    check("lift of the six modules succeeds", r.returncode, 0)
     if r.returncode:
         print(r.stdout[-2000:], r.stderr[-2000:])
         return None
@@ -581,10 +658,10 @@ def main():
 
             code, log, fatal, err = run(tmp, binp, "J")
             check("branch into a function stops the process", code != 0, True)
-            want = re.compile(r"indirect branch from 004010[0-9A-F]{2} \(t\.exe\+0x10[0-9A-F]{2}\) to "
-                              r"004010[0-9A-F]{2} \(t\.exe\+0x10[0-9A-F]{2}\): not a lifted function entry; "
+            want = re.compile(r"indirect branch from 0040(1[0-9A-F]{3}) \(t\.exe\+0x\1\) to "
+                              r"0040(1[0-9A-F]{3}) \(t\.exe\+0x\2\): not a lifted function entry; "
                               r"it lies after f_00401000 \(t\.exe\+0x1000\)\. If it is one, add \"entry "
-                              r"004010[0-9A-F]{2}\" to the module's manifest")
+                              r"0040\2\" to the module's manifest")
             check("branch into a function diagnostic", bool(fatal and want.match(fatal)), True)
             if not (fatal and want.match(fatal)):
                 print("   ", fatal)
@@ -592,8 +669,9 @@ def main():
             code, log, fatal, err = run(tmp, binp, "N")
             check("branch to unmapped memory stops the process", code != 0, True)
             check("branch to unmapped memory diagnostic",
-                  bool(fatal and re.match(r"indirect branch from 004010[0-9A-F]{2} \(t\.exe\+0x10[0-9A-F]{2}\) "
-                                          r"to 7FFF0000: not in any lifted module's code", fatal)), True)
+                  bool(fatal and re.match(r"indirect branch from 0040(1[0-9A-F]{3}) \(t\.exe\+0x\1\) "
+                                          r"to 7FFF0000: unhandled access violation \(execute; nothing "
+                                          r"is mapped there\)", fatal)), True)
 
             code, log, fatal, err = run(tmp, binp, "H")
             # InterlockedCompareExchange swaps on a match (returns 5, now 7) and
@@ -625,6 +703,26 @@ def main():
             check("M3 GetDiskFreeSpaceA results", [g[:12] for g in got], ["1" * 12])
             check("M3 imm32 results", [g[12:23] for g in got], ["1" * 11])
             check("M3 stack balanced", [g[23:] for g in got], ["1"])
+
+            # A DLL whose DllMain(DETACH) calls where nothing is mapped: its own
+            # SEH handler gets the access violation (execute, the target) and then
+            # the unwind, the loader's frame catches it (Wine's MODULE_InitDLL),
+            # FreeLibrary returns TRUE and the process carries on. The log after
+            # the first line (11 bytes) is what the handler and the EXE added.
+            code, log, fatal, err = run(tmp, binp, "X", ("a.dll", "b.dll", "c.dll", "d.dll", "e.dll"))
+            check("exception in DllMain(DETACH): handler, unwind, FreeLibrary TRUE",
+                  re.findall(r"^\[guest\] (\S*)$", err, re.M)[-1:], ["VU1Z"])
+            check("exception in DllMain(DETACH): clean exit", (code, fatal), (0, None))
+            check("exception in DllMain(DETACH): reported",
+                  "d.dll: exception C0000005 in DllMain(0), caught by the loader" in err, True)
+            # In DllMain(ATTACH) the load fails with the exception's status, which
+            # is not modelled: a strict stop (after the handler saw it).
+            code, log, fatal, err = run(tmp, binp, "Y", ("a.dll", "b.dll", "c.dll", "d.dll", "e.dll"))
+            # (exit code 4 is the EXE's own exit after LoadLibrary returned)
+            check("exception in DllMain(ATTACH) stops the process", code not in (0, 4), True)
+            check("exception in DllMain(ATTACH) diagnostic", fatal,
+                  "e.dll: exception C0000005 in DllMain(1): a failed load from an exception is not "
+                  "implemented")
 
             # An importer listed before what it imports cannot bind.
             code, log, fatal, err = run(tmp, binp, "-", ("b.dll", "a.dll", "c.dll"))
