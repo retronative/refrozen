@@ -16,14 +16,13 @@ Native recompilation of Warcraft III: The Frozen Throne (1.26a) for Apple Silico
 
 ## Status
 
-**M0 in progress:** inputs verified, research done, approach proposed. Nothing is built yet. Milestones and their gates are in
+**M0 complete (pending sign-off):** native install + 1.26a patch reproduce the official result, approach chosen (x86recomp), DotA compatibility tested. No game code is recompiled into a running port yet. Milestones and their gates are in
 [reference/ROADMAP.md](reference/ROADMAP.md); open questions are in
 [reference/FEASIBILITY.md](reference/FEASIBILITY.md).
 
 ## Approach (proposed)
 
-The same method as [ReCarbon](../recarbon): statically recompile the game's executable code
-for arm64, and run it on a native runtime that reimplements the platform it was written for.
-Here the guest is **x86 Win32** (`war3.exe` + `Game.dll` 1.26a and their DLLs), not an Xbox 360,
-so the runtime replaces Win32, Direct3D 8/9, DirectSound and Storm instead of an Xbox kernel.
-M0 decides whether this is feasible.
+Statically recompile the game's executable codefor arm64, and run it on a native runtime that 
+reimplements the platform it was written for. Here the guest is **x86 Win32** (`war3.exe` + 
+`Game.dll` 1.26a and their DLLs), not an Xbox 360, so the runtime replaces Win32, Direct3D 8/9, 
+DirectSound and Storm instead of an Xbox kernel. M0 decides whether this is feasible.
