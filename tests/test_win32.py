@@ -18,6 +18,10 @@ Modes (the command line's last character):
   M  minimize/restore (M4): the messages ShowWindow(SW_MINIMIZE /
      SW_RESTORE) and DefWindowProc(WM_SYSCOMMAND, SC_MINIMIZE / SC_RESTORE)
      send to an active window.
+  O  overlapped file I/O through a completion port (M5): association,
+     pending writes and reads at the OVERLAPPED's offset with their packets,
+     append, end of file, hEvent's no-packet bit, a synchronous handle given
+     an OVERLAPPED. One 1/0 flag per check.
   D  painting (M4): update regions, WM_PAINT synthesis and order,
      UpdateWindow, BeginPaint's PAINTSTRUCT and WM_ERASEBKGND, invalidation
      by show and resize, DefWindowProc's WM_PAINT. One 1/0 flag per check.
@@ -90,7 +94,12 @@ IMPORTS = [
                       "CreateEventA", "OpenEventA", "CreateMutexA", "OpenMutexA",
                       "CreateIoCompletionPort", "PostQueuedCompletionStatus",
                       "GetQueuedCompletionStatus", "CreateThread", "Sleep", "WaitForSingleObject",
-                      "InitializeCriticalSection", "TryEnterCriticalSection", "LeaveCriticalSection"]),
+                      "InitializeCriticalSection", "TryEnterCriticalSection", "LeaveCriticalSection",
+                      "CreateFileA", "ReadFile", "WriteFile", "CloseHandle", "SetFilePointer",
+                      "SetLastError"]),
+    # Winsock 1.1 by ordinal (Wine's wsock32.spec): htonl, htons, inet_addr,
+    # inet_ntoa, ntohl, ntohs, WSAGetLastError.
+    ("wsock32.dll", [8, 9, 10, 11, 14, 15, 111]),
     ("user32.dll", ["EnumDisplayDevicesA", "EnumDisplaySettingsA", "ChangeDisplaySettingsExA",
                     "RegisterClassA", "CreateWindowExA", "DefWindowProcA", "ShowWindow", "GetDC",
                     "wsprintfA", "SystemParametersInfoA", "InvalidateRect", "UpdateWindow", "BeginPaint",
@@ -132,6 +141,10 @@ class Guest:
         self.wc2 = self.d.put(b"\0" * 40)
         self.wc3 = self.d.put(b"\0" * 40)
         self.wc4 = self.d.put(b"\0" * 40)
+        self.ovl = self.d.put(b"\0" * 20)    # OVERLAPPED
+        self.iobuf = self.d.put(b"\0" * 32)
+        self.oport, self.ofile, self.obytes, self.okey, self.opovl, self.oev = (self.d.put(b"\0" * 4)
+                                                                             for _ in range(6))
         self.label = 0
         self.cs = self.d.put(b"\0" * 24)  # CRITICAL_SECTION
         self.dd = self.d.put(struct.pack("<I", 424) + b"\0" * 420)        # DISPLAY_DEVICEA
@@ -181,6 +194,18 @@ class Guest:
 def build_text(g):
     v = g.var
     a = ""  # mode A
+    # -- wsock32's pure functions (Winsock 1.1, BSD semantics for inet_addr).
+    a += g.call(9, 0x1234) + g.chk("wsock: htons(1234h) = 3412h", g.eq(0x3412))
+    a += g.call(15, 0xABCD1234) + g.chk("wsock: ntohs keeps the low word only", g.eq(0x3412))
+    a += g.call(8, 0x12345678) + g.chk("wsock: htonl(12345678h) = 78563412h", g.eq(0x78563412))
+    a += g.call(14, 0x78563412) + g.chk("wsock: ntohl inverts it", g.eq(0x12345678))
+    a += g.call(10, g.str("127.0.0.1")) + g.chk("wsock: inet_addr(127.0.0.1) in network order", g.eq(0x0100007F))
+    a += g.call(10, g.str("1.2.3")) + g.chk("wsock: inet_addr(a.b.c): c fills the last 16 bits", g.eq(0x03000201))
+    a += g.call(10, g.str("bad")) + g.chk("wsock: inet_addr of a non-address is INADDR_NONE", g.eq(0xFFFFFFFF))
+    a += g.call(11, 0x0100007F) + "  mov esi, eax\n"
+    a += g.chk("wsock: inet_ntoa(127.0.0.1)", "  cmp dword ptr [esi], 0x2E373231\n  jne 9f\n"
+               "  cmp dword ptr [esi+4], 0x2E302E30\n  jne 9f\n  cmp word ptr [esi+8], 0x31\n9:\n")
+    a += g.call("SetLastError", 10054) + g.call(111) + g.chk("wsock: WSAGetLastError is the last error", g.eq(10054))
     # -- REG_DWORD seeding (GameConfig::registry_dwords): RegQueryValueExA
     # reports type REG_DWORD (4), 4 bytes, the value (MSDN).
     a += f"  mov dword ptr [{v['size']:#x}], 64\n"
@@ -436,6 +461,58 @@ def build_text(g):
     g.d_code = d
     g.d_names, g.names = g.names[first_d:], g.names[:first_d]
 
+    # mode O: overlapped I/O (MSDN ReadFile / WriteFile / CreateIoCompletionPort;
+    # "Synchronous and Asynchronous I/O"). File C:\\o.bin in the per-user tree.
+    first_o = len(g.names)
+    OV = lambda off, hi=0, ev=0: (f"  mov dword ptr [{g.ovl:#x}], 0{NL}  mov dword ptr [{g.ovl + 4:#x}], 0{NL}"
+                                  f"  mov dword ptr [{g.ovl + 8:#x}], {off:#x}{NL}"
+                                  f"  mov dword ptr [{g.ovl + 12:#x}], {hi:#x}{NL}"
+                                  f"  mov dword ptr [{g.ovl + 16:#x}], {ev}{NL}")
+    M = lambda va: f"dword ptr [{va:#x}]"
+    gq = lambda t: g.call("GetQueuedCompletionStatus", M(g.oport), g.obytes, g.okey, g.opovl, t)
+    o = g.call("CreateFileA", g.str("C:\\o.bin"), 0xC0000000, 0, 0, 2, 0x40000000, 0)
+    o += f"  mov dword ptr [{g.ofile:#x}], eax{NL}" + g.chk("O: CreateFileA(FILE_FLAG_OVERLAPPED)", "  cmp eax, -1\n  setne al\n  cmp al, 1\n")
+    o += g.call("CreateIoCompletionPort", M(g.ofile), 0, 0x55, 0) + f"  mov dword ptr [{g.oport:#x}], eax{NL}"
+    o += g.chk("O: file associated with a new port", g.nonzero())
+    o += g.call("CreateIoCompletionPort", M(g.ofile), M(g.oport), 0x66, 0)
+    o += g.chk("O: a second association fails", g.eq(0)) + g.gle("O: ... with ERROR_INVALID_PARAMETER", 87)
+    # Pending write of 8 bytes at offset 4; its packet carries (8, key, &ovl).
+    o += OV(4) + g.call("WriteFile", M(g.ofile), g.str("ABCDEFGH"), 8, g.obytes, g.ovl)
+    o += g.chk("O: overlapped WriteFile returns FALSE", g.eq(0)) + g.gle("O: ... ERROR_IO_PENDING", 997)
+    o += gq(1000) + g.chk("O: GetQueuedCompletionStatus: TRUE", g.eq(1))
+    o += g.chk("O: packet bytes 8", g.mem(g.obytes, 8)) + g.chk("O: packet key 55h", g.mem(g.okey, 0x55))
+    o += g.chk("O: packet OVERLAPPED", g.mem(g.opovl, g.ovl))
+    o += g.chk("O: Internal STATUS_SUCCESS", g.mem(g.ovl, 0)) + g.chk("O: InternalHigh 8", g.mem(g.ovl + 4, 8))
+    # Read 12 from offset 0: the 4 bytes never written read as zeros.
+    o += OV(0) + g.call("ReadFile", M(g.ofile), g.iobuf, 12, g.obytes, g.ovl)
+    o += g.chk("O: overlapped ReadFile pending", g.eq(0)) + gq(1000)
+    o += g.chk("O: read packet: 12 bytes", g.mem(g.obytes, 12))
+    o += g.chk("O: read data: 00 00 00 00 'ABCD'", g.mem(g.iobuf, 0) + f"  jne 9f{NL}" + g.mem(g.iobuf + 4, 0x44434241) + f"9:{NL}")
+    o += g.chk("O: read data: 'EFGH'", g.mem(g.iobuf + 8, 0x48474645))
+    # Offset FFFFFFFFh:FFFFFFFFh appends (12 -> 14 bytes).
+    o += OV(0xFFFFFFFF, 0xFFFFFFFF) + g.call("WriteFile", M(g.ofile), g.str("XY"), 2, g.obytes, g.ovl) + gq(1000)
+    o += OV(12) + g.call("ReadFile", M(g.ofile), g.iobuf, 8, g.obytes, g.ovl) + gq(1000)
+    o += g.chk("O: append wrote at the end", g.mem(g.obytes, 2) + f"  jne 9f{NL}" + g.mem(g.iobuf, 0x5958, "word") + f"9:{NL}")
+    # A read at the end of the file: FALSE, ERROR_HANDLE_EOF, no packet.
+    o += OV(100) + g.call("ReadFile", M(g.ofile), g.iobuf, 4, g.obytes, g.ovl)
+    o += g.chk("O: read past the end fails", g.eq(0)) + g.gle("O: ... ERROR_HANDLE_EOF", 38)
+    o += gq(0) + g.chk("O: ... and queues no packet", g.eq(0)) + g.gle("O: ... (WAIT_TIMEOUT)", 258)
+    # hEvent with its low bit set: the event is set, no packet is queued.
+    o += g.call("CreateEventA", 0, 1, 0, 0) + f"  mov dword ptr [{g.oev:#x}], eax{NL}  or eax, 1{NL}"
+    o += f"  push eax{NL}  pop esi{NL}" + OV(0).replace(f"[{g.ovl + 16:#x}], 0", f"[{g.ovl + 16:#x}], esi")
+    o += g.call("WriteFile", M(g.ofile), g.str("Z"), 1, g.obytes, g.ovl)
+    o += g.call("WaitForSingleObject", M(g.oev), 0) + g.chk("O: hEvent set", g.eq(0))
+    o += gq(0) + g.chk("O: low bit: no packet", g.eq(0))
+    o += g.call("CloseHandle", M(g.ofile))
+    # A synchronous handle with an OVERLAPPED: at the offset, TRUE, and its
+    # file pointer moves past the transfer.
+    o += g.call("CreateFileA", g.str("C:\\s.bin"), 0xC0000000, 0, 0, 2, 0, 0) + f"  mov dword ptr [{g.ofile:#x}], eax{NL}"
+    o += OV(2) + g.call("WriteFile", M(g.ofile), g.str("abc"), 3, g.obytes, g.ovl)
+    o += g.chk("O: synchronous handle: TRUE", g.eq(1)) + g.chk("O: ... 3 bytes written", g.mem(g.obytes, 3))
+    o += g.call("SetFilePointer", M(g.ofile), 0, 0, 1) + g.chk("O: ... file pointer at 5", g.eq(5))
+    g.o_code = o
+    g.o_names, g.names = g.names[first_o:], g.names[:first_o]
+
     # mode M: a shown (active) popup minimized and restored, by ShowWindow
     # and by the system commands; the log is printed as in mode W.
     m = mkclass + win("n", 0x90000000, 10, 20, 100, 50) + f"  mov dword ptr [{v['hover']:#x}], eax{NL}"
@@ -484,7 +561,7 @@ def build_text(g):
     stops = [
         g.call("EnumDisplayDevicesA", g.str("\\\\.\\DISPLAY1"), 0, g.dd, 0),
         g.call("ChangeDisplaySettingsExA", 0, 0, 0x1234, 0, 0),
-        g.call("CreateIoCompletionPort", 0x1234, 0, 0, 0),
+        g.call("CreateEventA", 0, 1, 0, 0) + g.call("CreateIoCompletionPort", "eax", 0, 0, 0),
         g.call("GetProfileStringA", 0, 0, 0, g.tmp, 64),
         mkclass + win("z", 0xA0000000, 0, 0, 64, 64),
         g.call("FillRect", 0x00D00001, g.r4, 0x00E00004),
@@ -584,11 +661,15 @@ main:
   je mode_d
   cmp eax, 0x4D
   je mode_m
+  cmp eax, 0x4F
+  je mode_o
 {g.stop_modes}{a}{finish}
 mode_d:
 {g.d_code}{finish}
 mode_m:
 {g.m_code}
+mode_o:
+{g.o_code}{finish}
 mode_w:
 {w}
 mode_l:
@@ -735,6 +816,10 @@ def main():
                 check("W: overlapped: its first ShowWindow ends with SIZE(RESTORED), MOVE",
                       [(x[0], x[1]) for x in segs[3]][-2:], [(0x05, 0), (0x03, 0)])
 
+            code, out, fatal = run(tmp, binp, "O")
+            check("O: runs to the end", (code, fatal), (0, None))
+            flags(g.o_names, out, "O")
+
             code, out, fatal = run(tmp, binp, "M")
             check("M: runs to the end", (code, fatal), (0, None))
             mm = re.match(r"S([0-9A-F]+),([0-9A-F]+),([0-9A-F]+),([0-9A-F]+):(.*)", out[0] if out else "")
@@ -772,7 +857,7 @@ def main():
             for i, want in enumerate([
                     'EnumDisplayDevicesA("\\\\.\\DISPLAY1"): monitor enumeration is not implemented',
                     "ChangeDisplaySettingsExA: hwnd 00001234 / CDS_VIDEOPARAMETERS not supported",
-                    "CreateIoCompletionPort(file 00001234): associating a handle (overlapped I/O) is not implemented",
+                    "CreateIoCompletionPort: associating a handle that is not a file is not implemented",
                     "GetProfileStringA: enumerating sections or keys is not implemented",
                     "CreateWindowExA: WS_MINIMIZE (created minimized) is not implemented",
                     "FillRect(hdc 00D00001, (1,2)-(3,4), brush 00E00004): GDI drawing is not implemented",

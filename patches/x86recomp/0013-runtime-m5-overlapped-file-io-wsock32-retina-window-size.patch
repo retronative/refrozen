@@ -1,0 +1,466 @@
+diff --git a/src/runtime/hle/kernel32_file.cpp b/src/runtime/hle/kernel32_file.cpp
+index da013a3..ed0fdfc 100644
+--- a/src/runtime/hle/kernel32_file.cpp
++++ b/src/runtime/hle/kernel32_file.cpp
+@@ -50,6 +50,9 @@ struct FileObject : KObject {
+     if (fd >= 0) close(fd);
+   }
+   int fd = -1;
++  bool overlapped = false;            // FILE_FLAG_OVERLAPPED
++  std::shared_ptr<KObject> port;      // the completion port it is associated with
++  uint32_t key = 0;                   // that association's completion key
+ };
+ 
+ struct FindObject : KObject {
+@@ -221,6 +224,24 @@ uint32_t NewHandle(std::shared_ptr<KObject> obj) {
+   return h;
+ }
+ 
++bool AssociateFileWithPort(uint32_t file, std::shared_ptr<KObject> port, uint32_t key, uint32_t* error) {
++  auto o = GetHandle(file);
++  if (!o) {
++    *error = win32::kErrorInvalidHandle;
++    return false;
++  }
++  auto f = std::dynamic_pointer_cast<FileObject>(o);
++  if (!f)
++    FatalF("CreateIoCompletionPort: associating a handle that is not a file is not implemented");
++  if (f->port) {  // one association per handle
++    *error = win32::kErrorInvalidParameter;
++    return false;
++  }
++  f->port = std::move(port);
++  f->key = key;
++  return true;
++}
++
+ std::shared_ptr<KObject> GetHandle(uint32_t h) {
+   std::lock_guard<std::mutex> l(g_handles_mu);
+   auto it = g_handles.find(h);
+@@ -348,6 +369,7 @@ HLE("kernel32.dll", CreateFileA, 7) {
+   RECOMP_TRACE("  CreateFileA(%s) -> %s\n", gpath.c_str(), path.c_str());
+   auto f = std::make_shared<FileObject>();
+   f->fd = fd;
++  f->overlapped = Arg(c, 5) & 0x40000000;  // FILE_FLAG_OVERLAPPED
+   SetLastError(exists && (disp == 2 || disp == 4) ? kErrorAlreadyExists : 0);
+   return NewHandle(f);
+ }
+@@ -357,6 +379,50 @@ int FdOf(uint32_t h) {
+   return o ? FileFd(o.get()) : -1;
+ }
+ 
++// ReadFile / WriteFile with an OVERLAPPED (MSDN, "Synchronous and
++// Asynchronous I/O"). The transfer starts at the structure's offset
++// (Offset/OffsetHigh both FFFFFFFFh: the end of the file, for writes) and is
++// carried out now; Internal gets the status and InternalHigh the bytes
++// moved, and hEvent (if any) is set. On a handle opened with
++// FILE_FLAG_OVERLAPPED and associated with a completion port, the call
++// returns FALSE with ERROR_IO_PENDING and the completion arrives as a
++// packet (key, bytes, the OVERLAPPED), unless hEvent's low bit asks for no
++// packet; otherwise it completes synchronously (TRUE, and a synchronous
++// handle's file pointer moves past the transfer). A read at or past the
++// end of the file fails with ERROR_HANDLE_EOF and queues nothing.
++uint32_t OverlappedIo(uint32_t h, bool write, uint32_t buf, uint32_t n, uint32_t out, uint32_t ovl) {
++  auto f = std::dynamic_pointer_cast<FileObject>(GetHandle(h));
++  if (!f) FatalF("%s with OVERLAPPED on a handle that is not a file is not implemented",
++                 write ? "WriteFile" : "ReadFile");
++  int64_t off = int64_t(uint64_t(Rd32(ovl + 12)) << 32 | Rd32(ovl + 8));
++  if (write && Rd32(ovl + 8) == 0xFFFFFFFF && Rd32(ovl + 12) == 0xFFFFFFFF)
++    off = lseek(f->fd, 0, SEEK_END);
++  lazy::Touch(buf, n);
++  ssize_t r = !n ? 0 : write ? pwrite(f->fd, GPtr(buf), n, off) : pread(f->fd, GPtr(buf), n, off);
++  if (r < 0) {
++    SetLastError(ErrnoToWin(errno));
++    return 0;
++  }
++  if (!write && n && r == 0) {
++    Wr32(ovl + 0, 0xC0000011);  // STATUS_END_OF_FILE
++    Wr32(ovl + 4, 0);
++    SetLastError(kErrorHandleEof);
++    return 0;
++  }
++  Wr32(ovl + 0, 0);  // STATUS_SUCCESS
++  Wr32(ovl + 4, uint32_t(r));
++  uint32_t event = Rd32(ovl + 16);
++  if (event & ~1u) SignalEventHandle(event & ~1u, false);
++  if (f->overlapped && f->port && !(event & 1)) {
++    PostCompletion(f->port.get(), uint32_t(r), f->key, ovl);
++    SetLastError(kErrorIoPending);
++    return 0;
++  }
++  if (!f->overlapped) lseek(f->fd, off + r, SEEK_SET);
++  if (out) Wr32(out, uint32_t(r));
++  return 1;
++}
++
+ HLE("kernel32.dll", ReadFile, 5) {
+   int fd = FdOf(Arg(c, 0));
+   uint32_t buf = Arg(c, 1), n = Arg(c, 2), out = Arg(c, 3);
+@@ -364,7 +430,7 @@ HLE("kernel32.dll", ReadFile, 5) {
+     SetLastError(kErrorInvalidHandle);
+     return 0;
+   }
+-  if (Arg(c, 4)) FatalF("ReadFile with OVERLAPPED is not supported");
++  if (Arg(c, 4)) return OverlappedIo(Arg(c, 0), false, buf, n, out, Arg(c, 4));
+   lazy::Touch(buf, n);  // the kernel does not fault on lazy pages
+   ssize_t r = n ? read(fd, GPtr(buf), n) : 0;
+   if (r < 0) {
+@@ -382,6 +448,7 @@ HLE("kernel32.dll", WriteFile, 5) {
+     SetLastError(kErrorInvalidHandle);
+     return 0;
+   }
++  if (Arg(c, 4)) return OverlappedIo(Arg(c, 0), true, buf, n, out, Arg(c, 4));
+   lazy::Touch(buf, n);
+   ssize_t r = n ? write(fd, GPtr(buf), n) : 0;
+   if (r < 0) {
+diff --git a/src/runtime/hle/kernel32_state.h b/src/runtime/hle/kernel32_state.h
+index 91476fb..4b7e3a8 100644
+--- a/src/runtime/hle/kernel32_state.h
++++ b/src/runtime/hle/kernel32_state.h
+@@ -44,6 +44,12 @@ struct KObject {
+ };
+ 
+ uint32_t NewHandle(std::shared_ptr<KObject> obj);
++// Overlapped I/O through completion ports (kernel32_file.cpp, kernel32_sync.cpp).
++// Associates a file handle with `port` and `key`; false with a Win32 error
++// for a handle that is not open or is already associated.
++bool AssociateFileWithPort(uint32_t file, std::shared_ptr<KObject> port, uint32_t key, uint32_t* error);
++// Queues a completion packet on `port` (a completion port) and wakes waiters.
++void PostCompletion(KObject* port, uint32_t bytes, uint32_t key, uint32_t overlapped);
+ int FileFd(KObject* o);  // host fd of a File/StdIo object, or -1
+ std::shared_ptr<KObject> GetHandle(uint32_t h);
+ bool CloseHandleValue(uint32_t h);
+diff --git a/src/runtime/hle/kernel32_sync.cpp b/src/runtime/hle/kernel32_sync.cpp
+index 2427903..9779129 100644
+--- a/src/runtime/hle/kernel32_sync.cpp
++++ b/src/runtime/hle/kernel32_sync.cpp
+@@ -158,8 +158,24 @@ uint32_t WaitObjects(const std::vector<std::shared_ptr<Waitable>>& objs,
+ 
+ void SignalChanged() { g_wait_cv.notify_all(); }
+ 
++struct CompletionPort : KObject {
++  CompletionPort() : KObject(Type::CompletionPort) {}
++  struct Packet {
++    uint32_t bytes, key, overlapped;
++  };
++  std::deque<Packet> queue;  // under g_wait_mu
++};
++
+ }  // namespace
+ 
++void PostCompletion(KObject* port, uint32_t bytes, uint32_t key, uint32_t overlapped) {
++  {
++    std::lock_guard<std::mutex> l(g_wait_mu);
++    static_cast<CompletionPort*>(port)->queue.push_back({bytes, key, overlapped});
++  }
++  SignalChanged();
++}
++
+ bool SignalEventHandle(uint32_t h, bool pulse) {
+   auto e = std::dynamic_pointer_cast<EventObject>(GetHandle(h));
+   if (!e) return false;
+@@ -326,27 +342,38 @@ HLE("kernel32.dll", WaitForMultipleObjects, 4) {
+ // nor the concurrency limit (a scheduling hint: every waiting thread may
+ // take a packet).
+ 
+-struct CompletionPort : KObject {
+-  CompletionPort() : KObject(Type::CompletionPort) {}
+-  struct Packet {
+-    uint32_t bytes, key, overlapped;
+-  };
+-  std::deque<Packet> queue;  // under g_wait_mu
+-};
+ 
+ constexpr uint32_t kInvalidHandleValue = 0xFFFFFFFF;
+ 
+ // (file, existing port, key, concurrent threads).
++// (file or INVALID_HANDLE_VALUE, existing port or NULL, key, concurrency).
++// With a file: associates it with the existing port, or with a new one,
++// and returns the port (overlapped I/O, kernel32_file.cpp).
+ HLE("kernel32.dll", CreateIoCompletionPort, 4) {
+   uint32_t file = Arg(c, 0), existing = Arg(c, 1);
+-  if (file != kInvalidHandleValue)
+-    FatalF("CreateIoCompletionPort(file %08X): associating a handle (overlapped I/O) is not "
+-           "implemented", file);
++  if (file == kInvalidHandleValue) {
++    if (existing) {
++      SetLastError(kErrorInvalidParameter);
++      return 0;
++    }
++    return NewHandle(std::make_shared<CompletionPort>());
++  }
++  std::shared_ptr<KObject> port;
+   if (existing) {
+-    SetLastError(kErrorInvalidParameter);
++    port = std::dynamic_pointer_cast<CompletionPort>(GetHandle(existing));
++    if (!port) {
++      SetLastError(kErrorInvalidParameter);
++      return 0;
++    }
++  } else {
++    port = std::make_shared<CompletionPort>();
++  }
++  uint32_t error = 0;
++  if (!AssociateFileWithPort(file, port, Arg(c, 2), &error)) {
++    SetLastError(error);
+     return 0;
+   }
+-  return NewHandle(std::make_shared<CompletionPort>());
++  return existing ? existing : NewHandle(port);
+ }
+ 
+ // (port, bytes, key, overlapped).
+@@ -357,11 +384,7 @@ HLE("kernel32.dll", PostQueuedCompletionStatus, 4) {
+     SetLastError(kErrorInvalidHandle);
+     return 0;
+   }
+-  {
+-    std::lock_guard<std::mutex> l(g_wait_mu);
+-    port->queue.push_back({Arg(c, 1), Arg(c, 2), Arg(c, 3)});
+-  }
+-  SignalChanged();
++  PostCompletion(port.get(), Arg(c, 1), Arg(c, 2), Arg(c, 3));
+   return 1;
+ }
+ 
+diff --git a/src/runtime/hle/shell_net.cpp b/src/runtime/hle/shell_net.cpp
+index 17585dd..23a2d51 100644
+--- a/src/runtime/hle/shell_net.cpp
++++ b/src/runtime/hle/shell_net.cpp
+@@ -5,12 +5,16 @@
+ // saves under My Documents writes to $XDG_DATA_HOME/<id>/drive_c/
+ // Documents and Settings/Player/My Documents/...
+ //
+-// Networking: wsock32 only answers host-name queries (DirectPlay8 is not
+-// provided).
++// Networking: wsock32 answers host-name queries and its pure functions
++// (byte order, address text); sockets are not provided (strict stubs).
++// Ordinals are Winsock 1.1's (Wine's wsock32.spec).
+ 
++#include <arpa/inet.h>
+ #include <sys/stat.h>
+ 
+ #include <cstring>
++#include <map>
++#include <mutex>
+ #include <string>
+ 
+ #include "runtime/hle/hle.h"
+@@ -129,11 +133,40 @@ HLE_NAMED("wsock32.dll", "#52", gethostbyname, 1) {
+   return hostent;
+ }
+ 
+-HLE_NAMED("wsock32.dll", "#14", htonl, 1) { return __builtin_bswap32(Arg(c, 0)); }  // htonl
++HLE_NAMED("wsock32.dll", "#8", htonl, 1) { return __builtin_bswap32(Arg(c, 0)); }
++HLE_NAMED("wsock32.dll", "#14", ntohl, 1) { return __builtin_bswap32(Arg(c, 0)); }
++HLE_NAMED("wsock32.dll", "#9", htons, 1) { return __builtin_bswap16(uint16_t(Arg(c, 0))); }
++HLE_NAMED("wsock32.dll", "#15", ntohs, 1) { return __builtin_bswap16(uint16_t(Arg(c, 0))); }
++
++// inet_addr: the BSD parsing Winsock documents ("a.b.c.d" and the shorter
++// a.b.c / a.b / a forms, octal and hex parts), in network order;
++// INADDR_NONE when the text is not an address.
++HLE_NAMED("wsock32.dll", "#10", inet_addr, 1) {
++  uint32_t text = Arg(c, 0);
++  if (!text) return 0xFFFFFFFF;
++  return uint32_t(::inet_addr(GStr(text).c_str()));
++}
+ 
+-HLE_NAMED("wsock32.dll", "#10", ioctlsocket, 3) {  // ioctlsocket: no sockets exist
+-  return 0xFFFFFFFF;
++// inet_ntoa: dotted text in a buffer of the calling thread's, valid until
++// its next Winsock call (MSDN).
++HLE_NAMED("wsock32.dll", "#11", inet_ntoa, 1) {
++  static std::mutex mu;
++  static std::map<uint32_t, uint32_t> buffers;  // thread id -> guest buffer
++  uint32_t buf;
++  {
++    std::lock_guard<std::mutex> l(mu);
++    uint32_t& b = buffers[CurrentThread()->tid];
++    if (!b) b = HeapAllocProcess(16, true);
++    buf = b;
++  }
++  uint32_t a = Arg(c, 0);  // in_addr by value, network order
++  PutStr(buf, std::to_string(a & 0xFF) + "." + std::to_string((a >> 8) & 0xFF) + "." +
++                  std::to_string((a >> 16) & 0xFF) + "." + std::to_string(a >> 24));
++  return buf;
+ }
+ 
++// WSAGetLastError: Winsock's error is the thread's last error (TEB).
++HLE_NAMED("wsock32.dll", "#111", WSAGetLastError, 0) { return Rd32(CurrentThread()->teb + 0x34); }
++
+ }  // namespace
+ }  // namespace recomp::hle
+diff --git a/src/runtime/hle/user32_window.cpp b/src/runtime/hle/user32_window.cpp
+index 1981b77..48cd930 100644
+--- a/src/runtime/hle/user32_window.cpp
++++ b/src/runtime/hle/user32_window.cpp
+@@ -104,6 +104,7 @@ struct Window {
+   int ul = 0, ut = 0, ur = 0, ub = 0;
+   uint32_t background = 0;     // the class's hbrBackground
+   int mode_w = 0, mode_h = 0;  // DirectDraw exclusive mode, see header
++  int pts_w = 0, pts_h = 0;    // the host size last requested (SizeHostWindow)
+   // Host fullscreen (UpdateFullscreen), entered for a screen of fs_w x fs_h.
+   bool fullscreen = false;
+   int fs_w = 0, fs_h = 0;
+@@ -279,6 +280,19 @@ uint32_t HwndForSdl(SDL_WindowID id) {
+   return 0;
+ }
+ 
++void WindowPoints(SDL_Window* sdl, int w, int h, int* pw, int* ph);
++
++void SizeHostWindow(SDL_Window* sdl, int w, int h) {
++  int pw, ph;
++  WindowPoints(sdl, w, h, &pw, &ph);
++  {
++    std::lock_guard<std::recursive_mutex> l(g_mu);
++    for (auto& [hwnd, win] : g_windows)
++      if (win.sdl == sdl) win.pts_w = pw, win.pts_h = ph;
++  }
++  SDL_SetWindowSize(sdl, pw, ph);
++}
++
+ // ---- SDL key -> Windows VK ----------------------------------------------------
+ 
+ uint8_t VkFromScancode(SDL_Scancode sc) {
+@@ -632,10 +646,12 @@ void HandleSdlEvent(const SDL_Event& e) {
+       break;
+     }
+     // The user resizing the host window of a resizable window (not one
+-    // standing for a display mode or the screen): its client area is the
+-    // new size in pixels. Windows sends WM_SIZE from its sizing loop; it is
+-    // queued here, as the event pump also runs inside frame presentation.
+-    case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED: {
++    // standing for a display mode or the screen): its client area becomes
++    // the new size in points, one game pixel each (WindowPoints). Our own
++    // resizes (pts_w/pts_h) are not the user's. Windows sends WM_SIZE from
++    // its sizing loop; it is queued here, as the event pump also runs
++    // inside frame presentation.
++    case SDL_EVENT_WINDOW_RESIZED: {
+       uint32_t h = HwndForSdl(e.window.windowID);
+       int cw = e.window.data1, ch = e.window.data2;
+       bool sized = false;
+@@ -643,9 +659,11 @@ void HandleSdlEvent(const SDL_Event& e) {
+         std::lock_guard<std::recursive_mutex> l(g_mu);
+         Window* w = Win(h);
+         if (!w || w->mode_w || w->fullscreen || w->minimized || !(w->style & WS_THICKFRAME)) break;
++        if (cw == w->pts_w && ch == w->pts_h) break;
+         int ow, oh;
+         ClientSize(*w, &ow, &oh);
+         if (cw <= 0 || ch <= 0 || (cw == ow && ch == oh)) break;
++        w->pts_w = cw, w->pts_h = ch;
+         w->w += cw - ow;
+         w->h += ch - oh;
+         if (((w->class_style & CS_HREDRAW) && cw != ow) || ((w->class_style & CS_VREDRAW) && ch != oh)) {
+@@ -779,14 +797,25 @@ GameConfig::Fullscreen FullscreenPolicy() {
+ }
+ 
+ // Game sizes (screens, modes, client areas) are pixels; SDL sizes host
+-// windows in points, which differ on a scaled desktop. Windows are
+-// created with high pixel density, so a client of w x h pixels is a host
+-// window of w x h pixels at w / d x h / d points.
+-int ToPoints(SDL_Window* sdl, int px) {
+-  float d = sdl ? SDL_GetWindowPixelDensity(sdl) : g_desktop_density;
+-  if (!(d > 0)) d = 1;
+-  return std::max(int(std::lround(float(px) / d)), 1);
+-}
++// windows in points. A w x h client gets a w x h point window (on a 2x
++// display the frame is shown at twice its pixel size, as a Windows program
++// at 100% looks on a monitor of its day), scaled down with its aspect kept
++// when that would not fit the display's usable area. The frame is
++// presented fitted into the window (present.cpp), and pointer positions
++// map back through the same rectangle (MapToClient).
++void WindowPoints(SDL_Window* sdl, int w, int h, int* pw, int* ph) {
++  float s = 1;
++  SDL_DisplayID d = sdl ? SDL_GetDisplayForWindow(sdl) : SDL_GetPrimaryDisplay();
++  SDL_Rect r;
++  if (d && w > 0 && h > 0 && SDL_GetDisplayUsableBounds(d, &r) && r.w > 0 && r.h > 0)
++    s = std::min({1.0f, float(r.w) / float(w), float(r.h) / float(h)});
++  *pw = std::max(int(std::lround(float(w) * s)), 1);
++  *ph = std::max(int(std::lround(float(h) * s)), 1);
++}
++
++// Sets a host window to the point size for a w x h client, remembering it
++// so the resize event this causes is not taken for the user's.
++void SizeHostWindow(SDL_Window* sdl, int w, int h);
+ 
+ // The screen a window would cover: the display mode in exclusive mode,
+ // else the screen the game sees.
+@@ -870,7 +899,7 @@ void UpdateFullscreen(uint32_t hwnd) {
+       std::fprintf(stderr, "user32: window %X fullscreen for a %dx%d screen\n", hwnd, sw, sh);
+   } else {
+     SDL_SetWindowFullscreen(sdl, false);
+-    SDL_SetWindowSize(sdl, ToPoints(sdl, cw), ToPoints(sdl, ch));
++    SizeHostWindow(sdl, cw, ch);
+   }
+ }
+ 
+@@ -981,7 +1010,7 @@ void InjectTestFocus() {
+ //                         held for that long (default 0.08)
+ //   <t> shot <name>       save the next presented frame as $<ID>_SHOT_DIR/<name>.bmp
+ //   <t> minimize | restore   the user minimizing / restoring the window
+-//   <t> resize <w> <h>    the user resizing the window to a w x h client (pixels)
++//   <t> resize <w> <h>    the user resizing the window to w x h points (a w x h client)
+ //   <t> focus out | in    the window losing / regaining the focus
+ // '#' starts a comment.
+ constexpr Sint32 kTestShot = 1;
+@@ -1041,7 +1070,7 @@ void InjectTestInput() {
+         if (c == "minimize") e.type = SDL_EVENT_WINDOW_MINIMIZED;
+         else if (c == "restore") e.type = SDL_EVENT_WINDOW_RESTORED;
+         else if (c == "resize") {
+-          e.type = SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED;
++          e.type = SDL_EVENT_WINDOW_RESIZED;
+           e.window.data1 = std::atoi(a);
+           e.window.data2 = std::atoi(b);
+         } else if (std::string(a) == "out") e.type = SDL_EVENT_WINDOW_FOCUS_LOST;
+@@ -1202,7 +1231,7 @@ void SetExclusiveMode(uint32_t hwnd, int w, int h) {
+     win->mode_h = h;
+     sdl = win->fullscreen ? nullptr : win->sdl;
+   }
+-  if (sdl && w) SDL_SetWindowSize(sdl, ToPoints(sdl, w), ToPoints(sdl, h));
++  if (sdl && w) SizeHostWindow(sdl, w, h);
+   UpdateFullscreen(hwnd);
+ }
+ 
+@@ -1361,7 +1390,10 @@ HLE("user32.dll", CreateWindowExA, 12) {
+     EnsureSdlVideo();
+     int cw, ch;
+     ClientSize(win, &cw, &ch);
+-    win.sdl = SDL_CreateWindow(AnsiToUtf8(win.title).c_str(), ToPoints(nullptr, cw), ToPoints(nullptr, ch),
++    int pw, ph;
++    WindowPoints(nullptr, cw, ch, &pw, &ph);
++    win.pts_w = pw, win.pts_h = ph;
++    win.sdl = SDL_CreateWindow(AnsiToUtf8(win.title).c_str(), pw, ph,
+                                SDL_WINDOW_HIDDEN | SDL_WINDOW_HIGH_PIXEL_DENSITY |
+                                    GfxWindowFlags());
+     if (!win.sdl) FatalF("SDL_CreateWindow: %s", SDL_GetError());
+@@ -1427,7 +1459,7 @@ HLE("user32.dll", CreateWindowExA, 12) {
+         sdl = wp->sdl;
+       }
+     }
+-    if (sdl) SDL_SetWindowSize(sdl, ToPoints(sdl, cw), ToPoints(sdl, ch));
++    if (sdl) SizeHostWindow(sdl, cw, ch);
+     UpdateFullscreen(hwnd);
+     bool overlapped_pending;
+     {
+@@ -1702,7 +1734,7 @@ void ApplyRect(uint32_t hwnd, int x, int y, int w, int h, bool move, bool size)
+     // a fullscreen one the screen's.
+     sdl = win->mode_w || win->fullscreen ? nullptr : win->sdl;
+   }
+-  if (sdl && sized) SDL_SetWindowSize(sdl, ToPoints(sdl, cw), ToPoints(sdl, ch));
++  if (sdl && sized) SizeHostWindow(sdl, cw, ch);
+   if (moved || sized) UpdateFullscreen(hwnd);
+   if (sized) Send(hwnd, WM_SIZE, 0, MkLparam(cw, ch));
+   if (moved) Send(hwnd, WM_MOVE, 0, MkLparam(x, y));
+diff --git a/src/runtime/hle/win32.h b/src/runtime/hle/win32.h
+index 118028b..ddbba7d 100644
+--- a/src/runtime/hle/win32.h
++++ b/src/runtime/hle/win32.h
+@@ -17,6 +17,8 @@ inline constexpr uint32_t kErrorNotEnoughMemory = 8;
+ inline constexpr uint32_t kErrorNoMoreFiles = 18;
+ inline constexpr uint32_t kErrorFileExists = 80;
+ inline constexpr uint32_t kErrorInvalidParameter = 87;
++inline constexpr uint32_t kErrorHandleEof = 38;
++inline constexpr uint32_t kErrorIoPending = 997;
+ inline constexpr uint32_t kErrorInsufficientBuffer = 122;
+ inline constexpr uint32_t kErrorModNotFound = 126;
+ inline constexpr uint32_t kErrorProcNotFound = 127;
