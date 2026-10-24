@@ -1,0 +1,41 @@
+# M4 acceptance path (scripts/m4_accept.sh): REFROZEN_TEST_INPUT format, times
+# in seconds since the first event pump. Never press Return or Start Game on
+# the Custom Game screen (that loads a map: gameplay, M5), and never open
+# Battle.net or Local Area Network (network-facing: M7, approval needed).
+10 key Return          # the "Unable to initialize base sound services" dialog
+12 shot main
+13 key S               # Single Player: a fresh profile asks for a name
+18 key T
+18.3 key E
+18.6 key S
+18.9 key T
+20 key Return          # Create
+23 shot sp
+24 key G               # Custom Game
+28 shot custom
+29 key Down            # the next map in the list
+33 shot custom2
+34 goto 236 40         # the Download folder (mouse)
+36 dblclick
+39 shot download
+40 goto 236 60         # DotA v6.85oz LoD
+42 click
+45 shot dota
+47 key A               # Cancel
+50 shot sp2
+51 key A               # Cancel
+54 shot main2
+55 key O               # Options
+59 shot options
+60 key V               # Video
+64 shot video
+65 key A               # Cancel
+69 shot main3
+70 focus out
+72 shot unfocused
+74 focus in
+77 shot refocused
+79 minimize
+82 restore
+85 shot restored
+87 key Q               # Quit: the process ends

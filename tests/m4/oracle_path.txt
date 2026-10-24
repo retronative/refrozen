@@ -1,0 +1,24 @@
+# The same path for the official client under Wine (scripts/oracle_menus.sh,
+# scripts/oracle_keys.c format): keys only, at the same times. The oracle's
+# prefix already has a profile and Wine's audio works (no dialog), so the
+# dialog, profile and mouse steps are left out.
+3 size 800 600
+12 shot main
+13 key S
+23 shot sp
+24 key G
+28 shot custom
+29 key Down
+33 shot custom2
+47 key A
+50 shot sp2
+51 key A
+54 shot main2
+55 key O
+59 shot options
+60 key V
+64 shot video
+65 key A
+69 shot main3
+87 key Q
+91 shot quit
