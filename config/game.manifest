@@ -1,1 +1,2 @@
-# recomp_lift manifest for game (1.26a). No overrides needed yet.
+# recomp_lift manifest for game.dll (1.26a).
+probe 6F009850 GameMain  # milestone marker (M2): logs "probe: GameMain" when war3.exe calls it
