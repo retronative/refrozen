@@ -3,16 +3,24 @@
 #
 #   scripts/lift.sh [install dir] [out dir]   # defaults: game/native-install game/generated/war3
 #
-# Needs scripts/setup_tools.sh and the Ghidra exports in game/symbols/<module>/
-# (functions.tsv, jumptables.tsv; pe_symbols.py's exports.tsv, imports.tsv; see
-# AGENTS.md). Manifests are config/<module>.manifest. The output is generated
-# from the player's own files: git-ignored, never committed.
+# Inputs per module, assembled in game/symbols-lift/<module>/:
+#   - functions.tsv, jumptables.tsv: pinned in config/symbols/<module>/ (addresses and flags from
+#     a Ghidra 12.2 analysis; Ghidra's analysis of game.dll varies between runs, so the lift
+#     input is fixed here, see FEASIBILITY §7). Players need no Ghidra.
+#   - exports.tsv, imports.tsv: from the player's own binary (tools/x86recomp/tools/pe_symbols.py).
+#   - instructions.tsv, noncode.tsv: copied from game/symbols/<module>/ when present (development
+#     only, for scripts/validate_lift.py).
+# Manifests are config/<module>.manifest. The output is generated from the player's own files:
+# git-ignored, never committed.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 INSTALL="${1:-$ROOT/game/native-install}"
 OUT="${2:-$ROOT/game/generated/war3}"
-SYM="$ROOT/game/symbols"
+PINNED="$ROOT/config/symbols"
+LIFTSYM="$ROOT/game/symbols-lift"
+DEVSYM="$ROOT/game/symbols"
 CFG="$ROOT/config"
+PYTHON=/opt/homebrew/bin/python3
 
 # module file (relative to the install) : symbols/config name
 MODULES=(
@@ -24,8 +32,17 @@ MODULES=(
 args=()
 for i in "${!MODULES[@]}"; do
   file="${MODULES[$i]%%:*}" name="${MODULES[$i]##*:}"
+  dir="$LIFTSYM/$name"
+  rm -rf "$dir"
+  mkdir -p "$dir"
+  cp "$PINNED/$name/functions.tsv" "$PINNED/$name/jumptables.tsv" "$dir/"
+  PATH="/opt/homebrew/opt/llvm/bin:$PATH" "$PYTHON" -I "$ROOT/tools/x86recomp/tools/pe_symbols.py" \
+    "$INSTALL/$file" --out "$dir" > /dev/null
+  for f in instructions.tsv noncode.tsv; do
+    if [ -f "$DEVSYM/$name/$f" ]; then cp "$DEVSYM/$name/$f" "$dir/"; fi
+  done
   [ "$i" = 0 ] && args+=(--exe "$INSTALL/$file") || args+=(--module "$INSTALL/$file")
-  args+=(--symbols "$SYM/$name" --manifest "$CFG/$name.manifest")
+  args+=(--symbols "$dir" --manifest "$CFG/$name.manifest")
 done
 rm -rf "$OUT"
 mkdir -p "$OUT"
