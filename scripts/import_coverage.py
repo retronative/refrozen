@@ -10,7 +10,9 @@ classified the way the runtime loader binds it (process.cpp BindImport):
            must exist (else the loader stops) and be a lifted function entry
            (generated table.cpp), else the first call stops in Dispatch;
            an export in a data section (_acmdln, _HUGE, ...) binds as data
-  hle      a Win32 export with a registered HLE handler (HLE/HLE_NAMED)
+  hle      a Win32 export with an HLE handler (HLE/HLE_NAMED) in a library the
+           refrozen executable links (recomp_runtime and the recomp_* HLE modules
+           named in CMakeLists.txt); handlers in unlinked modules do not count
   stub     a Win32 export with no handler: a strict stub that stops the process
            with "unimplemented import" when called
 
@@ -24,7 +26,7 @@ import struct
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-HLE_DIR = os.path.join(ROOT, "tools/x86recomp/src/runtime/hle")
+X86 = os.path.join(ROOT, "tools/x86recomp")
 HLE_RE = re.compile(r'^HLE(?:_NAMED)?\("([^"]+)",\s*"?([A-Za-z0-9_@?$]+)"?,', re.M)
 TABLE_RE = re.compile(r"^void f_([0-9A-F]{8})\(", re.M)
 
@@ -32,6 +34,21 @@ TABLE_RE = re.compile(r"^void f_([0-9A-F]{8})\(", re.M)
 def normalise_dll(name):
     name = name.lower().replace("/", "\\").rsplit("\\", 1)[-1]
     return name if "." in name else name + ".dll"
+
+
+def linked_hle_sources():
+    """Sources of recomp_runtime and of each recomp_* library refrozen links."""
+    with open(os.path.join(ROOT, "CMakeLists.txt")) as f:
+        ours = f.read()
+    link = re.search(r"target_link_libraries\(refrozen\s+PRIVATE([^)]*)\)", ours).group(1).split()
+    with open(os.path.join(X86, "CMakeLists.txt")) as f:
+        theirs = f.read()
+    srcs = []
+    for lib in set(link) | {"recomp_runtime"}:
+        m = re.search(r"add_library\(" + lib + r"\s+SHARED([^)]*)\)", theirs)
+        if m:
+            srcs += [x for x in m.group(1).split() if x.startswith("src/runtime/hle/") and x.endswith(".cpp")]
+    return srcs
 
 
 def lifted_dlls():
@@ -118,10 +135,9 @@ def main():
     a = ap.parse_args()
 
     handlers = set()
-    for name in os.listdir(HLE_DIR):
-        if name.endswith(".cpp"):
-            with open(os.path.join(HLE_DIR, name)) as f:
-                handlers.update((dll, sym) for dll, sym in HLE_RE.findall(f.read()))
+    for src in linked_hle_sources():
+        with open(os.path.join(X86, src)) as f:
+            handlers.update((dll, sym) for dll, sym in HLE_RE.findall(f.read()))
     with open(os.path.join(a.generated, "table.cpp")) as f:
         entries = {int(x, 16) for x in TABLE_RE.findall(f.read())}
 

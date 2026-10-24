@@ -33,10 +33,16 @@ recomp::GameConfig Config() {
     g.registry.push_back({std::string(root) + kWar3Key, "GamePath", dir + "Frozen Throne.exe"});
   }
   g.registry.push_back({std::string("HKCU\\") + kWar3Key, "Program", dir + "Warcraft III.exe"});
+  // Settings game.dll keeps as DWORDs. seenintromovie: the intro has been
+  // seen, so it is not played (it needs DirectShow, blizzard.ax). Gfx
+  // OpenGL: the game's own OpenGL renderer instead of Direct3D 8.
+  g.registry_dwords.push_back({std::string("HKCU\\") + kWar3Key + "\\Misc", "seenintromovie", 1});
+  g.registry_dwords.push_back({std::string("HKCU\\") + kWar3Key, "Gfx OpenGL", 1});
   g.lifted_dlls = {
       {"msvcr80.dll"},  // imported by war3.exe, game.dll, Storm.dll
       {"Storm.dll"},    // imported by war3.exe and game.dll (by ordinal)
       {"Mss32.dll"},    // imported by war3.exe and game.dll
+      {"ijl15.dll"},    // Intel JPEG Library, imported by game.dll (by ordinal)
       {"game.dll"},     // LoadLibrary'd by war3.exe
       {"redist\\miles\\Mp3dec.asi"},  // Miles providers, LoadLibrary'd by Mss32
       {"redist\\miles\\Mssfast.m3d"},

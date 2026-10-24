@@ -1,0 +1,862 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index d0f16b8..362d172 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -94,11 +94,13 @@ add_library(recomp_runtime SHARED
+   src/runtime/hle/hle.cpp
+   src/runtime/hle/kernel32.cpp
+   src/runtime/hle/winmm_timer.cpp
++  src/runtime/hle/winmm_wave.cpp
+   src/runtime/hle/kernel32_file.cpp
+   src/runtime/hle/kernel32_sync.cpp
+   src/runtime/hle/kernel32_seh.cpp
+   src/runtime/hle/kernel32_misc.cpp
+   src/runtime/hle/advapi32.cpp
++  src/runtime/hle/imm32.cpp
+   src/runtime/hle/user32_input.cpp
+   src/runtime/hle/user32_window.cpp
+   src/runtime/hle/gdi32.cpp
+diff --git a/src/runtime/gl/context.cpp b/src/runtime/gl/context.cpp
+index 0dfd4be..d8fdc85 100644
+--- a/src/runtime/gl/context.cpp
++++ b/src/runtime/gl/context.cpp
+@@ -333,6 +333,7 @@ struct Context::Unit {
+   Enum src_alpha[3] = {TEXTURE, PREVIOUS, CONSTANT};
+   Enum op_alpha[3] = {SRC_ALPHA, SRC_ALPHA, SRC_ALPHA};
+   float rgb_scale = 1, alpha_scale = 1;
++  Enum gen_mode[4] = {EYE_LINEAR, EYE_LINEAR, EYE_LINEAR, EYE_LINEAR};  // S T R Q
+ };
+ 
+ Context::Context(gfx::Device* dev, int fb_w, int fb_h)
+@@ -1312,6 +1313,24 @@ void Context::CompressedTexImage2D(Enum target, int level, Enum internal, int w,
+   dev_->UpdateTexture(t->id, level, {0, 0, w, h}, data, pitch);
+ }
+ 
++// GL 1.1: INVALID_ENUM for a coord other than S/T/R/Q, a pname other than
++// TEXTURE_GEN_MODE, a mode other than EYE_LINEAR/OBJECT_LINEAR/SPHERE_MAP,
++// or SPHERE_MAP for R or Q; INVALID_OPERATION between Begin and End.
++void Context::TexGeni(Enum coord, Enum pname, Enum param) {
++  if (in_begin_) return Error(INVALID_OPERATION, "glTexGeni");
++  if (coord < GEN_S || coord > GEN_Q || pname != TEXTURE_GEN_MODE)
++    return Error(INVALID_ENUM, "glTexGeni");
++  if (param != EYE_LINEAR && param != OBJECT_LINEAR &&
++      !(param == SPHERE_MAP && coord <= GEN_T))
++    return Error(INVALID_ENUM, "glTexGeni");
++  units_[active_unit_].gen_mode[coord - GEN_S] = param;
++}
++
++Enum Context::TexGenMode(Enum coord) const {
++  if (coord < GEN_S || coord > GEN_Q) return 0;
++  return units_[active_unit_].gen_mode[coord - GEN_S];
++}
++
+ void Context::TexEnv(Enum target, Enum pname, const float* v) {
+   if (target != TEXTURE_ENV) return Unsupported("glTexEnv target", target);
+   Unit& u = units_[active_unit_];
+diff --git a/src/runtime/gl/context.h b/src/runtime/gl/context.h
+index 2d72aac..294d29a 100644
+--- a/src/runtime/gl/context.h
++++ b/src/runtime/gl/context.h
+@@ -51,6 +51,10 @@ enum : Enum {
+   DITHER = 0x0BD0, BLEND = 0x0BE2, SCISSOR_TEST = 0x0C11, TEXTURE_2D = 0x0DE1,
+   POLYGON_OFFSET_FILL = 0x8037, CLIP_PLANE0 = 0x3000, LIGHT0 = 0x4000,
+   COLOR_MATERIAL = 0x0B57, TEXTURE_GEN_S = 0x0C60, TEXTURE_GEN_T = 0x0C61,
++  // texture coordinate generation (glTexGen)
++  GEN_S = 0x2000, GEN_T = 0x2001, GEN_R = 0x2002, GEN_Q = 0x2003,
++  TEXTURE_GEN_MODE = 0x2500, EYE_LINEAR = 0x2400, OBJECT_LINEAR = 0x2401,
++  SPHERE_MAP = 0x2402,
+   RESCALE_NORMAL = 0x803A,
+   // client arrays
+   VERTEX_ARRAY = 0x8074, NORMAL_ARRAY = 0x8075, COLOR_ARRAY = 0x8076,
+@@ -194,6 +198,11 @@ class Context {
+   void CompressedTexImage2D(Enum target, int level, Enum internal_format,
+                             int w, int h, int border, int size, const void* data);
+   void TexEnv(Enum target, Enum pname, const float* v);
++  // glTexGeni(coord, GL_TEXTURE_GEN_MODE, mode): the active unit's mode for
++  // S/T/R/Q (state only: generation itself is not modelled, see
++  // SetEnabled). TexGenMode: that state, 0 for a bad coord.
++  void TexGeni(Enum coord, Enum pname, Enum param);
++  Enum TexGenMode(Enum coord) const;
+   void ActiveTexture(Enum unit);
+   void ClientActiveTexture(Enum unit);
+ 
+diff --git a/src/runtime/hle/advapi32.cpp b/src/runtime/hle/advapi32.cpp
+index fca1a28..6deb639 100644
+--- a/src/runtime/hle/advapi32.cpp
++++ b/src/runtime/hle/advapi32.cpp
+@@ -25,7 +25,7 @@ using namespace win32;
+ 
+ constexpr uint32_t kHkeyClassesRoot = 0x80000000, kHkeyCurrentUser = 0x80000001,
+                    kHkeyLocalMachine = 0x80000002, kHkeyUsers = 0x80000003;
+-constexpr uint32_t kRegSz = 1;
++constexpr uint32_t kRegSz = 1, kRegDword = 4;
+ 
+ struct RegValue {
+   uint32_t type;
+@@ -49,14 +49,21 @@ RegValue Str(const std::string& s) {
+   return v;
+ }
+ 
++// Key k (lower case), creating it and its parent keys below the root.
++std::map<std::string, RegValue>& SeedKey(const std::string& key) {
++  std::string k = Lower(key);
++  for (size_t i = k.find('\\', k.find('\\') + 1); i != std::string::npos;
++       i = k.find('\\', i + 1))
++    g_reg[k.substr(0, i)];
++  return g_reg[k];
++}
++
+ void Seed() {
+-  for (const auto& r : Game().registry) {
+-    std::string k = Lower(r.key);
+-    // Parent keys below the root exist too.
+-    for (size_t i = k.find('\\', k.find('\\') + 1); i != std::string::npos;
+-         i = k.find('\\', i + 1))
+-      g_reg[k.substr(0, i)];
+-    g_reg[k][Lower(r.name)] = Str(r.value);
++  for (const auto& r : Game().registry) SeedKey(r.key)[Lower(r.name)] = Str(r.value);
++  for (const auto& r : Game().registry_dwords) {
++    RegValue v{kRegDword, {}};
++    for (int i = 0; i < 4; i++) v.data.push_back(uint8_t(r.value >> (8 * i)));
++    SeedKey(r.key)[Lower(r.name)] = v;
+   }
+ }
+ 
+diff --git a/src/runtime/hle/imm32.cpp b/src/runtime/hle/imm32.cpp
+new file mode 100644
+index 0000000..19f5787
+--- /dev/null
++++ b/src/runtime/hle/imm32.cpp
+@@ -0,0 +1,23 @@
++// imm32: the input method manager of a system without East Asian language
++// support (Windows XP en-US default), where IMM is disabled
++// (GetSystemMetrics(SM_IMMENABLED) = 0). Windows' imm32 then has no input
++// contexts: getting or associating one gives NULL/FALSE, and every call on
++// a NULL HIMC fails. No error code is set, as there.
++
++#include "runtime/hle/hle.h"
++
++namespace recomp::hle {
++namespace {
++
++HLE("imm32.dll", ImmGetContext, 1) { return 0; }             // HIMC NULL
++HLE("imm32.dll", ImmReleaseContext, 2) { return 1; }         // always TRUE
++HLE("imm32.dll", ImmAssociateContext, 2) { return 0; }       // previous HIMC: none
++HLE("imm32.dll", ImmAssociateContextEx, 3) { return 0; }     // FALSE: IMM disabled
++HLE("imm32.dll", ImmGetOpenStatus, 1) { return 0; }
++HLE("imm32.dll", ImmNotifyIME, 4) { return 0; }
++HLE("imm32.dll", ImmGetConversionStatus, 3) { return 0; }    // outputs untouched
++HLE("imm32.dll", ImmGetCompositionStringA, 4) { return 0; }  // no composition
++HLE("imm32.dll", ImmGetCandidateListA, 4) { return 0; }      // no candidates
++
++}  // namespace
++}  // namespace recomp::hle
+diff --git a/src/runtime/hle/kernel32.cpp b/src/runtime/hle/kernel32.cpp
+index 50fb65e..835c0d9 100644
+--- a/src/runtime/hle/kernel32.cpp
++++ b/src/runtime/hle/kernel32.cpp
+@@ -165,12 +165,15 @@ Module* LoadedDllAt(uint32_t hmodule) {
+ 
+ constexpr uint32_t kDllProcessDetach = 0, kDllProcessAttach = 1;
+ 
+-// DllMain(hinstDLL, reason, NULL); false if it failed.
+-bool CallDllMain(Ctx& c, Module& m, uint32_t reason) {
++// DllMain(hinstDLL, reason, lpReserved); false if it failed. lpReserved is
++// NULL for LoadLibrary/FreeLibrary and non-NULL for the EXE's static
++// imports (Windows passes the initial thread's CONTEXT). Storm.dll checks:
++// attached with NULL, it seeds its crypt table so that no MPQ file opens.
++bool CallDllMain(Ctx& c, Module& m, uint32_t reason, uint32_t reserved = 0) {
+   if (!m.img.entry) return true;
+   m.stale = true;
+-  RECOMP_TRACE("  %s: DllMain(%u)\n", m.name.c_str(), reason);
+-  return CallGuest(c, m.img.entry, {m.img.image_base, reason, 0}) != 0;
++  RECOMP_TRACE("  %s: DllMain(%u, %08X)\n", m.name.c_str(), reason, reserved);
++  return CallGuest(c, m.img.entry, {m.img.image_base, reason, reserved}) != 0;
+ }
+ 
+ HLE("kernel32.dll", GetModuleHandleA, 1) {
+@@ -220,18 +223,20 @@ std::vector<Module*> LiftedImports(const PeImage& img) {
+ }
+ 
+ // Loads lifted DLL m as the Windows loader does: the lifted DLLs it imports
+-// first (each counted once more), then its DllMain. `pin`: a static load,
+-// never unloaded. Under g_loader_mu. False if a DllMain failed.
+-bool LoadLifted(Ctx& c, Module& m, bool pin) {
+-  if (pin) m.pinned = true;
++// first (each counted once more), then its DllMain. `static_ctx`: 0 for
++// LoadLibrary; for the EXE's static imports (pinned: never unloaded) the
++// CONTEXT DllMain gets as lpReserved. Under g_loader_mu. False if a
++// DllMain failed.
++bool LoadLifted(Ctx& c, Module& m, uint32_t static_ctx) {
++  if (static_ctx) m.pinned = true;
+   if (m.refs++) return true;
+   if (m.stale) MapModule(m);
+   for (Module* dep : LiftedImports(m.img))
+-    if (!LoadLifted(c, *dep, pin)) {
++    if (!LoadLifted(c, *dep, static_ctx)) {
+       m.refs = 0;
+       return false;
+     }
+-  if (!CallDllMain(c, m, kDllProcessAttach)) {
++  if (!CallDllMain(c, m, kDllProcessAttach, static_ctx)) {
+     m.refs = 0;
+     return false;
+   }
+@@ -260,7 +265,7 @@ uint32_t LoadModule(Ctx& c, const char* api, uint32_t name) {
+   std::string n = GStr(name);
+   if (Module* m = LiftedDll(n)) {
+     std::lock_guard<std::recursive_mutex> l(g_loader_mu);
+-    if (!LoadLifted(c, *m, false)) {
++    if (!LoadLifted(c, *m, 0)) {
+       WarnF("%s(%s): DllMain failed\n", api, n.c_str());
+       SetLastError(kErrorDllInitFailed);
+       return 0;
+@@ -842,6 +847,28 @@ HLE("kernel32.dll", EnterCriticalSection, 1) {
+   return 0;
+ }
+ 
++// TRUE if the section was free (now owned) or already the caller's
++// (one more recursion); FALSE, without waiting, if another thread owns it.
++HLE("kernel32.dll", TryEnterCriticalSection, 1) {
++  uint32_t cs = Arg(c, 0), tid = CurrentThread()->tid;
++  uint32_t* lock_count = CsField(cs, 4);
++  uint32_t* recursion = CsField(cs, 8);
++  uint32_t* owner = CsField(cs, 12);
++  uint32_t free_value = 0xFFFFFFFF;
++  if (__atomic_compare_exchange_n(lock_count, &free_value, 0, false, __ATOMIC_SEQ_CST,
++                                  __ATOMIC_SEQ_CST)) {
++    __atomic_store_n(owner, tid, __ATOMIC_RELAXED);
++    __atomic_store_n(recursion, 1, __ATOMIC_RELAXED);
++    return 1;
++  }
++  if (__atomic_load_n(owner, __ATOMIC_RELAXED) == tid) {
++    __atomic_add_fetch(lock_count, 1, __ATOMIC_SEQ_CST);
++    __atomic_store_n(recursion, *recursion + 1, __ATOMIC_RELAXED);
++    return 1;
++  }
++  return 0;
++}
++
+ HLE("kernel32.dll", LeaveCriticalSection, 1) {
+   uint32_t cs = Arg(c, 0);
+   uint32_t* lock_count = CsField(cs, 4);
+@@ -1088,6 +1115,7 @@ HLE("kernel32.dll", LCMapStringA, 6) {
+ 
+ HLE("kernel32.dll", GetUserDefaultLCID, 0) { return 0x0409; }
+ HLE("kernel32.dll", GetUserDefaultLangID, 0) { return 0x0409; }
++HLE("kernel32.dll", GetSystemDefaultLangID, 0) { return 0x0409; }  // en-US system, as the user's
+ HLE("kernel32.dll", IsValidLocale, 2) { return Arg(c, 0) == 0x0409 ? 1 : 0; }
+ 
+ HLE("kernel32.dll", EnumSystemLocalesA, 2) {
+@@ -1151,9 +1179,15 @@ HLE("kernel32.dll", GetLocaleInfoW, 4) { return LocaleInfo(c, true); }
+ 
+ void LoadStaticImports(Ctx& c) {
+   std::lock_guard<std::recursive_mutex> l(g_loader_mu);
++  // A zeroed CONTEXT on the initial thread's stack, as on Windows.
++  constexpr uint32_t kContextSize = 0x2CC, kFrame = (kContextSize + 15) & ~15u;
++  c.esp -= kFrame;
++  const uint32_t context = c.esp;
++  std::memset(GPtr(context), 0, kContextSize);
+   for (Module* m : LiftedImports(g_proc->img))
+-    if (!LoadLifted(c, *m, true))
++    if (!LoadLifted(c, *m, context))
+       FatalF("%s: DllMain failed while loading the EXE's static imports", m->name.c_str());
++  c.esp += kFrame;
+ }
+ 
+ }  // namespace hle
+diff --git a/src/runtime/hle/kernel32_file.cpp b/src/runtime/hle/kernel32_file.cpp
+index 4bba723..da013a3 100644
+--- a/src/runtime/hle/kernel32_file.cpp
++++ b/src/runtime/hle/kernel32_file.cpp
+@@ -10,8 +10,10 @@
+ #include <fcntl.h>
+ #include <fnmatch.h>
+ #include <sys/stat.h>
++#include <sys/statvfs.h>
+ #include <unistd.h>
+ 
++#include <algorithm>
+ #include <cstdlib>
+ #include <cstring>
+ #include <map>
+@@ -722,6 +724,39 @@ HLE("kernel32.dll", GetVolumeInformationA, 8) {
+   return 1;
+ }
+ 
++// (root, sectors per cluster, bytes per sector, free clusters, total
++// clusters). Drive C is one volume: the host volume of the per-user tree,
++// where the guest's writes go. Like NT, any existing path on the drive
++// names its volume; NULL is the current drive. NT reports up to 2^32-1
++// clusters.
++HLE("kernel32.dll", GetDiskFreeSpaceA, 5) {
++  std::string g = Arg(c, 0) ? GStr(Arg(c, 0)) : std::string("\\");
++  if (g.empty() || AbsGuest(g)[0] != 'C') {
++    SetLastError(3);  // ERROR_PATH_NOT_FOUND: no such drive
++    return 0;
++  }
++  struct stat st;
++  if (stat(HostPath(g).c_str(), &st) != 0) {
++    SetLastError(ErrnoToWin(errno));
++    return 0;
++  }
++  struct statvfs v;
++  if (statvfs(UserDataRoot().c_str(), &v) != 0) {
++    SetLastError(ErrnoToWin(errno));
++    return 0;
++  }
++  constexpr uint64_t kSector = 512;
++  const uint64_t cluster = std::max<uint64_t>(v.f_frsize, kSector);
++  auto clusters = [&](uint64_t blocks) {
++    return uint32_t(std::min<uint64_t>(blocks * v.f_frsize / cluster, 0xFFFFFFFFu));
++  };
++  if (Arg(c, 1)) Wr32(Arg(c, 1), uint32_t(cluster / kSector));
++  if (Arg(c, 2)) Wr32(Arg(c, 2), uint32_t(kSector));
++  if (Arg(c, 3)) Wr32(Arg(c, 3), clusters(v.f_bavail));
++  if (Arg(c, 4)) Wr32(Arg(c, 4), clusters(v.f_blocks));
++  return 1;
++}
++
+ HLE("kernel32.dll", GetDiskFreeSpaceExA, 4) {
+   // 8 GiB free of 64 GiB, reported in 64-bit ULARGE_INTEGERs.
+   if (Arg(c, 1)) Wr64(Arg(c, 1), 8ull << 30);
+diff --git a/src/runtime/hle/kernel32_misc.cpp b/src/runtime/hle/kernel32_misc.cpp
+index 1e1b8b6..d0e7703 100644
+--- a/src/runtime/hle/kernel32_misc.cpp
++++ b/src/runtime/hle/kernel32_misc.cpp
+@@ -4,6 +4,7 @@
+ 
+ #include <cstring>
+ #include <ctime>
++#include <fstream>
+ #include <string>
+ 
+ #include "runtime/hle/hle.h"
+@@ -399,5 +400,55 @@ HLE("version.dll", VerQueryValueA, 4) {
+   return 1;
+ }
+ 
++// ---- WIN.INI (GetProfileString) ----------------------------------------------
++
++std::string TrimBlanks(const std::string& s) {
++  size_t b = s.find_first_not_of(" \t\r"), e = s.find_last_not_of(" \t\r");
++  return b == std::string::npos ? std::string() : s.substr(b, e - b + 1);
++}
++
++// The value of [section] key= in the guest's C:\WINDOWS\win.ini; false if
++// absent (a missing file has no keys). Names compare case-insensitively; a
++// value in matching single or double quotes loses them.
++bool WinIniValue(const std::string& section, const std::string& key, std::string* out) {
++  std::ifstream f(HostPath("C:\\WINDOWS\\win.ini"));
++  std::string line;
++  bool in_section = false;
++  while (std::getline(f, line)) {
++    std::string t = TrimBlanks(line);
++    if (!t.empty() && t[0] == '[') {
++      size_t end = t.find(']');
++      in_section = end != std::string::npos && Lower(TrimBlanks(t.substr(1, end - 1))) == Lower(section);
++      continue;
++    }
++    size_t eq = t.find('=');
++    if (!in_section || eq == std::string::npos || Lower(TrimBlanks(t.substr(0, eq))) != Lower(key))
++      continue;
++    std::string v = TrimBlanks(t.substr(eq + 1));
++    if (v.size() >= 2 && (v[0] == '"' || v[0] == '\'') && v.back() == v[0]) v = v.substr(1, v.size() - 2);
++    *out = v;
++    return true;
++  }
++  return false;
++}
++
++// (section, key, default, buffer, size): the value or the default (NULL:
++// "", trailing blanks dropped), truncated to size - 1 characters; returns
++// the characters copied. Listing sections or keys (NULL section/key) is
++// not implemented.
++HLE("kernel32.dll", GetProfileStringA, 5) {
++  uint32_t app = Arg(c, 0), key = Arg(c, 1), def = Arg(c, 2), buf = Arg(c, 3), size = Arg(c, 4);
++  if (!app || !key) FatalF("GetProfileStringA: enumerating sections or keys is not implemented");
++  if (!size) return 0;
++  std::string v;
++  if (!WinIniValue(GStr(app), GStr(key), &v)) {
++    v = def ? GStr(def) : std::string();
++    v = v.substr(0, v.find_last_not_of(' ') + 1);
++  }
++  v = v.substr(0, size - 1);
++  PutStr(buf, v);
++  return uint32_t(v.size());
++}
++
+ }  // namespace
+ }  // namespace recomp::hle
+diff --git a/src/runtime/hle/kernel32_state.h b/src/runtime/hle/kernel32_state.h
+index 1b14fa5..f2d3d9e 100644
+--- a/src/runtime/hle/kernel32_state.h
++++ b/src/runtime/hle/kernel32_state.h
+@@ -37,7 +37,7 @@ GuestHeap* FindHeap(uint32_t handle);
+ 
+ // Kernel object handles. Values are small multiples of 4, as on Windows.
+ struct KObject {
+-  enum class Type { File, Event, Mutex, Thread, Mapping, Find, StdIo };
++  enum class Type { File, Event, Mutex, Thread, Mapping, Find, StdIo, CompletionPort };
+   explicit KObject(Type t) : type(t) {}
+   virtual ~KObject() = default;
+   Type type;
+diff --git a/src/runtime/hle/kernel32_sync.cpp b/src/runtime/hle/kernel32_sync.cpp
+index 61df788..2427903 100644
+--- a/src/runtime/hle/kernel32_sync.cpp
++++ b/src/runtime/hle/kernel32_sync.cpp
+@@ -19,6 +19,7 @@
+ #include <atomic>
+ #include <chrono>
+ #include <condition_variable>
++#include <deque>
+ #include <map>
+ #include <mutex>
+ #include <set>
+@@ -178,24 +179,28 @@ namespace {
+ std::string NameOf(uint32_t va) { return va ? GStr(va) : std::string(); }
+ 
+ // Registers a named object or returns the existing one (ERROR_ALREADY_EXISTS).
++// A name held by another type of object fails with ERROR_INVALID_HANDLE,
++// as on Windows (one namespace for events, mutexes, mappings, ...).
+ template <typename Make>
+ uint32_t CreateNamed(uint32_t name_va, Make make) {
+   std::string name = NameOf(name_va);
+-  std::shared_ptr<KObject> obj;
++  std::shared_ptr<KObject> obj = make();
+   bool existed = false;
+   {
+     std::lock_guard<std::mutex> l(g_wait_mu);
+     if (!name.empty()) {
+       auto it = g_named.find(name);
+       if (it != g_named.end()) {
++        if (it->second->type != obj->type) {
++          hle::SetLastError(win32::kErrorInvalidHandle);
++          return 0;
++        }
+         obj = it->second;
+         existed = true;
++      } else {
++        g_named[name] = obj;
+       }
+     }
+-    if (!obj) {
+-      obj = make();
+-      if (!name.empty()) g_named[name] = obj;
+-    }
+   }
+   hle::SetLastError(existed ? win32::kErrorAlreadyExists : 0);
+   return NewHandle(obj);
+@@ -245,7 +250,7 @@ HLE("kernel32.dll", CreateMutexA, 3) {
+   uint32_t h = CreateNamed(Arg(c, 2), [] {
+     return std::make_shared<MutexObject>();
+   });
+-  if (own) {
++  if (own && h) {
+     auto m = std::dynamic_pointer_cast<MutexObject>(GetHandle(h));
+     std::lock_guard<std::mutex> l(g_wait_mu);
+     if (m->owner == 0 || m->owner == tid) m->Acquire(tid);
+@@ -253,19 +258,26 @@ HLE("kernel32.dll", CreateMutexA, 3) {
+   return h;
+ }
+ 
+-// OpenMutexA/OpenFileMappingA(access, inherit, name): a new handle to an
+-// existing named object of that type.
++// OpenEventA/OpenMutexA/OpenFileMappingA(access, inherit, name): a new
++// handle to an existing named object of that type. No such name:
++// ERROR_FILE_NOT_FOUND; another type's name: ERROR_INVALID_HANDLE
++// (STATUS_OBJECT_TYPE_MISMATCH).
+ uint32_t OpenNamed(uint32_t name_va, KObject::Type type) {
+   std::string name = NameOf(name_va);
+   std::lock_guard<std::mutex> l(g_wait_mu);
+   auto it = g_named.find(name);
+-  if (it == g_named.end() || it->second->type != type) {
++  if (it == g_named.end()) {
+     SetLastError(kErrorFileNotFound);
+     return 0;
+   }
++  if (it->second->type != type) {
++    SetLastError(kErrorInvalidHandle);
++    return 0;
++  }
+   return NewHandle(it->second);
+ }
+ 
++HLE("kernel32.dll", OpenEventA, 3) { return OpenNamed(Arg(c, 2), KObject::Type::Event); }
+ HLE("kernel32.dll", OpenMutexA, 3) { return OpenNamed(Arg(c, 2), KObject::Type::Mutex); }
+ 
+ HLE("kernel32.dll", ReleaseMutex, 1) {
+@@ -308,6 +320,82 @@ HLE("kernel32.dll", WaitForMultipleObjects, 4) {
+   return WaitObjects(objs, Arg(c, 2) != 0, Arg(c, 3));
+ }
+ 
++// ---- I/O completion ports ------------------------------------------------------
++// Packets posted with PostQueuedCompletionStatus, dequeued first in, first
++// out. Associating files or sockets (overlapped I/O) is not implemented,
++// nor the concurrency limit (a scheduling hint: every waiting thread may
++// take a packet).
++
++struct CompletionPort : KObject {
++  CompletionPort() : KObject(Type::CompletionPort) {}
++  struct Packet {
++    uint32_t bytes, key, overlapped;
++  };
++  std::deque<Packet> queue;  // under g_wait_mu
++};
++
++constexpr uint32_t kInvalidHandleValue = 0xFFFFFFFF;
++
++// (file, existing port, key, concurrent threads).
++HLE("kernel32.dll", CreateIoCompletionPort, 4) {
++  uint32_t file = Arg(c, 0), existing = Arg(c, 1);
++  if (file != kInvalidHandleValue)
++    FatalF("CreateIoCompletionPort(file %08X): associating a handle (overlapped I/O) is not "
++           "implemented", file);
++  if (existing) {
++    SetLastError(kErrorInvalidParameter);
++    return 0;
++  }
++  return NewHandle(std::make_shared<CompletionPort>());
++}
++
++// (port, bytes, key, overlapped).
++HLE("kernel32.dll", PostQueuedCompletionStatus, 4) {
++  GuestSyncPoint sync;
++  auto port = std::dynamic_pointer_cast<CompletionPort>(GetHandle(Arg(c, 0)));
++  if (!port) {
++    SetLastError(kErrorInvalidHandle);
++    return 0;
++  }
++  {
++    std::lock_guard<std::mutex> l(g_wait_mu);
++    port->queue.push_back({Arg(c, 1), Arg(c, 2), Arg(c, 3)});
++  }
++  SignalChanged();
++  return 1;
++}
++
++// (port, &bytes, &key, &overlapped, timeout): TRUE with the oldest packet;
++// on timeout FALSE, *overlapped = NULL and WAIT_TIMEOUT.
++HLE("kernel32.dll", GetQueuedCompletionStatus, 5) {
++  GuestSyncPoint sync;
++  uint32_t bytes = Arg(c, 1), key = Arg(c, 2), ovl = Arg(c, 3), timeout = Arg(c, 4);
++  auto port = std::dynamic_pointer_cast<CompletionPort>(GetHandle(Arg(c, 0)));
++  if (!port) {
++    SetLastError(kErrorInvalidHandle);
++    return 0;
++  }
++  auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout);
++  std::unique_lock<std::mutex> l(g_wait_mu);
++  while (port->queue.empty()) {
++    bool expired = timeout == 0 ||
++                   (timeout != kInfinite &&
++                    g_wait_cv.wait_until(l, deadline) == std::cv_status::timeout);
++    if (timeout == kInfinite) g_wait_cv.wait(l);
++    if (expired && port->queue.empty()) {
++      Wr32(ovl, 0);
++      SetLastError(kWaitTimeout);
++      return 0;
++    }
++  }
++  CompletionPort::Packet p = port->queue.front();
++  port->queue.pop_front();
++  Wr32(bytes, p.bytes);
++  Wr32(key, p.key);
++  Wr32(ovl, p.overlapped);
++  return 1;
++}
++
+ // ---- threads ----------------------------------------------------------------
+ 
+ // Starts the thread once. pthread_create synchronises memory: what the
+diff --git a/src/runtime/hle/opengl32.cpp b/src/runtime/hle/opengl32.cpp
+index 57014da..3dc057d 100644
+--- a/src/runtime/hle/opengl32.cpp
++++ b/src/runtime/hle/opengl32.cpp
+@@ -278,6 +278,13 @@ uint32_t Swap(uint32_t dc) {
+ 
+ HLE("gdi32.dll", SwapBuffers, 1) { return Swap(Arg(c, 0)); }
+ HLE("opengl32.dll", wglSwapBuffers, 1) { return Swap(Arg(c, 0)); }
++// WGL_SWAP_MAIN_PLANE (1) is SwapBuffers; the one pixel format has no
++// overlay or underlay planes to swap.
++HLE("opengl32.dll", wglSwapLayerBuffers, 2) {
++  if (Arg(c, 1) != 1)
++    FatalF("wglSwapLayerBuffers(planes %08X): only the main plane exists", Arg(c, 1));
++  return Swap(Arg(c, 0));
++}
+ 
+ // Extension entry points exist only for what GL_EXTENSIONS advertises.
+ HLE("opengl32.dll", wglGetProcAddress, 1) {
+@@ -591,6 +598,11 @@ HLE("opengl32.dll", glCompressedTexImage2DARB, 8) {
+                           P(c, 7));
+   return 0;
+ }
++HLE("opengl32.dll", glTexGeni, 3) {
++  GL_OR_RETURN(0);
++  g->TexGeni(Arg(c, 0), Arg(c, 1), Arg(c, 2));
++  return 0;
++}
+ HLE("opengl32.dll", glTexEnvf, 3) {
+   GL_OR_RETURN(0);
+   float v[4] = {F(c, 2)};
+diff --git a/src/runtime/hle/user32_window.cpp b/src/runtime/hle/user32_window.cpp
+index 0f086b4..5ec9d39 100644
+--- a/src/runtime/hle/user32_window.cpp
++++ b/src/runtime/hle/user32_window.cpp
+@@ -69,7 +69,9 @@ enum : uint32_t {
+ };
+ constexpr uint32_t WS_CHILD = 0x40000000, WS_VISIBLE = 0x10000000,
+                    WS_CAPTION = 0x00C00000,
+-                   WS_THICKFRAME = 0x00040000;
++                   WS_THICKFRAME = 0x00040000, WS_POPUP = 0x80000000,
++                   WS_MINIMIZE = 0x20000000, WS_MAXIMIZE = 0x01000000;
++constexpr uint32_t SIZE_RESTORED = 0, SIZE_MAXIMIZED = 2;
+ constexpr uint32_t CS_DBLCLKS = 0x0008;
+ constexpr int32_t GWL_WNDPROC = -4, GWL_HINSTANCE = -6, GWL_HWNDPARENT = -8,
+                   GWL_STYLE = -16, GWL_EXSTYLE = -20, GWL_USERDATA = -21,
+@@ -92,6 +94,8 @@ struct Window {
+   uint32_t tid = 0;
+   bool visible = false, enabled = true, destroyed = false;
+   bool minimized = false;      // as the game asked (IsIconic)
++  bool maximized = false;      // created with WS_MAXIMIZE
++  bool need_size = false;      // overlapped: WM_SIZE/WM_MOVE due at the first show
+   int mode_w = 0, mode_h = 0;  // DirectDraw exclusive mode, see header
+   // Host fullscreen (UpdateFullscreen), entered for a screen of fs_w x fs_h.
+   bool fullscreen = false;
+@@ -219,6 +223,25 @@ uint32_t MkLparam(int lo, int hi) {
+   return (uint32_t(uint16_t(lo))) | (uint32_t(uint16_t(hi)) << 16);
+ }
+ 
++// WM_SIZE(type, client size) and WM_MOVE(client origin), in that order or
++// (move_first) the other.
++void SendSizeMove(uint32_t hwnd, uint32_t type, bool move_first) {
++  int cw = 0, ch = 0, cx = 0, cy = 0;
++  {
++    std::lock_guard<std::recursive_mutex> l(g_mu);
++    Window* w = Win(hwnd);
++    if (!w) return;
++    ClientSize(*w, &cw, &ch);
++    int border = 0, caption = 0;
++    if (!(w->style & WS_CHILD)) FrameSize(w->style, &border, &caption);
++    cx = w->x + border;
++    cy = w->y + border + caption;
++  }
++  if (move_first) Send(hwnd, WM_MOVE, 0, MkLparam(cx, cy));
++  Send(hwnd, WM_SIZE, type, MkLparam(cw, ch));
++  if (!move_first) Send(hwnd, WM_MOVE, 0, MkLparam(cx, cy));
++}
++
+ // Top-level window under SDL window id.
+ uint32_t HwndForSdl(SDL_WindowID id) {
+   std::lock_guard<std::recursive_mutex> l(g_mu);
+@@ -805,17 +828,36 @@ namespace {
+ 
+ // Test hook: <ID>_TEST_FOCUS="lost,gained" (seconds since the first pump)
+ // injects window focus loss and regain, to exercise the game's
+-// deactivation path without touching the desktop.
++// deactivation path without touching the desktop. "follow": the guest's
++// newest window is activated whenever none is, as the windows of a
++// process the user launched are on Windows (background runs, which never
++// get host focus).
+ void InjectTestFocus() {
+   static int stage = -1;
+   static double lost = 0, gained = 0;
+   static Uint64 t0 = 0;
++  static bool follow = false;
+   if (stage == -1) {
+     stage = 2;
+     const char* env = Env("TEST_FOCUS");
+     if (env && std::sscanf(env, "%lf,%lf", &lost, &gained) == 2) stage = 0;
++    follow = env && std::strcmp(env, "follow") == 0;
+     t0 = SDL_GetTicks();
+   }
++  if (follow) {
++    uint32_t hwnd = 0;
++    {
++      std::lock_guard<std::recursive_mutex> l(g_mu);
++      if (g_active && Win(g_active) && !Win(g_active)->destroyed) return;
++      for (auto& [h, w] : g_windows)
++        if (w.sdl && !w.destroyed) hwnd = h;
++    }
++    if (hwnd) {
++      WarnF("TEST_FOCUS: follow: window %X activated\n", hwnd);
++      ActivateApp(hwnd, true);
++    }
++    return;
++  }
+   if (stage >= 2) return;
+   double t = (SDL_GetTicks() - t0) / 1000.0;
+   if (t < (stage == 0 ? lost : gained)) return;
+@@ -1229,6 +1271,43 @@ HLE("user32.dll", CreateWindowExA, 12) {
+     }
+     return 0;
+   }
++  // Size messages as Windows sends them (Wine's message tests): popups and
++  // children get WM_SIZE(SIZE_RESTORED) and WM_MOVE right after WM_CREATE,
++  // overlapped windows at their first ShowWindow. A WS_MAXIMIZE top-level
++  // window is then maximized to the screen the game sees (a display mode
++  // switch makes that the mode's size), with WM_MOVE and
++  // WM_SIZE(SIZE_MAXIMIZED).
++  if (style & WS_MINIMIZE)
++    FatalF("CreateWindowExA: WS_MINIMIZE (created minimized) is not implemented");
++  if (style & (WS_POPUP | WS_CHILD)) {
++    SendSizeMove(hwnd, SIZE_RESTORED, false);
++  } else {
++    std::lock_guard<std::recursive_mutex> l(g_mu);
++    if (Window* wp = Win(hwnd)) wp->need_size = true;
++  }
++  if ((style & WS_MAXIMIZE) && !(style & WS_CHILD)) {
++    SDL_Window* sdl = nullptr;
++    int cw = 0, ch = 0;
++    {
++      std::lock_guard<std::recursive_mutex> l(g_mu);
++      if (Window* wp = Win(hwnd)) {
++        wp->x = wp->y = 0;
++        wp->w = g_display_w;
++        wp->h = g_display_h;
++        wp->maximized = true;
++        ClientSize(*wp, &cw, &ch);
++        sdl = wp->sdl;
++      }
++    }
++    if (sdl) SDL_SetWindowSize(sdl, ToPoints(sdl, cw), ToPoints(sdl, ch));
++    UpdateFullscreen(hwnd);
++    bool overlapped_pending;
++    {
++      std::lock_guard<std::recursive_mutex> l(g_mu);
++      overlapped_pending = Win(hwnd) && Win(hwnd)->need_size;
++    }
++    if (!overlapped_pending) SendSizeMove(hwnd, SIZE_MAXIMIZED, true);
++  }
+   if (style & WS_VISIBLE) {
+     {
+       std::lock_guard<std::recursive_mutex> l(g_mu);
+@@ -1326,6 +1405,17 @@ HLE("user32.dll", ShowWindow, 2) {
+     Send(hwnd, WM_ACTIVATE, 1, 0);
+     Send(hwnd, WM_SETFOCUS, 0, 0);
+   }
++  // An overlapped window's deferred size messages (see CreateWindowExA).
++  bool need_size = false, maximized = false;
++  if (show) {
++    std::lock_guard<std::recursive_mutex> l(g_mu);
++    if (Window* w = Win(hwnd); w && w->need_size) {
++      need_size = true;
++      maximized = w->maximized;
++      w->need_size = false;
++    }
++  }
++  if (need_size) SendSizeMove(hwnd, maximized ? SIZE_MAXIMIZED : SIZE_RESTORED, false);
+   return was ? 1 : 0;
+ }
+ 
+@@ -2202,13 +2292,32 @@ HLE("user32.dll", EnumDisplaySettingsA, 3) {
+   return 1;
+ }
+ 
++// One display adapter, the primary: \\.\DISPLAY1 (EnumDisplaySettings'
++// device). DISPLAY_DEVICEA is filled as far as its cb reaches, as Windows
++// does (the pre-2000 layout ends before DeviceID). Monitors (lpDevice set)
++// are not modelled.
++HLE("user32.dll", EnumDisplayDevicesA, 4) {
++  uint32_t device = Arg(c, 0), index = Arg(c, 1), dd = Arg(c, 2);
++  if (device)
++    FatalF("EnumDisplayDevicesA(\"%s\"): monitor enumeration is not implemented",
++           GStr(device).c_str());
++  if (!dd || index != 0) return 0;
++  const uint32_t cb = Rd32(dd);
++  constexpr uint32_t kDeviceId = 4 + 32 + 128 + 4, kSize = kDeviceId + 128 + 128;
++  if (cb < kDeviceId) return 0;
++  std::memset(GPtr(dd + 4), 0, std::min(cb, kSize) - 4);
++  PutStr(dd + 4, "\\\\.\\DISPLAY1");
++  PutStr(dd + 36, "x86recomp Display Adapter");
++  Wr32(dd + 164, 0x1 | 0x4);  // ATTACHED_TO_DESKTOP | PRIMARY_DEVICE
++  return 1;
++}
++
+ // Display modes are virtual: the host's mode never changes here. A mode
+ // the game switches to becomes the screen it sees (GetSystemMetrics,
+ // EnumDisplaySettings), as after a real switch; a window covering it goes
+ // host fullscreen (UpdateFullscreen). NULL restores the desktop size.
+-HLE("user32.dll", ChangeDisplaySettingsA, 2) {
++static uint32_t ChangeDisplay(uint32_t dm, uint32_t flags) {
+   EnsureSdlVideo();
+-  uint32_t dm = Arg(c, 0), flags = Arg(c, 1);
+   if (!dm) {
+     g_display_w = g_desktop_w;
+     g_display_h = g_desktop_h;
+@@ -2229,6 +2338,19 @@ HLE("user32.dll", ChangeDisplaySettingsA, 2) {
+   return 0;
+ }
+ 
++HLE("user32.dll", ChangeDisplaySettingsA, 2) { return ChangeDisplay(Arg(c, 0), Arg(c, 1)); }
++
++// The Ex form for the one adapter (NULL or EnumDisplayDevices' name); any
++// other device name is DISP_CHANGE_BADPARAM. hwnd is reserved (NULL);
++// lParam only matters with CDS_VIDEOPARAMETERS, which is not supported.
++HLE("user32.dll", ChangeDisplaySettingsExA, 5) {
++  uint32_t device = Arg(c, 0), flags = Arg(c, 3);
++  if (Arg(c, 2) || (flags & 0x20))
++    FatalF("ChangeDisplaySettingsExA: hwnd %08X / CDS_VIDEOPARAMETERS not supported", Arg(c, 2));
++  if (device && Lower(GStr(device)) != "\\\\.\\display1") return uint32_t(-5);
++  return ChangeDisplay(Arg(c, 1), flags);
++}
++
+ // ---- painting and GDI device contexts (no GDI drawing reaches the screen;
+ // the game renders through DirectDraw) -------------------------------------------------
+ 
+diff --git a/src/runtime/hle/winmm_wave.cpp b/src/runtime/hle/winmm_wave.cpp
+new file mode 100644
+index 0000000..c8633c7
+--- /dev/null
++++ b/src/runtime/hle/winmm_wave.cpp
+@@ -0,0 +1,20 @@
++// winmm wave output of a system with no wave output device (no sound card
++// driver installed), until audio output is provided: opening the wave
++// mapper finds no driver, any device ID is out of range. Callers see the
++// errors Windows gives such a system (and Miles, for one, runs silent).
++
++#include "runtime/hle/hle.h"
++
++namespace recomp::hle {
++namespace {
++
++constexpr uint32_t kMmsyserrBadDeviceId = 2, kMmsyserrNoDriver = 6;
++constexpr uint32_t kWaveMapper = 0xFFFFFFFF;
++
++// (phwo, device, format, callback, instance, flags): no handle is created.
++HLE("winmm.dll", waveOutOpen, 6) {
++  return Arg(c, 1) == kWaveMapper ? kMmsyserrNoDriver : kMmsyserrBadDeviceId;
++}
++
++}  // namespace
++}  // namespace recomp::hle
+diff --git a/src/runtime/process.cpp b/src/runtime/process.cpp
+index f94ffd1..b5749e0 100644
+--- a/src/runtime/process.cpp
++++ b/src/runtime/process.cpp
+@@ -351,6 +351,7 @@ int RunProcess(const GameConfig& game, const std::string& exe_path,
+   x87::run::g_doubles = !(doubles && doubles[0] == '0');
+   const char* trace = Env("TRACE");
+   g_trace = trace && trace[0] != '0';
++  MakeDirs(DataDir() + "/drive_c");  // C:\ (hle UserDataRoot) always exists
+   p.game_args = game_args;
+   StartWatchdog();
+   if (!p.mem.Reserve()) FatalF("cannot reserve the guest arena");
+diff --git a/src/runtime/runtime.h b/src/runtime/runtime.h
+index 4045aa4..d44a63c 100644
+--- a/src/runtime/runtime.h
++++ b/src/runtime/runtime.h
+@@ -35,6 +35,13 @@ struct GameConfig {
+     std::string key, name, value;
+   };
+   std::vector<RegistryString> registry;
++  // REG_DWORD values seeded the same way (settings the game itself stores
++  // as DWORDs, e.g. ones its first run would have written).
++  struct RegistryDword {
++    std::string key, name;
++    uint32_t value;
++  };
++  std::vector<RegistryDword> registry_dwords;
+ 
+   // Optional: where the game keeps its own cursor and how it scales
+   // pointer movement, for games that re-centre the pointer every frame

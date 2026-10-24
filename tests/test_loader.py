@@ -19,7 +19,8 @@ Storm.dll and game.dll are:
 and its last command-line character picks a failure to provoke: S calls a
 kernel32 import with no handler, J branches into the middle of a function, N
 calls an address where nothing is mapped; H checks the kernel32 functions of
-patch 0008 and logs 1 (or 0) per check.
+patch 0008 and G those of M3 (GetDiskFreeSpaceA, imm32), logging 1 (or 0) per
+check.
 
 Needs scripts/setup_tools.sh (tools/x86recomp built) and Homebrew LLVM.
 """
@@ -31,8 +32,9 @@ import sys
 import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-X86 = os.path.join(ROOT, "tools", "x86recomp")
-BUILD = os.path.join(X86, "out", "build", "debug")
+# tests/mutate.py points these at its scratch tree.
+X86 = os.environ.get("REFROZEN_X86RECOMP", os.path.join(ROOT, "tools", "x86recomp"))
+BUILD = os.environ.get("REFROZEN_X86RECOMP_BUILD", os.path.join(X86, "out", "build", "debug"))
 LIFT = os.path.join(BUILD, "tools", "lifter", "recomp_lift")
 LLVM = "/opt/homebrew/opt/llvm/bin"
 CXX = os.path.join(LLVM, "clang++")
@@ -140,7 +142,8 @@ def image(base, text, data, dll, import_dir, export_dir=(0, 0)):
 A, B, C, EXE = 0x10000000, 0x10100000, 0x10200000, 0x00400000
 
 # DllMain(h, reason, reserved) at .text+0 logging `ch` on attach, lower case
-# on detach (stdcall, returns TRUE).
+# on detach, then S if lpReserved is non-NULL (a static load) or D if NULL
+# (LoadLibrary/FreeLibrary) (stdcall, returns TRUE).
 DLLMAIN = """
 dllmain:
   mov eax, 0x{ch:02X}
@@ -150,13 +153,21 @@ dllmain:
 1:
   push eax
   call dword ptr [{log}]
+  mov eax, 0x53
+  cmp dword ptr [esp+12], 0
+  jne 2f
+  mov eax, 0x44
+2:
+  push eax
+  call dword ptr [{log}]
   mov eax, 1
   ret 12
 """
 
 
-def build(tmp):
-    """Writes the four modules into tmp/install; returns their function entries."""
+def build(tmp, disk):
+    """Writes the four modules into tmp/install; returns their function entries.
+    disk: the (sectors per cluster, total clusters) that mode G expects."""
     os.makedirs(os.path.join(tmp, "install"), exist_ok=True)
     entries = {}
 
@@ -166,18 +177,25 @@ def build(tmp):
             f.write(image(base, text, data, name != "t.exe", import_dir, export_dir))
         entries[name] = [base + 0x1000 + o for o in funcs]
 
-    # a.dll: buf at .data+0x800 (32 bytes), n at +0x820. The log is written
+    # a.dll: buf at .data+0x800 (64 bytes), n at +0x840. The log is written
     # here; DllMain calls Log through an internal call.
     d = Data(A)
-    buf, n = A + 0x2800, A + 0x2820
+    buf, n = A + 0x2800, A + 0x2840
     exports = d.exports("a.dll", [(1, "Log", 0x1040), (2, None, 0x1080)])
-    d.b += b"\0" * (0x828 - len(d.b))
+    d.b += b"\0" * (0x848 - len(d.b))
     src = f"""
   mov eax, 0x41
   cmp dword ptr [esp+8], 1
   je 1f
   or eax, 0x20
 1:
+  push eax
+  call log
+  mov eax, 0x53
+  cmp dword ptr [esp+12], 0
+  jne 2f
+  mov eax, 0x44
+2:
   push eax
   call log
   mov eax, 1
@@ -214,11 +232,20 @@ log:
     d = Data(EXE)
     k32 = ["LoadLibraryA", "FreeLibrary", "GetModuleHandleA", "OutputDebugStringA", "ExitProcess",
            "GetCommandLineA", "Beep", "GetLastError", "InterlockedCompareExchange", "GetWindowsDirectoryA",
-           "SetCurrentDirectoryA", "DisableThreadLibraryCalls", "GetCommandLineW"]
+           "SetCurrentDirectoryA", "DisableThreadLibraryCalls", "GetCommandLineW", "GetDiskFreeSpaceA"]
+    imm = ["ImmGetContext", "ImmAssociateContext", "ImmAssociateContextEx", "ImmReleaseContext",
+           "ImmGetOpenStatus", "ImmNotifyIME", "ImmGetConversionStatus", "ImmGetCompositionStringA",
+           "ImmGetCandidateListA"]
     # b.dll first: a.dll must still attach first, being b.dll's dependency.
-    iat, imp = d.imports([("b.dll", ["BFn"]), ("a.dll", [2, "Log"]), ("kernel32.dll", k32)])
+    iat, imp = d.imports([("b.dll", ["BFn"]), ("a.dll", [2, "Log"]), ("kernel32.dll", k32),
+                          ("imm32.dll", imm)])
     s = {k: d.put(k.encode() + b"\0", 1) for k in ("a.dll", "b.dll", "c.dll", "C:\\T", "C:\\T\\a.dll")}
-    var, wbuf = d.put(b"\0" * 4), d.put(b"\0" * 64)
+    var, wbuf, espv = d.put(b"\0" * 4), d.put(b"\0" * 64), d.put(b"\0" * 4)
+    for k in ("\\", "/", "c:\\", "", "Q:\\"):
+        s[k] = d.put(k.encode() + b"\0", 1)
+    spc, bps, free, total = (d.put(b"\0" * 4) for _ in range(4))
+    conv, sent = d.put(b"\xAA" * 4), d.put(b"\xAA" * 4)
+    M = lambda sym: I("imm32.dll", sym)
     I = lambda dll, sym: f"dword ptr [{iat[(dll, sym)]:#x}]"
     K = lambda sym: I("kernel32.dll", sym)
     src = f"""
@@ -258,6 +285,8 @@ log:
   je nowhere
   cmp eax, 0x48
   je hle
+  cmp eax, 0x47
+  je m3
   push 0
   call {K("ExitProcess")}
 stub:
@@ -287,6 +316,7 @@ flag:
   call {I("a.dll", "Log")}
   ret
 hle:
+  mov dword ptr [{espv:#x}], esp
   mov dword ptr [{var:#x}], 5
   push 5
   push 7
@@ -344,6 +374,111 @@ hle:
   movzx ecx, byte ptr [eax]
   movzx edx, word ptr [esi]
   cmp ecx, edx
+  call flag
+  cmp esp, dword ptr [{espv:#x}]
+  call flag
+  push 0x0A
+  call {I("a.dll", "Log")}
+  call {I("a.dll", 2)}
+  push eax
+  call {K("OutputDebugStringA")}
+  push 0
+  call {K("ExitProcess")}
+m3:
+  mov dword ptr [{espv:#x}], esp
+""" + "".join(f"""
+  push {total:#x}
+  push {free:#x}
+  push {bps:#x}
+  push {spc:#x}
+  push {root}
+  call {K("GetDiskFreeSpaceA")}
+  cmp eax, 1
+  call flag
+""" for root in ("0", hex(s["\\"]), hex(s["/"]), hex(s["c:\\"]))) + f"""
+  cmp dword ptr [{bps:#x}], 512
+  call flag
+  cmp dword ptr [{spc:#x}], {disk[0]}
+  call flag
+  cmp dword ptr [{total:#x}], {disk[1]}
+  call flag
+  mov eax, dword ptr [{free:#x}]
+  cmp eax, dword ptr [{total:#x}]
+  setbe al
+  cmp al, 1
+  call flag
+""" + "".join(f"""
+  push {total:#x}
+  push {free:#x}
+  push {bps:#x}
+  push {spc:#x}
+  push {s[root]:#x}
+  call {K("GetDiskFreeSpaceA")}
+  cmp eax, 0
+  call flag
+  call {K("GetLastError")}
+  cmp eax, 3
+  je 4f
+  cmp eax, {alt}
+4:
+  call flag
+""" for root, alt in (("", 123), ("Q:\\", 15))) + f"""
+  push 0
+  call {M("ImmGetContext")}
+  cmp eax, 0
+  call flag
+  push 0
+  push 0
+  call {M("ImmAssociateContext")}
+  cmp eax, 0
+  call flag
+  push 0x10
+  push 0
+  push 0
+  call {M("ImmAssociateContextEx")}
+  cmp eax, 0
+  call flag
+  push 0
+  push 0
+  call {M("ImmReleaseContext")}
+  cmp eax, 1
+  call flag
+  push 0
+  call {M("ImmGetOpenStatus")}
+  cmp eax, 0
+  call flag
+  push 0
+  push 0
+  push 0
+  push 0
+  call {M("ImmNotifyIME")}
+  cmp eax, 0
+  call flag
+  push {sent:#x}
+  push {conv:#x}
+  push 0
+  call {M("ImmGetConversionStatus")}
+  cmp eax, 0
+  call flag
+  cmp dword ptr [{conv:#x}], 0xAAAAAAAA
+  call flag
+  cmp dword ptr [{sent:#x}], 0xAAAAAAAA
+  call flag
+  push 16
+  push {wbuf:#x}
+  push 8
+  push 0
+  call {M("ImmGetCompositionStringA")}
+  cmp eax, 0
+  call flag
+  push 16
+  push {wbuf:#x}
+  push 0
+  push 0
+  call {M("ImmGetCandidateListA")}
+  cmp eax, 0
+  call flag
+  cmp esp, dword ptr [{espv:#x}]
   call flag
   push 0x0A
   call {I("a.dll", "Log")}
@@ -422,14 +557,21 @@ def run(tmp, binp, mode, dlls=("a.dll", "b.dll", "c.dll")):
 
 def main():
     with tempfile.TemporaryDirectory() as tmp:
-        binp = lift_and_link(tmp, build(tmp))
+        # GetDiskFreeSpaceA's volume is the host volume of the per-user tree
+        # (XDG_DATA_HOME, set to tmp/data by run()), as statvfs sees it.
+        v = os.statvfs(tmp)
+        cluster = max(v.f_frsize, 512)
+        disk = (cluster // 512, min(v.f_blocks * v.f_frsize // cluster, 0xFFFFFFFF))
+        binp = lift_and_link(tmp, build(tmp, disk))
         if binp:
             code, log, fatal, err = run(tmp, binp, "-")
             # Static imports: a.dll (imported by b.dll and t.exe) attaches first,
-            # then b.dll, before the EXE entry. c.dll attaches on LoadLibrary and
-            # detaches on FreeLibrary; FreeLibrary of a.dll and b.dll does not
-            # unload a static import. #2 resolved by ordinal returned the buffer.
-            check("DllMain order, ordinal + name binding, pinned static loads", log, "ABEFCc")
+            # then b.dll, before the EXE entry, each with a non-NULL lpReserved
+            # (S). c.dll attaches on LoadLibrary and detaches on FreeLibrary,
+            # with NULL (D) (MSDN, DllMain). FreeLibrary of a.dll and b.dll does
+            # not unload a static import. #2 resolved by ordinal returned the
+            # buffer.
+            check("DllMain order, ordinal + name binding, pinned static loads", log, "ASBSEFCDcD")
             check("clean exit", (code, fatal), (0, None))
 
             code, log, fatal, err = run(tmp, binp, "S")
@@ -461,7 +603,28 @@ def main():
             # DisableThreadLibraryCalls takes a loaded DLL, refuses anything else
             # with ERROR_MOD_NOT_FOUND (126); GetCommandLineW matches the A form.
             check("patch 0008 kernel32 functions", code, 0)
-            check("patch 0008 kernel32 results", re.findall(r"^[01]+$", err, re.M), ["1" * 14])
+            got = re.findall(r"^[01]+$", err, re.M)
+            check("patch 0008 kernel32 results", [g[:14] for g in got], ["1" * 14])
+            # The stack pointer after the calls equals the one before: every
+            # handler pops its stdcall arguments.
+            check("patch 0008 stack balanced", [g[14:] for g in got], ["1"])
+
+            code, log, fatal, err = run(tmp, binp, "G")
+            # GetDiskFreeSpaceA (Wine's conformance tests, which pass on Windows):
+            # NULL, "\\", "/" and "c:\\" succeed; 512-byte sectors; the volume's
+            # cluster size and count as statvfs gives them; free <= total; "" fails
+            # with ERROR_PATH_NOT_FOUND or ERROR_INVALID_NAME, a drive that does
+            # not exist with ERROR_PATH_NOT_FOUND or ERROR_INVALID_DRIVE.
+            # imm32 with IMM disabled (Windows' imm32 as ReactOS reimplements it):
+            # ImmGetContext NULL, ImmAssociateContext NULL, ImmAssociateContextEx
+            # FALSE, ImmReleaseContext TRUE, and on a NULL HIMC ImmGetOpenStatus,
+            # ImmNotifyIME, ImmGetConversionStatus FALSE (outputs untouched),
+            # ImmGetCompositionStringA and ImmGetCandidateListA 0.
+            check("M3 functions", code, 0)
+            got = re.findall(r"^[01]+$", err, re.M)
+            check("M3 GetDiskFreeSpaceA results", [g[:12] for g in got], ["1" * 12])
+            check("M3 imm32 results", [g[12:23] for g in got], ["1" * 11])
+            check("M3 stack balanced", [g[23:] for g in got], ["1"])
 
             # An importer listed before what it imports cannot bind.
             code, log, fatal, err = run(tmp, binp, "-", ("b.dll", "a.dll", "c.dll"))
