@@ -383,11 +383,145 @@ def test_jump_tables():
         check("0005 without relocations an unbounded table is not guessed", switch_cases(out, t2), None)
 
 
+# ---- 0006: SSE2 forms of the VC8 CRT's math paths -------------------------------
+
+SSE2_CONV = bytes([
+    0xF3, 0x0F, 0x5A, 0xC1,        # cvtss2sd xmm0, xmm1   1.5f -> 3FF8000000000000, xmm0[127:64] kept
+    0xF2, 0x0F, 0x5A, 0xD3,        # cvtsd2ss xmm2, xmm3   0.1 -> 3DCCCCCD (inexact: PE), xmm2[127:32] kept
+    0x0F, 0x5A, 0xE5,              # cvtps2pd xmm4, xmm5   SNaN 7F800001 -> 7FF8000020000000 (IE),
+                                   #                       -2.0f -> C000000000000000
+    0x66, 0x0F, 0x5A, 0xF7,        # cvtpd2ps xmm6, xmm7   1.0 -> 3F800000, 1e300 -> 7F800000
+                                   #                       (overflow: OE, PE), upper half zeroed
+    0xC3])
+SSE2_MISC = bytes([
+    0xF2, 0x0F, 0x5D, 0xC1,        # minsd xmm0, xmm1      +0, -0: both zeros -> source (-0)
+    0xF2, 0x0F, 0x5D, 0xD3,        # minsd xmm2, xmm3      QNaN, 3.0 -> source 3.0, IE
+    0xF3, 0x0F, 0x51, 0xE5,        # sqrtss xmm4, xmm5     2.25 -> 1.5 (exact)
+    0xF3, 0x0F, 0x53, 0xF7,        # rcpss xmm6, xmm7      4.0 -> 0.25
+    0x66, 0x0F, 0x50, 0xC1,        # movmskpd eax, xmm1    signs (lo -0, hi +1.0) -> 1
+    0xC3])
+SSE2_INT = bytes([
+    0x66, 0x0F, 0xFE, 0xC1,        # paddd xmm0, xmm1      [FFFFFFFF,1,2,3]+[1,1,1,1] -> [0,2,3,4]
+    0x66, 0x0F, 0xFD, 0xD3,        # paddw xmm2, xmm3      7FFF+1 -> 8000 in every word
+    0x66, 0x0F, 0x72, 0xE4, 0x28,  # psrad xmm4, 40        [80000000,7FFFFFFF,FFFFFFFB,5] ->
+                                   #                       [FFFFFFFF,0,FFFFFFFF,0]
+    0xF3, 0x0F, 0x53, 0xEE,        # rcpss xmm5, xmm6      denormal 00000001 -> +inf 7F800000
+    0xF3, 0x0F, 0x53, 0xFF,        # rcpss xmm7, xmm7      2^127 -> 2^-127, below normal -> +0
+    0xC3])
+
+SSE2_HARNESS = r"""
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include "runtime/lifted.h"
+namespace recomp {
+uint8_t* g_guest_base = nullptr;
+void Unimplemented(Ctx&, uint32_t va, const char* w) { std::printf("unimplemented %08X %s\n", va, w); std::exit(3); }
+void BadJump(Ctx&, uint32_t a, uint32_t b) { std::printf("bad jump %08X %08X\n", a, b); std::exit(3); }
+void RaiseDivideError(Ctx&, uint32_t) { std::exit(3); }
+namespace gen { void f_@CONV@(Ctx&); void f_@MISC@(Ctx&); void f_@INT@(Ctx&); }
+}
+using namespace recomp;
+static void Set(Ctx& c, int r, uint64_t lo, uint64_t hi) {
+  std::memcpy(c.xmm[r].b, &lo, 8); std::memcpy(c.xmm[r].b + 8, &hi, 8);
+}
+static void Dump(const char* tag, const Ctx& c) {
+  std::printf("%s mxcsr=%04X eax=%08X", tag, c.mxcsr, c.eax);
+  for (int r = 0; r < 8; r++) {
+    uint64_t lo, hi;
+    std::memcpy(&lo, c.xmm[r].b, 8); std::memcpy(&hi, c.xmm[r].b + 8, 8);
+    std::printf(" x%d=%016llX:%016llX", r, (unsigned long long)hi, (unsigned long long)lo);
+  }
+  std::printf("\n");
+}
+static Ctx Fresh() {
+  Ctx c{};
+  c.esp = 0x2FFFF0; lift::Wr<uint32_t>(g_guest_base, c.esp, 0xDEADBEEF);
+  c.eflags = 0x202; c.mxcsr = 0x1F80; c.fpu.cw = 0x27F; c.fpu.empty = 0xFF;
+  for (int r = 0; r < 8; r++) Set(c, r, 0xAAAAAAAAAAAAAAAAull, 0xAAAAAAAAAAAAAAAAull);
+  return c;
+}
+int main() {
+  g_guest_base = static_cast<uint8_t*>(std::calloc(1, 0x400000));
+  Ctx c = Fresh();
+  Set(c, 1, 0xBBBBBBBB3FC00000ull, 0xBBBBBBBBBBBBBBBBull);  // 1.5f
+  Set(c, 3, 0x3FB999999999999Aull, 0);                      // 0.1
+  Set(c, 5, 0xC00000007F800001ull, 0);                      // [SNaN, -2.0f]
+  Set(c, 7, 0x3FF0000000000000ull, 0x7E37E43C8800759Cull);  // [1.0, 1e300]
+  gen::f_@CONV@(c); Dump("conv", c);
+  c = Fresh();
+  Set(c, 0, 0x0000000000000000ull, 0x1111111111111111ull);  // +0
+  Set(c, 1, 0x8000000000000000ull, 0x3FF0000000000000ull);  // [-0, +1.0]
+  Set(c, 2, 0x7FF8000000000000ull, 0x2222222222222222ull);  // QNaN
+  Set(c, 3, 0x4008000000000000ull, 0);                      // 3.0
+  Set(c, 5, 0x0000000040100000ull, 0);                      // 2.25f
+  Set(c, 7, 0x0000000040800000ull, 0);                      // 4.0f
+  gen::f_@MISC@(c); Dump("misc", c);
+  c = Fresh();
+  Set(c, 0, 0x00000001FFFFFFFFull, 0x0000000300000002ull);
+  Set(c, 1, 0x0000000100000001ull, 0x0000000100000001ull);
+  Set(c, 2, 0x7FFF7FFF7FFF7FFFull, 0x7FFF7FFF7FFF7FFFull);
+  Set(c, 3, 0x0001000100010001ull, 0x0001000100010001ull);
+  Set(c, 4, 0x7FFFFFFF80000000ull, 0x00000005FFFFFFFBull);
+  Set(c, 6, 0x0000000000000001ull, 0);                      // smallest denormal
+  Set(c, 7, 0x000000007F000000ull, 0);                      // 2^127
+  gen::f_@INT@(c); Dump("int", c);
+}
+"""
+
+
+def test_sse2():
+    text = bytearray(b"\xCC" * 0x300)
+    offs = {"CONV": 0x000, "MISC": 0x100, "INT": 0x200}
+    for k, code in (("CONV", SSE2_CONV), ("MISC", SSE2_MISC), ("INT", SSE2_INT)):
+        text[offs[k]:offs[k] + len(code)] = code
+    with tempfile.TemporaryDirectory() as tmp:
+        r, _, out = lift(tmp, pe(bytes(text), b"\0" * 0x10, None), [TEXT + o for o in offs.values()])
+        report = open(os.path.join(out, "lift_report.txt")).read() if os.path.isdir(out) else ""
+        check("0006 lift succeeds, no unimplemented sites",
+              (r.returncode, re.search(r"unimplemented:\n(\s+\S.*\n)*warnings", report).group(0).count("\n") - 1), (0, 0))
+        harness = SSE2_HARNESS
+        for k, o in offs.items():
+            harness = harness.replace(f"@{k}@", f"{TEXT + o:08X}")
+        with open(os.path.join(tmp, "harness.cpp"), "w") as f:
+            f.write(harness)
+        srcs = [os.path.join(out, n) for n in sorted(os.listdir(out)) if n.startswith("gen_")]
+        binp = os.path.join(tmp, "t")
+        cc = subprocess.run([CXX, "-std=c++20", "-O1", "-w", "-I", os.path.join(X86, "src"),
+                             os.path.join(tmp, "harness.cpp"), *srcs, "-L", BUILD, "-lrecomp_x87",
+                             "-lrecomp_image", "-Wl,-rpath," + BUILD, "-o", binp], capture_output=True, text=True)
+        check("0006 lifted code compiles", cc.returncode, 0)
+        if cc.returncode:
+            print(cc.stderr[:2000])
+            return
+        lines = {l.split()[0]: l.split() for l in subprocess.run([binp], capture_output=True, text=True).stdout.splitlines()}
+        conv, misc, ints = lines.get("conv", []), lines.get("misc", []), lines.get("int", [])
+        x = lambda row, r: row[3 + r].split("=")[1] if len(row) > 3 + r else None
+        check("0006 cvtss2sd exact, destination bits 127:64 kept", x(conv, 0), "AAAAAAAAAAAAAAAA:3FF8000000000000")
+        check("0006 cvtsd2ss rounds 0.1, destination bits 127:32 kept", x(conv, 2), "AAAAAAAAAAAAAAAA:AAAAAAAA3DCCCCCD")
+        check("0006 cvtps2pd quiets an SNaN keeping its payload", x(conv, 4), "C000000000000000:7FF8000020000000")
+        check("0006 cvtpd2ps overflow to +inf, upper half zeroed", x(conv, 6), "0000000000000000:7F8000003F800000")
+        check("0006 conversion flags PE|IE|OE", conv[1] if conv else None, "mxcsr=1FA9")
+        check("0006 minsd of two zeros returns the source", x(misc, 0), "1111111111111111:8000000000000000")
+        check("0006 minsd with a QNaN returns the source", x(misc, 2), "2222222222222222:4008000000000000")
+        check("0006 sqrtss", x(misc, 4), "AAAAAAAAAAAAAAAA:AAAAAAAA3FC00000")
+        check("0006 rcpss 4 -> 0.25", x(misc, 6), "AAAAAAAAAAAAAAAA:AAAAAAAA3E800000")
+        check("0006 movmskpd and minsd's IE", (misc[2] if misc else None, misc[1] if misc else None),
+              ("eax=00000001", "mxcsr=1F81"))
+        check("0006 paddd wraps", x(ints, 0), "0000000400000003:0000000200000000")
+        check("0006 paddw wraps", x(ints, 2), "8000800080008000:8000800080008000")
+        check("0006 psrad count > 31 fills with the sign", x(ints, 4), "00000000FFFFFFFF:00000000FFFFFFFF")
+        check("0006 rcpss of a denormal is +inf", x(ints, 5), "AAAAAAAAAAAAAAAA:AAAAAAAA7F800000")
+        check("0006 rcpss result below normal flushes to +0", x(ints, 7), "0000000000000000:0000000000000000")
+        check("0006 integer ops and rcpss leave MXCSR alone", ints[1] if ints else None, "mxcsr=1F80")
+
+
 def main():
     test_reloc_discovery()
     test_mmx_sse()
     test_code_span()
     test_jump_tables()
+    test_sse2()
     print("lifter patches:", "FAILED" if failures else "ok")
     return 1 if failures else 0
 

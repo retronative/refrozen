@@ -1,0 +1,228 @@
+diff --git a/src/runtime/sse.cpp b/src/runtime/sse.cpp
+index f9a5981..17969db 100644
+--- a/src/runtime/sse.cpp
++++ b/src/runtime/sse.cpp
+@@ -232,6 +232,53 @@ void CmpT(Ctx& c, int lanes, Xmm& d, const Xmm& s, uint8_t pred, uint32_t va) {
+   d = r;
+ }
+ 
++// One float lane to double (exact) and one double lane to float (rounded
++// per MXCSR). NaNs keep their sign and the top of their payload, quieted.
++uint64_t WidenLane(Scope& sc, uint32_t a) {
++  if (IsNaN<false>(a)) {
++    if (IsSNaN<false>(a)) sc.flags |= kIE;
++    return uint64_t(a & 0x80000000u) << 32 | 0x7FF8000000000000ull |
++           uint64_t(a & 0x007FFFFFu) << 29;
++  }
++  sc.Operand<false>(a);
++  sc.Begin();
++  uint64_t r = f32_to_f64(float32_t{a}).v;
++  sc.End();
++  return r;
++}
++uint32_t NarrowLane(Scope& sc, uint64_t a) {
++  if (IsNaN<true>(a)) {
++    if (IsSNaN<true>(a)) sc.flags |= kIE;
++    return uint32_t(a >> 32 & 0x80000000u) | 0x7FC00000u |
++           uint32_t((a & 0x000FFFFFFFFFFFFFull) >> 29);
++  }
++  sc.Operand<true>(a);
++  sc.Begin();
++  uint32_t r = f64_to_f32(float64_t{a}).v;
++  sc.End();
++  return r;
++}
++
++template <bool D>
++void MinT(Ctx& c, int lanes, Xmm& d, const Xmm& s, uint32_t va) {
++  using U = typename Fmt<D>::U;
++  Scope sc(c, va);
++  Xmm r = d;
++  for (int i = 0; i < lanes; i++) {
++    U a = Lane<U>(d, i), b = Lane<U>(s, i);
++    if (IsNaN<D>(a) || IsNaN<D>(b)) {
++      sc.flags |= kIE;  // MIN/MAX signal on QNaN operands as well
++      SetLane<U>(r, i, b);
++      continue;
++    }
++    sc.Operand<D>(a);
++    sc.Operand<D>(b);
++    SetLane<U>(r, i, Order<D>(a, b) < 0 ? a : b);  // equal, or both zeros: b
++  }
++  sc.Finish();
++  d = r;
++}
++
+ template <bool D>
+ int ComiT(Ctx& c, bool ordered, const Xmm& x, const Xmm& y, uint32_t va) {
+   using U = typename Fmt<D>::U;
+@@ -334,6 +381,51 @@ void Rsqrt(Xmm& d, const Xmm& s) {
+ 
+ void Cvtsi2sd(Xmm& d, int32_t v) { SetLane<uint64_t>(d, 0, i32_to_f64(v).v); }
+ 
++void CvtFloat(Ctx& c, Cvt kind, Xmm& d, const Xmm& s, uint32_t va) {
++  Scope sc(c, va);
++  Xmm r = d;
++  switch (kind) {
++    case Cvt::Ss2sd:
++      SetLane<uint64_t>(r, 0, WidenLane(sc, Lane<uint32_t>(s, 0)));
++      break;
++    case Cvt::Sd2ss:
++      SetLane<uint32_t>(r, 0, NarrowLane(sc, Lane<uint64_t>(s, 0)));
++      break;
++    case Cvt::Ps2pd:
++      for (int i = 0; i < 2; i++) SetLane<uint64_t>(r, i, WidenLane(sc, Lane<uint32_t>(s, i)));
++      break;
++    case Cvt::Pd2ps:
++      r = Xmm{};
++      for (int i = 0; i < 2; i++) SetLane<uint32_t>(r, i, NarrowLane(sc, Lane<uint64_t>(s, i)));
++      break;
++  }
++  sc.Finish();
++  d = r;
++}
++
++void Min(Ctx& c, bool dbl, int lanes, Xmm& d, const Xmm& s, uint32_t va) {
++  if (dbl)
++    MinT<true>(c, lanes, d, s, va);
++  else
++    MinT<false>(c, lanes, d, s, va);
++}
++
++uint32_t RcpLane(uint32_t x) {
++  const uint32_t exp = (x >> 23) & 0xFF, frac = x & 0x7FFFFF, sign = x & 0x80000000u;
++  if (exp == 0xFF && frac) return x | 0x00400000u;  // NaN: quieted
++  if (exp == 0) return sign | 0x7F800000u;          // ±0, denormal: ±inf
++  if (exp == 0xFF) return sign;                     // ±inf: ±0
++  const uint_fast8_t mode = softfloat_roundingMode, flags = softfloat_exceptionFlags;
++  softfloat_roundingMode = softfloat_round_near_even;
++  uint32_t r = f32_div(float32_t{0x3F800000u}, float32_t{x}).v;
++  softfloat_roundingMode = mode;
++  softfloat_exceptionFlags = flags;
++  if (!(r & 0x7F800000u)) r = sign;  // below the smallest normal: flushed to ±0
++  return r;
++}
++
++void Rcpss(Xmm& d, const Xmm& s) { SetLane<uint32_t>(d, 0, RcpLane(Lane<uint32_t>(s, 0))); }
++
+ uint32_t CvtToI32(Ctx& c, bool dbl, const Xmm& s, bool truncate, uint32_t va) {
+   Scope sc(c, va);
+   bool den = dbl ? IsDenormal<true>(Lane<uint64_t>(s, 0))
+diff --git a/src/runtime/sse.h b/src/runtime/sse.h
+index 4ed5963..ed29aac 100644
+--- a/src/runtime/sse.h
++++ b/src/runtime/sse.h
+@@ -83,6 +83,28 @@ uint32_t RsqrtLane(uint32_t x);
+ // CVTSI2SD: the low lane of d = (double)v (always exact).
+ void Cvtsi2sd(Xmm& d, int32_t v);
+ 
++// Float/double conversions (reFrozen: the VC8 CRT's SSE2 math paths).
++// CVTSS2SD: low double of d = low float of s, upper lane of d kept.
++// CVTSD2SS: low float of d = low double of s, upper three lanes kept.
++// CVTPS2PD: both doubles of d from the two low floats of s.
++// CVTPD2PS: the two low floats of d from both doubles of s, upper zeroed.
++// Widening is exact; narrowing rounds per MXCSR. A NaN keeps its sign and
++// the top of its payload and is quieted (an SNaN raises IE).
++enum class Cvt : uint8_t { Ss2sd, Sd2ss, Ps2pd, Pd2ps };
++void CvtFloat(Ctx& c, Cvt kind, Xmm& d, const Xmm& s, uint32_t va);
++
++// MINSD/MINSS/MINPD/MINPS: d = d < s ? d : s, lane-wise. If either is a
++// NaN (QNaN too: IE) or both are zeros, the result is s, the second
++// operand. Scalar forms keep the upper lanes of d.
++void Min(Ctx& c, bool dbl, int lanes, Xmm& d, const Xmm& s, uint32_t va);
++
++// RCPSS: low float of d = 1/s, upper lanes kept. Like RSQRTPS it has only
++// an error bound (|rel. error| <= 1.5 * 2^-12): here the correctly rounded
++// reciprocal. No flags: ±0 and denormals give ±inf, ±inf ±0, a result
++// below the smallest normal ±0 (as the hardware flushes it), NaNs quieted.
++void Rcpss(Xmm& d, const Xmm& s);
++uint32_t RcpLane(uint32_t x);
++
+ // CVT(T)SS2SI / CVT(T)SD2SI of the low lane of s.
+ uint32_t CvtToI32(Ctx& c, bool dbl, const Xmm& s, bool truncate, uint32_t va);
+ 
+@@ -131,6 +153,16 @@ inline void Sub(Xmm& d, const Xmm& s) {
+   for (int i = 0; i < int(16 / sizeof(T)); i++)
+     SetLane<T>(d, i, T(Lane<T>(d, i) - Lane<T>(s, i)));
+ }
++// MOVMSKPD: the sign bits of the two doubles.
++inline uint32_t MovMskPd(const Xmm& s) {
++  return uint32_t(s.b[7] >> 7) | uint32_t(s.b[15] >> 7) << 1;
++}
++// PSRAD: each signed dword shifted right by `count`; counts above 31 fill
++// the lane with its sign bit.
++inline void ShrAD(Xmm& d, uint64_t count) {
++  const int n = count > 31 ? 31 : int(count);
++  for (int i = 0; i < 4; i++) SetLane<int32_t>(d, i, Lane<int32_t>(d, i) >> n);
++}
+ // PMAXSW.
+ inline void MaxS16(Xmm& d, const Xmm& s) {
+   for (int i = 0; i < 8; i++) {
+diff --git a/tools/lifter/emit.cpp b/tools/lifter/emit.cpp
+index 5b577a1..f5963ac 100644
+--- a/tools/lifter/emit.cpp
++++ b/tools/lifter/emit.cpp
+@@ -1528,23 +1528,59 @@ void InsnEmitter::EmitSse() {
+       if (!IsXmm(0) || IsXmm(1)) return Unimpl();
+       L(Fmt("::recomp::sse::Cvtsi2sd(%s, int32_t(%s));", XmmRef(0).c_str(), Read(1).c_str()));
+       return;
+-    case ZYDIS_MNEMONIC_SQRTSD: {
++    case ZYDIS_MNEMONIC_SQRTSD: case ZYDIS_MNEMONIC_SQRTSS: {
+       if (!IsXmm(0)) return Unimpl();
+       std::string s = src(1);
+-      L(Fmt("::recomp::sse::Sqrt(c, true, 1, %s, %s, %s);", XmmRef(0).c_str(), s.c_str(),
++      L(Fmt("::recomp::sse::Sqrt(c, %s, 1, %s, %s, %s);", b(m == ZYDIS_MNEMONIC_SQRTSD),
++            XmmRef(0).c_str(), s.c_str(), va.c_str()));
++      return;
++    }
++    case ZYDIS_MNEMONIC_CVTSS2SD: case ZYDIS_MNEMONIC_CVTSD2SS:
++    case ZYDIS_MNEMONIC_CVTPS2PD: case ZYDIS_MNEMONIC_CVTPD2PS: {
++      if (!IsXmm(0)) return Unimpl();
++      const char* kind = m == ZYDIS_MNEMONIC_CVTSS2SD   ? "Ss2sd"
++                         : m == ZYDIS_MNEMONIC_CVTSD2SS ? "Sd2ss"
++                         : m == ZYDIS_MNEMONIC_CVTPS2PD ? "Ps2pd"
++                                                        : "Pd2ps";
++      std::string s = src(1);
++      L(Fmt("::recomp::sse::CvtFloat(c, ::recomp::sse::Cvt::%s, %s, %s, %s);", kind,
++            XmmRef(0).c_str(), s.c_str(), va.c_str()));
++      return;
++    }
++    case ZYDIS_MNEMONIC_MINSD: {
++      if (!IsXmm(0)) return Unimpl();
++      std::string s = src(1);
++      L(Fmt("::recomp::sse::Min(c, true, 1, %s, %s, %s);", XmmRef(0).c_str(), s.c_str(),
+             va.c_str()));
+       return;
+     }
++    case ZYDIS_MNEMONIC_RCPSS: {
++      if (!IsXmm(0)) return Unimpl();
++      std::string s = src(1);
++      L(Fmt("::recomp::sse::Rcpss(%s, %s);", XmmRef(0).c_str(), s.c_str()));
++      return;
++    }
++    case ZYDIS_MNEMONIC_MOVMSKPD:
++      if (!IsXmm(1)) return Unimpl();
++      L(Write(0, Fmt("::recomp::sse::MovMskPd(%s)", XmmRef(1).c_str())));
++      return;
++    case ZYDIS_MNEMONIC_PSRAD:
++      if (!IsXmm(0) || !IsImm(1)) return Unimpl();
++      L(Fmt("::recomp::sse::ShrAD(%s, %s);", XmmRef(0).c_str(), imm8(1).c_str()));
++      return;
+     case ZYDIS_MNEMONIC_RSQRTPS: {
+       if (!IsXmm(0)) return Unimpl();
+       std::string s = src(1);
+       L(Fmt("::recomp::sse::Rsqrt(%s, %s);", XmmRef(0).c_str(), s.c_str()));
+       return;
+     }
+-    case ZYDIS_MNEMONIC_PADDQ: {
++    case ZYDIS_MNEMONIC_PADDQ: case ZYDIS_MNEMONIC_PADDD: case ZYDIS_MNEMONIC_PADDW: {
+       if (!IsXmm(0)) return Unimpl();
++      const char* t = m == ZYDIS_MNEMONIC_PADDQ   ? "uint64_t"
++                      : m == ZYDIS_MNEMONIC_PADDD ? "uint32_t"
++                                                  : "uint16_t";
+       std::string s = src(1);
+-      L(Fmt("::recomp::sse::Add<uint64_t>(%s, %s);", XmmRef(0).c_str(), s.c_str()));
++      L(Fmt("::recomp::sse::Add<%s>(%s, %s);", t, XmmRef(0).c_str(), s.c_str()));
+       return;
+     }
+     case ZYDIS_MNEMONIC_PCMPEQB: case ZYDIS_MNEMONIC_PCMPEQW: case ZYDIS_MNEMONIC_PCMPEQD:
