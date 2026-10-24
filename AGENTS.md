@@ -71,6 +71,9 @@ scripts/wine_loadtest.sh game/wine-oracle 'Maps\Download\<map>.w3x' 60 game/load
 
 - Embedded executables found in maps (e.g. iCCup's `dota.dll`) are inspected statically only:
   never run them, under Wine or otherwise.
+- iCCup (M8): no work without the user's approval and iCCup's official cooperation; never bypass,
+  disable or work around its anti-cheat or client-integrity checks; no network tests against its
+  services before M8 is approved.
 - After changing a patch, delete the `refrozen` branch in `tools/x86recomp` and re-run
   `setup_tools.sh`. Lifter output must not change unintentionally: diff `game/generated/` before
   and after any lifter change, and keep two lifts byte-identical.

@@ -8,8 +8,9 @@ criteria are met **and observed**. Each milestone records **Evidence** (what was
 States: **Passed**, **Partial** (lists the unmet criteria), **Blocked** (root cause or the
 unknown documented). Diagnosing a failure is progress; it does not pass a criterion.
 
-**Order: offline first.** A playable local match comes first, then AI bots, then multiplayer.
-Nothing network-facing is needed before M6.
+**Order: offline first.** A playable local match comes first, then AI bots, then LAN and private
+multiplayer (M7), and only then the iCCup online community (M8), which also depends on iCCup's
+official cooperation. Nothing network-facing is needed before M7.
 
 ## M0 — Correct input and feasibility *(Passed 2026-10-24, signed off by the user)*
 - **Accept → Evidence** (details and commands in FEASIBILITY §1–6):
@@ -117,9 +118,34 @@ Nothing network-facing is needed before M6.
 - A DotA AI map (e.g. an "AI" build, or the map's own computer players) playing a full match
   with computer opponents and allies; frame pacing and long-session stability (60+ minutes).
 
-## M7 — Multiplayer
+## M7 — LAN and private multiplayer
 - LAN (UDP 6112, W3GS) between two reFrozen instances, then against a Windows 1.26a client
-  (bit-exact x87/SSE lockstep, no desyncs over a full match); then PvPGN/iCCup-style servers
-  (the w3l logon-hash behaviour), only with the user's approval for anything network-facing.
+  (bit-exact x87/SSE lockstep, no desyncs over a full match); then private servers the players
+  run themselves (PvPGN-style, the w3l logon-hash behaviour), only with the user's approval for
+  anything network-facing. Public online services, iCCup included, are M8.
+
+## M8 — iCCup online compatibility
+- **Goal:** native macOS players can join the existing iCCup DotA community, within iCCup's
+  anti-cheat and client-integrity requirements.
+- **Depends on:** M7 passed and signed off, and official cooperation from iCCup. Without iCCup's
+  agreement this milestone does not start. Anti-cheat is never bypassed, disabled or emulated
+  around; integration happens only in the form iCCup approves.
+- **Scope:**
+  - Research the iCCup launcher, its authentication, network protocols and native plugin
+    dependencies, including the `dota.dll` embedded in its maps (statically, as for M0; FEASIBILITY
+    §5). Network-facing research only with the user's approval and within iCCup's terms.
+  - iCCup-compatible map loading and gameplay (the native-plugin builds deferred in M0: 6.83se,
+    6.83s, 6.85.308).
+  - Compatibility with existing Windows iCCup players (lockstep, as M7 for LAN).
+  - A modular iCCup integration layer, separate from the game port, that LAN, private and offline
+    play neither load nor depend on.
+  - Signed builds, reproducible build evidence and client-integrity verification, in the form
+    iCCup's anti-cheat needs.
+  - Seek iCCup's official approval of a native macOS client and of its anti-cheat compatibility.
+- **Accept:**
+  - The client and protocol compatibility iCCup requires, demonstrated.
+  - A full online match with Windows iCCup players, no desync.
+  - iCCup's official anti-cheat approval, and its integration requirements met.
+  - No regression in offline or LAN play (their acceptance tests re-run).
 
 Following `../game-port-knowledge/general/bring-up-checklist.md` throughout.

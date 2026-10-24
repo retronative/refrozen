@@ -12,7 +12,7 @@ UNRESOLVED. The full research report with sources is
 | Is the input the right release? | **Yes.** WC3 RoC + TFT 1.21b (enGB), patched with the official 1.26a English patch to build 1.26.0.6401. All binaries are x86 Win32 PE, MSVC 2005 (linker 8.0), unpacked (§2). |
 | Recompile toolchain | **x86recomp + 8 reFrozen patches.** All ten modules (war3.exe, game.dll, Storm.dll, Mss32.dll, msvcr80.dll, 5 Miles providers) lift with 0 reachable unimplemented sites, pass the structural audit, are byte-identical across runs and compile for arm64 (§7, §9). |
 | Native process (M2) | **Reaches `GameMain`.** One arm64 executable (`build/main/refrozen`) maps all ten modules at their preferred bases, binds all 675 cross-module imports (Storm by ordinal, Miles by name) to the lifted exports, runs the DllMains dependencies-first and calls `game.dll!GameMain`; every Win32 import without a handler is a strict stub (§9). |
-| DotA target | **DotA 6.85oz LoD** (pure JASS) for the offline milestones; iCCup native-plugin builds (6.83se/6.83s/6.85.308) deferred (§5). |
+| DotA target | **DotA 6.85oz LoD** (pure JASS) for the offline milestones; iCCup native-plugin builds (6.83se/6.83s/6.85.308) deferred to M8, iCCup online compatibility, which needs M7 and iCCup's official cooperation (§5). |
 | Miles | **Recompile Mss32.dll 6.1d and its providers** rather than extend x86recomp's Miles HLE (§8). |
 | Reimplementation instead? | **No** for this goal. No open-source engine plays DotA 6.83 or keeps lockstep with real 1.26a clients. |
 | Native install path | **Done.** `scripts/native_install.py` installs RoC + TFT and applies the 1.26a patch with no Wine; it reproduces the official result (all loose files byte-identical, all MPQ contents identical except the CD-key files), deterministically (§1). |
@@ -173,6 +173,9 @@ Static: `scripts/map_check.py <map> game/native-install` (MPQ/HM3W/w3i headers; 
 - **Crash detail (OBSERVED):** both plugin maps fault identically during map load: a virtual call
   through an object whose vtable entry is 0. Root cause UNRESOLVED (HYPOTHESIS: an object the
   iCCup loader normally registers or patches); not pursued, since it is outside stock behaviour.
+- **Roadmap (decision 2026-10-24):** iCCup maps and online play are M8 (ROADMAP), after LAN and
+  private multiplayer (M7) and only with iCCup's official cooperation and anti-cheat approval;
+  nothing iCCup-specific is implemented or tested on the network before then.
 
 ## 6. Compatibility issues carried forward
 - **CD-key step (UNRESOLVED, M3):** the native installer leaves the 5 `font\font.*` files as
