@@ -11,11 +11,12 @@ ReCarbon (`../recarbon`); reusable lessons are in `../game-port-knowledge`.
 | `../recarbon/` | Precedent port (Xbox 360 → arm64) | **Read-only.** Learn from its process, docs and validation; never copy its title-specific hooks or addresses. |
 | `../game-port-knowledge/` | Port knowledge base | Read `INDEX.md` and `general/bring-up-checklist.md` before each stage. Follow its `AGENTS.md` to add knowledge. |
 | `../DOTA/` | The player's own game installers, client pack and maps | **Read-only.** Never commit anything from it. |
-| `game/` | Extracted tomes, 1.26a oracle binaries (`oracle-1.26a/`), Ghidra project, symbols, generated code | git-ignored, proprietary-derived |
+| `game/` | Extracted tomes, 1.26a oracle binaries (`oracle-1.26a/`), Ghidra project, symbols, generated code, launch logs (`attempts/`), reports | git-ignored, proprietary-derived |
 | `tools/` | x86recomp (pinned + patches), Wine (dev oracle only) | git-ignored |
-| `patches/x86recomp/` | Our x86recomp patches 0001–0005, applied in order by `scripts/setup_tools.sh` | Each with hand-computed tests (`tests/test_lifter_patches.py`, x86recomp's `lift_atomic_test`) that fail under mutation. A patch is a diff against the tree with the earlier ones applied. |
+| `patches/x86recomp/` | Our x86recomp patches 0001–0008, applied in order by `scripts/setup_tools.sh` | Each with tests that fail under mutation: lifter patches in `tests/test_lifter_patches.py` (hand-computed) and x86recomp's `lift_atomic_test`; runtime/loader/HLE patches in `tests/test_loader.py`. A patch is a diff against the tree with the earlier ones applied. |
+| `CMakeLists.txt`, `src/` | The game project: `refrozen` = lifted code + x86recomp runtime (`GameConfig` in `src/main.cpp`) | Lifted DLLs listed in dependency order. Win32 functions are added to the runtime (a patch), never stubbed to succeed. |
 | `config/` | Lifter manifests per module (`<module>.manifest`), `unreachable.tsv`, and the pinned lift input `symbols/<module>/functions.tsv`, `jumptables.tsv` | Addresses, flags and evidence only, no game bytes. Every manifest entry says why. Refresh `symbols/` only deliberately (Ghidra varies between runs) and record the new lift hash. |
-| `scripts/` | Install/patch, lift (`lift.sh`), audit (`validate_lift.py`), Ghidra scripts (`ghidra/`), map checks | |
+| `scripts/` | Install/patch, lift (`lift.sh`), audit (`validate_lift.py`), import coverage (`import_coverage.py`), launches (`run_attempt.sh`), Ghidra scripts (`ghidra/`), map checks | |
 | `reference/` | Feasibility, roadmap, research (`research/`) | |
 
 ## Commands
@@ -24,7 +25,8 @@ ReCarbon (`../recarbon`); reusable lessons are in `../game-port-knowledge`.
 scripts/setup_tools.sh   # x86recomp (refrozen branch) + build/mpq_extract, bnupdate_patch (idempotent)
 ctest --test-dir tools/x86recomp/out/build/debug   # "pacing" is a known timing flake (FEASIBILITY §7)
 /opt/homebrew/bin/python3 -I tests/test_lifter_patches.py
-# Per module (symbols dir names: war3 game storm mss32 mp3dec_asi mssfast_m3d msseax2_m3d
+/opt/homebrew/bin/python3 -I tests/test_loader.py
+# Per module (symbols dir names: war3 game storm mss32 msvcr80 mp3dec_asi mssfast_m3d msseax2_m3d
 # mssdolby_m3d reverb3_flt), e.g. game.dll: Ghidra analysis + exports (JDK 25, ~4 min for game.dll),
 JAVA_HOME=/opt/homebrew/opt/openjdk@25 MAXMEM=8G /opt/homebrew/opt/ghidra/libexec/support/analyzeHeadless \
   game/ghidra reFrozen -import game/native-install/game.dll -overwrite \
@@ -37,18 +39,25 @@ JAVA_HOME=/opt/homebrew/opt/openjdk@25 /opt/homebrew/opt/ghidra/libexec/support/
   -scriptPath scripts/ghidra -postScript ExportInstructions.java game/symbols/game
 # game/symbols/ (Ghidra output) is development-only: the audit's instructions.tsv/noncode.tsv,
 # and the source when refreshing config/symbols/ on purpose. lift.sh runs pe_symbols.py itself.
-scripts/lift.sh          # all nine modules from config/symbols + pe_symbols -> game/generated/war3
+scripts/lift.sh          # all ten modules from config/symbols + pe_symbols -> game/generated/war3
 /opt/homebrew/bin/python3 -I scripts/validate_lift.py --generated game/generated/war3 \
   --unreachable config/unreachable.tsv \
   --module game/native-install/war3.exe game/symbols-lift/war3 \
   --module game/native-install/game.dll game/symbols-lift/game \
   --module game/native-install/Storm.dll game/symbols-lift/storm \
   --module game/native-install/Mss32.dll game/symbols-lift/mss32 \
+  --module game/native-install/msvcr80.dll game/symbols-lift/msvcr80 \
   --module game/native-install/redist/miles/Mp3dec.asi game/symbols-lift/mp3dec_asi \
   --module game/native-install/redist/miles/Mssfast.m3d game/symbols-lift/mssfast_m3d \
   --module game/native-install/redist/miles/Msseax2.m3d game/symbols-lift/msseax2_m3d \
   --module game/native-install/redist/miles/Mssdolby.m3d game/symbols-lift/mssdolby_m3d \
   --module game/native-install/redist/miles/Reverb3.flt game/symbols-lift/reverb3_flt
+# Build and launch (re-run cmake after lift.sh; runtime-only rebuilds take seconds):
+cmake -S . -B build/main -G Ninja -DCMAKE_BUILD_TYPE=Debug -DRECOMP_LLVM_ROOT=/opt/homebrew/opt/llvm
+ninja -C build/main refrozen
+/opt/homebrew/bin/python3 -I scripts/import_coverage.py --tsv game/reports/import_coverage.tsv
+scripts/run_attempt.sh <name> [secs]   # log in game/attempts/<name>.log; exit 0 iff GameMain reached
+REFROZEN_TRACE=1 scripts/run_attempt.sh <name>-trace 120   # every HLE call, DllMain order
 ```
 
 ```sh

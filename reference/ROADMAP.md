@@ -34,7 +34,7 @@ Nothing network-facing is needed before M6.
   DotA target decided by the user: **DotA 6.85oz LoD** (pure JASS); iCCup native-plugin maps,
   including 6.83se, deferred.
 
-## M1 — Recompile all modules *(Passed 2026-10-24, pending the user's sign-off)*
+## M1 — Recompile all modules *(Passed 2026-10-24, signed off by the user)*
 - **Scope:** war3.exe, game.dll, Storm.dll, Mss32.dll and the five Miles providers (Mp3dec.asi,
   Mssfast/Msseax2/Mssdolby.m3d, Reverb3.flt) in one lift at their preferred bases. Miles is
   recompiled rather than HLE'd (FEASIBILITY §8).
@@ -62,9 +62,41 @@ Nothing network-facing is needed before M6.
   Miles; run-time indirect jumps (2,535 `jmp reg` in game.dll) not checked statically; lock-free
   memory ordering not audited.
 
-## M2 — Native link and process start
-- A game project (`GameConfig`, `RunProcess`), strict import stubs generated from the imports,
-  0 unresolved symbols; the process reaches `GameMain` in `game.dll`.
+## M2 — Native link and process start *(Passed 2026-10-24, pending the user's sign-off)*
+- **Scope:** a game project (`GameConfig`, `RunProcess`), strict import stubs generated from the
+  imports, 0 unresolved symbols; the process reaches `GameMain` in `game.dll`. msvcr80.dll
+  (the CRT war3.exe, game.dll and Storm import) is lifted as a 10th module.
+- **Accept → Evidence** (FEASIBILITY §9):
+  - Links natively → `build/main/refrozen`, one arm64 executable (lifted code + runtime), 0
+    undefined symbols.
+  - Cross-module imports → x86recomp patch 0007: static imports bind to the lifted exports by
+    name or ordinal; all 675 resolve (`scripts/import_coverage.py` exit 0), including 163 Storm
+    ordinals and 318 Mss32/Miles functions. A missing export or a misordered module stops at load.
+  - Original addresses, conventions, initialization order → every module at its lifted
+    (preferred) base; DllMains run dependencies-first before the EXE entry (traced: msvcr80,
+    Storm, Mss32, then game.dll on war3.exe's LoadLibrary); static loads pinned; calls go through
+    the lifted functions with their original stack conventions.
+  - Strict stubs → 359 Win32 imports without a handler stop the process with
+    `unimplemented import <dll>!<name>` when called; nothing returns a made-up success. Five
+    functions met before GameMain were implemented to their Win32 behaviour (patch 0008).
+  - Indirect jump validation → `Dispatch` stops on a target outside lifted code or not a function
+    entry, naming `module+offset` of both ends, the enclosing lifted function and the manifest fix.
+  - Reaches GameMain → **OBSERVED** on the final tree in two launches (`m2-final-1/2`):
+    `probe: GameMain (6F009850) ecx 6F000000 args 6F000000 …`, called by war3.exe after
+    `GetProcAddress(game.dll, "GameMain")`. Guest output identical between launches.
+  - Tests → `tests/test_loader.py` (synthetic EXE + 3 DLLs through lifter, runtime and loader;
+    10 mutations caught); SSE2 checks in `tests/test_lifter_patches.py` (4 mutations caught);
+    ctest, `test_bnupdate_patch.py` still pass. Lift byte-identical twice (tree hash
+    `5da168f8…79f85`), `validate_lift.py` HARD PASS on all ten modules.
+- **Verify:** FEASIBILITY §9 (`setup_tools.sh`, `test_loader.py`, `lift.sh`, `cmake`/`ninja`,
+  `import_coverage.py`, `run_attempt.sh`).
+- **Not done in M2 (by scope):** `DirectSoundCreate` is not reached before GameMain; Mss32 asks
+  for it with GetProcAddress, which returns NULL (explicit failure). The first stop after GameMain
+  is `kernel32!GetDiskFreeSpaceA` from Storm: M3.
+- **Risks carried to M3** (FEASIBILITY §9): 359 strict stubs, some on the M3 path; accepted
+  GetProcAddress NULLs (FLS, Encode/DecodePointer, TryEnterCriticalSection) and their CRT
+  fallbacks; no DLL_THREAD_ATTACH/DETACH; indirect targets validated only when taken;
+  DirectSoundCreate, CD-key data, DirectShow movies, memory ordering.
 
 ## M3 — Runtime initialization
 - CRT, threads, registry seed (the installer's values), file I/O and Storm's MPQ access on the
