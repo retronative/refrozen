@@ -34,7 +34,7 @@ Nothing network-facing is needed before M6.
   DotA target decided by the user: **DotA 6.85oz LoD** (pure JASS); iCCup native-plugin maps,
   including 6.83se, deferred.
 
-## M1 — Recompile all modules *(Partial 2026-10-24: end-to-end determinism open, see below)*
+## M1 — Recompile all modules *(Passed 2026-10-24, pending the user's sign-off)*
 - **Scope:** war3.exe, game.dll, Storm.dll, Mss32.dll and the five Miles providers (Mp3dec.asi,
   Mssfast/Msseax2/Mssdolby.m3d, Reverb3.flt) in one lift at their preferred bases. Miles is
   recompiled rather than HLE'd (FEASIBILITY §8).
@@ -47,10 +47,10 @@ Nothing network-facing is needed before M6.
     lifted; every relocated pointer into code and every unlifted Ghidra instruction explained
     (entries, labels, table data, operands of inline tables, or provably unreferenced code);
     jump tables resolved, completed (8) or recovered (8).
-  - Byte-identical across two runs → **lifter VERIFIED** (tree hash `8a2a898d…de288` from the same
-    symbols); **end-to-end NOT yet**: Ghidra's analysis of game.dll varies between runs (2
-    dead functions, even single-threaded), which changes 6 generated files. Fix proposed:
-    pin the per-module function/jump-table address lists in `config/` (user decision pending).
+  - Byte-identical across two runs → tree hash `8a2a898d…de288`, end to end: Ghidra's analysis
+    of game.dll varies between runs (2 dead functions, even single-threaded), so the lift input
+    (function/jump-table address lists) is pinned in `config/symbols/` (user's decision); lifts
+    from it, with or without Ghidra on the machine, are byte-identical.
   - Compiles for arm64 → all 220 files, 0 errors, 0 warnings, 238 s; objects define all
     90,974 lifted functions (not linked: M2).
 - **Verify:** `scripts/setup_tools.sh`; `ctest --test-dir tools/x86recomp/out/build/debug`;

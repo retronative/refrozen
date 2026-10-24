@@ -1,6 +1,6 @@
 # reFrozen — Feasibility
 
-Status: **M0 passed (signed off 2026-10-24); M1 Partial (2026-10-24): all criteria met except end-to-end reproducibility (§7).** Labels: VERIFIED (observed locally, reproducible),
+Status: **M0 passed (signed off 2026-10-24); M1 passed (2026-10-24), awaiting the user's sign-off.** Labels: VERIFIED (observed locally, reproducible),
 OBSERVED (stated by a cited external source, not reproduced here), HYPOTHESIS, FALSIFIED,
 UNRESOLVED. The full research report with sources is
 [research/reports/WC3 native macOS port methods.md](research/reports/WC3%20native%20macOS%20port%20methods.md).
@@ -259,11 +259,14 @@ pointer table inside that executable section), `config/unreachable.tsv` (below).
   addresses/lengths and non-code ranges were identical. With those symbols 6 generated files
   differ (tree hash `e90c0681…56ef8`). Two single-threaded runs (`-max-cpu 1`, 410 s each) differ
   the same way (71,161 vs 71,159 functions). Storm.dll's two runs were identical (§3).
-- **Consequence (UNRESOLVED):** the end-to-end pipeline (Ghidra, then lift) is not reproducible
-  on a player's machine as it stands. Proposed fix: commit each module's function and jump-table
-  address lists in `config/` (addresses and flags only, as ReCarbon commits its function and
-  jump-table addresses), so the lift input is pinned and players need no Ghidra; awaiting the
-  user's decision.
+- **Fix (VERIFIED, decided by the user):** each module's `functions.tsv` and `jumptables.tsv` are
+  pinned in `config/symbols/<module>/` (4.2 MB: addresses, flags and Ghidra's auto names such as
+  `FUN_`, `Unwind@`, `thunk_FUN_`, runtime-library matches; no game bytes), as ReCarbon commits its
+  function and jump-table addresses. `scripts/lift.sh` builds its input from them plus
+  `pe_symbols.py` output from the player's binaries; Ghidra is development-only (the audit's
+  instruction listing, and deliberate refreshes of the pinned lists). Two lifts from the pinned
+  lists, and one with no Ghidra output on disk at all, give tree hash `8a2a898d…de288`; the audit
+  passes on them.
 
 **arm64 compile:** all 220 files with x86recomp's `recomp_add_lifted` flags (-O2, -fnon-call-exceptions,
 strict x87 FP), Homebrew LLVM 23.1.4, Ninja: 0 errors, 0 warnings; 238 s wall, 1,569 s CPU, peak
@@ -277,9 +280,9 @@ ctest --test-dir tools/x86recomp/out/build/debug
 /opt/homebrew/bin/python3 -I tests/test_lifter_patches.py
 scripts/lift.sh                      # game/generated/war3 from game/native-install
 /opt/homebrew/bin/python3 -I scripts/validate_lift.py --generated game/generated/war3 \
-  --unreachable config/unreachable.tsv --module game/native-install/war3.exe game/symbols/war3 ...
+  --unreachable config/unreachable.tsv --module game/native-install/war3.exe game/symbols-lift/war3 ...
 ```
-(the Ghidra/`pe_symbols.py` commands that produce `game/symbols/` are in AGENTS.md).
+(`lift.sh` builds `game/symbols-lift/` from `config/symbols/`; the development-only Ghidra commands are in AGENTS.md).
 
 **Remaining risks (UNRESOLVED, for M2+):**
 - **Static imports between lifted modules:** x86recomp binds every static import to an HLE

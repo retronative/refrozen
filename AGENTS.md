@@ -14,7 +14,7 @@ ReCarbon (`../recarbon`); reusable lessons are in `../game-port-knowledge`.
 | `game/` | Extracted tomes, 1.26a oracle binaries (`oracle-1.26a/`), Ghidra project, symbols, generated code | git-ignored, proprietary-derived |
 | `tools/` | x86recomp (pinned + patches), Wine (dev oracle only) | git-ignored |
 | `patches/x86recomp/` | Our x86recomp patches 0001–0005, applied in order by `scripts/setup_tools.sh` | Each with hand-computed tests (`tests/test_lifter_patches.py`, x86recomp's `lift_atomic_test`) that fail under mutation. A patch is a diff against the tree with the earlier ones applied. |
-| `config/` | Lifter manifests per module (`<module>.manifest`) and `unreachable.tsv` | Addresses and evidence only, no game bytes. Every entry says why. |
+| `config/` | Lifter manifests per module (`<module>.manifest`), `unreachable.tsv`, and the pinned lift input `symbols/<module>/functions.tsv`, `jumptables.tsv` | Addresses, flags and evidence only, no game bytes. Every manifest entry says why. Refresh `symbols/` only deliberately (Ghidra varies between runs) and record the new lift hash. |
 | `scripts/` | Install/patch, lift (`lift.sh`), audit (`validate_lift.py`), Ghidra scripts (`ghidra/`), map checks | |
 | `reference/` | Feasibility, roadmap, research (`research/`) | |
 
@@ -35,21 +35,20 @@ JAVA_HOME=/opt/homebrew/opt/openjdk@25 MAXMEM=8G /opt/homebrew/opt/ghidra/libexe
 JAVA_HOME=/opt/homebrew/opt/openjdk@25 /opt/homebrew/opt/ghidra/libexec/support/analyzeHeadless \
   game/ghidra reFrozen -process game.dll -noanalysis -readOnly \
   -scriptPath scripts/ghidra -postScript ExportInstructions.java game/symbols/game
-# ... and exports/imports.
-PATH=/opt/homebrew/opt/llvm/bin:$PATH /opt/homebrew/bin/python3 -I \
-  tools/x86recomp/tools/pe_symbols.py game/native-install/game.dll --out game/symbols/game
-scripts/lift.sh          # all nine modules, one run -> game/generated/war3
+# game/symbols/ (Ghidra output) is development-only: the audit's instructions.tsv/noncode.tsv,
+# and the source when refreshing config/symbols/ on purpose. lift.sh runs pe_symbols.py itself.
+scripts/lift.sh          # all nine modules from config/symbols + pe_symbols -> game/generated/war3
 /opt/homebrew/bin/python3 -I scripts/validate_lift.py --generated game/generated/war3 \
   --unreachable config/unreachable.tsv \
-  --module game/native-install/war3.exe game/symbols/war3 \
-  --module game/native-install/game.dll game/symbols/game \
-  --module game/native-install/Storm.dll game/symbols/storm \
-  --module game/native-install/Mss32.dll game/symbols/mss32 \
-  --module game/native-install/redist/miles/Mp3dec.asi game/symbols/mp3dec_asi \
-  --module game/native-install/redist/miles/Mssfast.m3d game/symbols/mssfast_m3d \
-  --module game/native-install/redist/miles/Msseax2.m3d game/symbols/msseax2_m3d \
-  --module game/native-install/redist/miles/Mssdolby.m3d game/symbols/mssdolby_m3d \
-  --module game/native-install/redist/miles/Reverb3.flt game/symbols/reverb3_flt
+  --module game/native-install/war3.exe game/symbols-lift/war3 \
+  --module game/native-install/game.dll game/symbols-lift/game \
+  --module game/native-install/Storm.dll game/symbols-lift/storm \
+  --module game/native-install/Mss32.dll game/symbols-lift/mss32 \
+  --module game/native-install/redist/miles/Mp3dec.asi game/symbols-lift/mp3dec_asi \
+  --module game/native-install/redist/miles/Mssfast.m3d game/symbols-lift/mssfast_m3d \
+  --module game/native-install/redist/miles/Msseax2.m3d game/symbols-lift/msseax2_m3d \
+  --module game/native-install/redist/miles/Mssdolby.m3d game/symbols-lift/mssdolby_m3d \
+  --module game/native-install/redist/miles/Reverb3.flt game/symbols-lift/reverb3_flt
 ```
 
 ```sh

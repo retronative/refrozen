@@ -11,12 +11,15 @@ Native recompilation of Warcraft III: The Frozen Throne (1.26a) for Apple Silico
 >
 > **No game files are included or distributed.** You need your own legally obtained copy of
 > Warcraft III: Reign of Chaos and The Frozen Throne. The repository contains no game code,
-> assets, maps or executables. Recompiled code is generated on your Mac from your own copy and
-> is never committed. Please don't ask for, or share, game files.
+> assets, maps or executables. It does contain metadata from analysing the game's executables:
+> function and jump-table addresses with auto-generated names (`config/symbols/`), lifter
+> manifests (`config/*.manifest`) and the names of the system functions the game imports.
+> Recompiled code is generated on your Mac from your own copy and is never committed. Please
+> don't ask for, or share, game files.
 
 ## Status
 
-**M1 nearly complete:** all Warcraft III 1.26a modules recompile to C++ that passes a structural audit and compiles for arm64; end-to-end reproducibility is still open. Nothing runs yet (M2 links and starts the process). Offline target: DotA 6.85oz LoD. Milestones and their gates are in
+**M1 complete (pending sign-off):** all Warcraft III 1.26a modules recompile reproducibly to C++ that passes a structural audit and compiles for arm64. Nothing runs yet (M2 links and starts the process). Offline target: DotA 6.85oz LoD. Milestones and their gates are in
 [reference/ROADMAP.md](reference/ROADMAP.md); open questions are in
 [reference/FEASIBILITY.md](reference/FEASIBILITY.md).
 
