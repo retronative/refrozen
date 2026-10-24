@@ -175,6 +175,18 @@ official cooperation. Nothing network-facing is needed before M7.
     correctness unaffected (the game sees only its own resolution);
   - the existing 800×600 test mode unchanged;
   - regression and mutation tests for fullscreen transitions, resizing and input mapping.
+  - **Status (2026-10-25): implemented and verified, in patch 0013.** Fullscreen is borderless
+    on the current Space (`SDL_HINT_VIDEO_MAC_FULLSCREEN_SPACES=0`; `GameConfig::fullscreen`
+    defaults to desktop); Ctrl+Cmd+F, or the window's own control, switches to windowed and back
+    (the player's choice overrides the policy); windows are one point per game pixel, scaled down
+    to fit the screen; the frame is fitted with bars (`gfx::FitRect`) and pointer positions map
+    back through the same rectangle (`gfx::FramePoint`, clamped over the bars; the game's
+    clipped virtual cursor is unchanged); background runs simulate a screen
+    (`REFROZEN_TEST_SCREEN`) instead of taking over the display. Evidence:
+    `scripts/m5_display_check.sh` all checks pass (fullscreen 1512×982 with 101-point bars,
+    two toggles, `-window` scaled onto a 640×400 screen, clicks landing on the reference screen);
+    `test_win32.py` mode F and `fit_map_test` pass; mutants M5-F1–F10 10/10 KILLED; M4 3/3 and
+    M5 3/3 acceptance re-run on the same build, pass; 800×600 test mode unchanged.
 
 ## M6 — AI bots
 - A DotA AI map (e.g. an "AI" build, or the map's own computer players) playing a full match

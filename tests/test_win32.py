@@ -15,6 +15,10 @@ Modes (the command line's last character):
      first ShowWindow.
   L  OpenGL: glTexGeni's state and errors, wglSwapLayerBuffers.
   P  wglSwapLayerBuffers of a plane that does not exist (a stop).
+  F  fullscreen and pointer mapping (M5): a maximized popup (the whole
+     screen) on a simulated 1000x500-point screen (<ID>_TEST_SCREEN), clicked
+     by test pointers in fullscreen, after Ctrl+Cmd+F (windowed) and after it
+     again (fullscreen); the clicks' client positions and the runtime's log.
   M  minimize/restore (M4): the messages ShowWindow(SW_MINIMIZE /
      SW_RESTORE) and DefWindowProc(WM_SYSCOMMAND, SC_MINIMIZE / SC_RESTORE)
      send to an active window.
@@ -135,7 +139,8 @@ class Guest:
         self.var = {k: self.d.put(b"\0" * 4) for k in
                     ("hk", "type", "size", "lang", "port", "bytes", "key", "ovl", "wkey", "thread",
                      "hwave", "hwnd", "hdc", "logn", "seg0", "seg1", "seg2", "seg3", "hover", "tryres",
-                     "pcount", "perase", "pl", "pt", "pr", "pb", "phdc", "ecount", "hp", "hq")}
+                     "pcount", "perase", "pl", "pt", "pr", "pb", "phdc", "ecount", "hp", "hq", "cn")}
+        self.clicks = self.d.put(b"\0" * 16)  # mode F: WM_LBUTTONDOWN lParams
         self.ps = self.d.put(b"\0" * 64)    # PAINTSTRUCT
         self.msg = self.d.put(b"\0" * 28)   # MSG
         self.r1 = self.d.put(struct.pack("<iiii", 10, 5, 30, 20))
@@ -565,6 +570,29 @@ def build_text(g):
     o += g.chk("O: synchronous handle: TRUE", g.eq(1)) + g.chk("O: ... 3 bytes written", g.mem(g.obytes, 3))
     o += g.call("SetFilePointer", M(g.ofile), 0, 0, 1) + g.chk("O: ... file pointer at 5", g.eq(5))
     g.o_code = o
+
+    # mode F: a visible maximized popup (WS_POPUP | WS_VISIBLE | WS_MAXIMIZE)
+    # covers the screen; ~8 s of PeekMessage/DispatchMessage (TEST_INPUT is
+    # injected by the pump), keeping the lParams of the first 4
+    # WM_LBUTTONDOWNs; prints the work area (the client) and them.
+    f = mkclass + win("f", 0x91000000, 0, 0, 100, 100) + f"  mov dword ptr [{v['hwnd']:#x}], eax{NL}"
+    f += g.call("ShowWindow", P("hwnd"), 5) + "  mov esi, 800\n3:\n"
+    f += g.call("PeekMessageA", g.msg, 0, 0, 0, 1) + f"""  test eax, eax
+  jz 4f
+  cmp dword ptr [{g.msg + 4:#x}], 0x201
+  jne 5f
+  mov ecx, dword ptr [{v['cn']:#x}]
+  cmp ecx, 4
+  jae 5f
+  mov eax, dword ptr [{g.msg + 12:#x}]
+  mov dword ptr [{g.clicks:#x}+ecx*4], eax
+  inc dword ptr [{v['cn']:#x}]
+5:
+""" + g.call("DispatchMessageA", g.msg) + "  jmp 3b\n4:\n" + g.call("Sleep", 10) + "  dec esi\n  jnz 3b\n"
+    f += g.call("SystemParametersInfoA", 0x30, 0, g.rect, 0)  # SPI_GETWORKAREA
+    f += g.call("wsprintfA", g.out, g.str("R%X,%X C%X:%X,%X,%X,%X\n"), f"dword ptr [{g.rect + 8:#x}]",
+                f"dword ptr [{g.rect + 12:#x}]", P("cn"), *(f"dword ptr [{g.clicks + 4 * i:#x}]" for i in range(4)))
+    g.f_code = f + "  add esp, 36\n" + g.call("OutputDebugStringA", g.out) + g.call("ExitProcess", 0)
     g.o_names, g.names = g.names[first_o:], g.names[:first_o]
 
     # mode M: a shown (active) popup minimized and restored, by ShowWindow
@@ -738,6 +766,8 @@ main:
   je mode_o
   cmp eax, 0x56
   je mode_v
+  cmp eax, 0x46
+  je mode_f
 {g.stop_modes}{a}{finish}
 mode_d:
 {g.d_code}{finish}
@@ -747,6 +777,8 @@ mode_o:
 {g.o_code}{finish}
 mode_v:
 {g.v_code}{finish}
+mode_f:
+{g.f_code}
 mode_w:
 {w}
 mode_l:
@@ -824,19 +856,38 @@ def build_and_link(tmp):
     return binp, g
 
 
-def run(tmp, binp, mode):
+def run(tmp, binp, mode, **extra):
     data = os.path.join(tmp, "data")
     # WIN.INI for GetProfileStringA (the per-user drive C).
     ini = os.path.join(data, "win32test", "drive_c", "WINDOWS")
     os.makedirs(ini, exist_ok=True)
     with open(os.path.join(ini, "win.ini"), "w") as f:
         f.write("[fonts]\n[Mss]\n  MSSDebug = \"Yes\"  \n")
-    env = dict(os.environ, XDG_DATA_HOME=data, WIN32TEST_BACKGROUND="1")
+    env = dict(os.environ, XDG_DATA_HOME=data, WIN32TEST_BACKGROUND="1",
+               **{"WIN32TEST_" + k: v for k, v in extra.items()})
     r = subprocess.run([binp, os.path.join(tmp, "install"), mode], capture_output=True, text=True, env=env,
                        timeout=120)
     out = re.findall(r"\[guest\] (.*)", r.stderr)
     fatal = re.search(r"FATAL: (.*)", r.stderr)
+    run.stderr = r.stderr
     return r.returncode, out, fatal.group(1) if fatal else None
+
+
+def fit_point(sw, sh, dw, dh, x, y):
+    """A point of a dw x dh window -> the sw x sh frame shown in it with its
+    aspect kept: the fitted side is round(other side * aspect), the bars
+    split the rest (left/top the floor), and the point maps through that
+    rectangle, clamped to the frame (exact rationals)."""
+    from fractions import Fraction as Q
+    w, h = dw, dh
+    if dw * sh > dh * sw:
+        w = int(Q(dh * sw, sh) + Q(1, 2))
+    else:
+        h = int(Q(dw * sh, sw) + Q(1, 2))
+    left, top = (dw - w) // 2, (dh - h) // 2
+    fx = (Q(x) - left) * sw / w
+    fy = (Q(y) - top) * sh / h
+    return (min(max(int(fx // 1), 0), sw - 1), min(max(int(fy // 1), 0), sh - 1))
 
 
 def flags(names, out, prefix):
@@ -900,6 +951,40 @@ def main():
             code, out, fatal = run(tmp, binp, "O")
             check("O: runs to the end", (code, fatal), (0, None))
             flags(g.o_names, out, "O")
+
+            # Mode F: the screen the game sees is the desktop (W x H pixels);
+            # fullscreen on the simulated screen is a 1000x500-point window,
+            # windowed is the client scaled to fit it (min(1, 1000/W, 500/H)).
+            # Pointer positions are window points.
+            script = os.path.join(tmp, "f_input.txt")
+            with open(script, "w") as fh:
+                fh.write("1.0 pointer 520 260\n1.3 click\n1.6 pointer 20 100\n1.9 click\n"
+                         "2.5 chord ctrl+gui F\n3.2 pointer 300 200\n3.5 click\n"
+                         "4.2 chord ctrl+gui F\n4.9 pointer 990 490\n5.2 click\n")
+            code, out, fatal = run(tmp, binp, "F", TEST_SCREEN="1000x500", TEST_INPUT=script)
+            log = run.stderr
+            check("F: runs to the end", (code, fatal), (0, None))
+            mf = re.match(r"R([0-9A-F]+),([0-9A-F]+) C([0-9A-F]+):([0-9A-F]+),([0-9A-F]+),([0-9A-F]+),([0-9A-F]+)",
+                          out[0] if out else "")
+            check("F: clicks printed", bool(mf), True)
+            check("F: a maximized popup goes fullscreen on the simulated screen, and again after the toggles",
+                  len(re.findall(r"simulated fullscreen 1000x500 for a", log)), 2)
+            check("F: Ctrl+Cmd+F: windowed, then fullscreen",
+                  re.findall(r"user32: (windowed|fullscreen) \(Ctrl\+Cmd\+F\)", log), ["windowed", "fullscreen"])
+            if mf:
+                W, H = int(mf.group(1), 16), int(mf.group(2), 16)
+                s = min(1, 1000 / W, 500 / H)
+                ww, wh = max(round(W * s), 1), max(round(H * s), 1)
+                pt = lambda lp: (lp & 0xFFFF, lp >> 16)
+                got = [pt(int(mf.group(i), 16)) for i in range(4, 8)]
+                check("F: four clicks reached the window", int(mf.group(3), 16), 4)
+                check("F: fullscreen: a click inside the frame", got[0], fit_point(W, H, 1000, 500, 520, 260))
+                check("F: fullscreen: a click on a bar is at the frame's edge", got[1],
+                      fit_point(W, H, 1000, 500, 20, 100))
+                check("F: windowed (Ctrl+Cmd+F): the scaled window maps to the client", got[2],
+                      fit_point(W, H, ww, wh, 300, 200))
+                check("F: fullscreen again: past the frame clamps to its last pixel", got[3],
+                      fit_point(W, H, 1000, 500, 990, 490))
 
             code, out, fatal = run(tmp, binp, "M")
             check("M: runs to the end", (code, fatal), (0, None))
