@@ -2,7 +2,6 @@
 # in seconds since the first event pump. Never press Return or Start Game on
 # the Custom Game screen (that loads a map: gameplay, M5), and never open
 # Battle.net or Local Area Network (network-facing: M7, approval needed).
-10 key Return          # the "Unable to initialize base sound services" dialog
 12 shot main
 13 key S               # Single Player: a fresh profile asks for a name
 18 key T
