@@ -464,3 +464,309 @@ index 118028b..ddbba7d 100644
  inline constexpr uint32_t kErrorInsufficientBuffer = 122;
  inline constexpr uint32_t kErrorModNotFound = 126;
  inline constexpr uint32_t kErrorProcNotFound = 127;
+diff --git a/src/runtime/hle/winmm_wave.cpp b/src/runtime/hle/winmm_wave.cpp
+index c8633c7..7c6d02e 100644
+--- a/src/runtime/hle/winmm_wave.cpp
++++ b/src/runtime/hle/winmm_wave.cpp
+@@ -1,19 +1,294 @@
+-// winmm wave output of a system with no wave output device (no sound card
+-// driver installed), until audio output is provided: opening the wave
+-// mapper finds no driver, any device ID is out of range. Callers see the
+-// errors Windows gives such a system (and Miles, for one, runs silent).
++// winmm wave output: one wave output device (device 0, also the wave
++// mapper's) on an SDL audio stream per open handle. Programs that mix
++// themselves (Miles) hand over PCM blocks in WAVEHDRs; a block is done when
++// the stream has consumed its bytes.
++//
++// Callbacks follow Wine's winmm: WOM_OPEN and WOM_CLOSE are delivered from
++// waveOutOpen / waveOutClose on the calling thread, WOM_DONE from the
++// device's own thread (a guest thread here) in the order the blocks were
++// written. waveOutReset returns every queued block (WOM_DONE from the
++// device thread) before it returns. CALLBACK_FUNCTION and CALLBACK_EVENT
++// are implemented; window and thread callbacks, looping blocks, and other
++// open flags are stops that name themselves.
++//
++// Background (automated) runs use SDL's dummy audio driver: blocks are
++// consumed at the real rate and nothing is audible. <ID>_AUDIO_DUMP=<file>
++// appends every block written, as raw PCM, for evidence (its format is
++// logged when the device opens).
++
++#include <SDL3/SDL.h>
++
++#include <algorithm>
++#include <chrono>
++#include <condition_variable>
++#include <cstdio>
++#include <cstring>
++#include <deque>
++#include <map>
++#include <mutex>
++#include <thread>
+ 
+ #include "runtime/hle/hle.h"
++#include "runtime/hle/kernel32_state.h"
++#include "runtime/hle/user32_window.h"
++#include "runtime/log.h"
++#include "runtime/runtime.h"
+ 
+ namespace recomp::hle {
+ namespace {
+ 
+-constexpr uint32_t kMmsyserrBadDeviceId = 2, kMmsyserrNoDriver = 6;
++constexpr uint32_t kMmsyserrNoError = 0, kMmsyserrBadDeviceId = 2, kMmsyserrInvalHandle = 5,
++                   kMmsyserrInvalParam = 11;
++constexpr uint32_t kWaverrBadFormat = 32, kWaverrStillPlaying = 33, kWaverrUnprepared = 34;
+ constexpr uint32_t kWaveMapper = 0xFFFFFFFF;
++constexpr uint32_t kWaveFormatQuery = 0x1, kWaveAllowSync = 0x2, kWaveMapped = 0x4;
++constexpr uint32_t kCallbackTypeMask = 0x70000, kCallbackNull = 0, kCallbackFunction = 0x30000,
++                   kCallbackEvent = 0x50000;
++constexpr uint32_t kWomOpen = 0x3BB, kWomClose = 0x3BC, kWomDone = 0x3BD;
++// WAVEHDR.dwFlags
++constexpr uint32_t kWhdrDone = 0x1, kWhdrPrepared = 0x2, kWhdrBeginLoop = 0x4,
++                   kWhdrEndLoop = 0x8, kWhdrInQueue = 0x10;
++
++struct Device {
++  uint32_t handle = 0;
++  SDL_AudioStream* stream = nullptr;
++  uint32_t callback = 0, instance = 0, flags = 0;
++  // Blocks written and not yet returned: (WAVEHDR, stream byte count at
++  // its end).
++  std::deque<std::pair<uint32_t, uint64_t>> queue;
++  uint64_t written = 0;  // bytes put into the stream
++  uint32_t slack = 0;     // bytes SDL's resampler may hold back (16 frames)
++  bool reset = false;    // waveOutReset asked the device thread to return all blocks
++  bool closing = false;
++  Thread* thread = nullptr;
++  std::thread::id host_id;  // the device thread's host thread
++  FILE* dump = nullptr;
++};
++
++std::mutex g_mu;
++std::condition_variable g_cv;
++std::map<uint32_t, Device*> g_devices;
++uint32_t g_next_handle = 0x4D000010;
++
++void Notify(Ctx& c, Device& d, uint32_t msg, uint32_t p1) {
++  switch (d.flags & kCallbackTypeMask) {
++    case kCallbackFunction:  // (hwo, uMsg, dwInstance, dwParam1, dwParam2)
++      CallGuest(c, d.callback, {d.handle, msg, d.instance, p1, 0});
++      break;
++    case kCallbackEvent:
++      SignalEventHandle(d.callback, false);
++      break;
++    default:
++      break;
++  }
++}
++
++// The device thread: returns blocks the stream has consumed (or, after a
++// reset, all of them), oldest first.
++void Loop(Device* d) {
++  d->host_id = std::this_thread::get_id();
++  std::unique_lock<std::mutex> l(g_mu);
++  while (!d->closing) {
++    const int queued = d->stream ? SDL_GetAudioStreamQueued(d->stream) : 0;
++    const uint64_t consumed = d->written - uint64_t(queued > 0 ? queued : 0);
++    // SDL's resampler keeps a few frames of history queued until more data
++    // arrives, so the last block before a pause counts as consumed within
++    // `slack` bytes of its end.
++    if (!d->queue.empty() && (d->reset || d->queue.front().second <= consumed + d->slack)) {
++      uint32_t hdr = d->queue.front().first;
++      d->queue.pop_front();
++      Wr32(hdr + 16, (Rd32(hdr + 16) & ~kWhdrInQueue) | kWhdrDone);
++      l.unlock();
++      Notify(d->thread->ctx, *d, kWomDone, hdr);
++      l.lock();
++      continue;
++    }
++    if (d->reset && d->queue.empty()) {
++      d->reset = false;
++      g_cv.notify_all();
++    }
++    g_cv.wait_for(l, std::chrono::milliseconds(2));
++  }
++}
++
++Device* Find(uint32_t h) {
++  auto it = g_devices.find(h);
++  return it == g_devices.end() ? nullptr : it->second;
++}
++
++bool ValidDevice(uint32_t id) { return id == 0 || id == kWaveMapper; }
+ 
+-// (phwo, device, format, callback, instance, flags): no handle is created.
++bool InitAudio() {
++  static bool ok = [] {
++    if (Background()) SDL_SetHint(SDL_HINT_AUDIO_DRIVER, "dummy");
++    if (!SDL_InitSubSystem(SDL_INIT_AUDIO)) {
++      WarnF("winmm: SDL audio init failed: %s\n", SDL_GetError());
++      return false;
++    }
++    return true;
++  }();
++  return ok;
++}
++
++// (uDeviceID or HWAVEOUT, WAVEOUTCAPSA*, size)
++HLE("winmm.dll", waveOutGetDevCapsA, 3) {
++  uint32_t id = Arg(c, 0), caps = Arg(c, 1), size = Arg(c, 2);
++  {
++    std::lock_guard<std::mutex> l(g_mu);
++    if (Find(id)) id = 0;
++  }
++  if (!ValidDevice(id)) return kMmsyserrBadDeviceId;
++  if (!caps) return kMmsyserrInvalParam;
++  uint8_t woc[52] = {};
++  woc[0] = 1;  // wMid: MM_MICROSOFT
++  woc[2] = 2;  // wPid: MM_WAVE_MAPPER (the system's default output)
++  woc[4] = 1;  // vDriverVersion 1.0
++  std::memcpy(woc + 8, "Speakers", 8);
++  const uint32_t formats = 0x000FFFFF;  // every WAVE_FORMAT_* to 96 kHz 16-bit stereo
++  std::memcpy(woc + 40, &formats, 4);
++  woc[44] = 2;  // wChannels
++  // dwSupport stays 0: no volume, pitch or rate control is provided.
++  std::memcpy(GPtr(caps), woc, std::min<uint32_t>(size, sizeof woc));
++  return kMmsyserrNoError;
++}
++
++// (phwo, uDeviceID, pwfx, dwCallback, dwInstance, fdwOpen)
+ HLE("winmm.dll", waveOutOpen, 6) {
+-  return Arg(c, 1) == kWaveMapper ? kMmsyserrNoDriver : kMmsyserrBadDeviceId;
++  uint32_t phwo = Arg(c, 0), id = Arg(c, 1), wfx = Arg(c, 2), cb = Arg(c, 3), inst = Arg(c, 4),
++           flags = Arg(c, 5);
++  if (!ValidDevice(id)) return kMmsyserrBadDeviceId;
++  if (flags & ~(kCallbackTypeMask | kWaveFormatQuery | kWaveAllowSync | kWaveMapped))
++    FatalF("waveOutOpen: flags %08X are not implemented", flags);
++  uint32_t type = flags & kCallbackTypeMask;
++  if (type != kCallbackNull && type != kCallbackFunction && type != kCallbackEvent)
++    FatalF("waveOutOpen: callback type %08X (window/thread) is not implemented", type);
++  if (!wfx) return kMmsyserrInvalParam;
++  // WAVEFORMATEX: wFormatTag, nChannels, nSamplesPerSec, nAvgBytesPerSec,
++  // nBlockAlign, wBitsPerSample.
++  const uint32_t tag = Rd16(wfx), ch = Rd16(wfx + 2), rate = Rd32(wfx + 4),
++                 align = Rd16(wfx + 12), bits = Rd16(wfx + 14);
++  if (tag != 1 /* WAVE_FORMAT_PCM */ || (ch != 1 && ch != 2) || (bits != 8 && bits != 16) ||
++      rate < 1000 || rate > 192000 || align != ch * bits / 8)
++    return kWaverrBadFormat;
++  if (flags & kWaveFormatQuery) return kMmsyserrNoError;
++  if (!phwo) return kMmsyserrInvalParam;
++  if (!InitAudio()) FatalF("waveOutOpen: no SDL audio");
++  SDL_AudioSpec spec{bits == 8 ? SDL_AUDIO_U8 : SDL_AUDIO_S16LE, int(ch), int(rate)};
++  SDL_AudioStream* s = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec,
++                                                 nullptr, nullptr);
++  if (!s) FatalF("waveOutOpen: cannot open the playback device: %s", SDL_GetError());
++  SDL_ResumeAudioStreamDevice(s);
++  auto* d = new Device;
++  d->stream = s;
++  d->slack = 16 * align;
++  d->callback = cb;
++  d->instance = inst;
++  d->flags = flags;
++  if (const char* dump = Env("AUDIO_DUMP")) {
++    d->dump = std::fopen(dump, "ab");
++    WarnF("winmm: dumping wave output (PCM %u Hz, %u ch, %u bit) to %s\n", rate, ch, bits, dump);
++  }
++  {
++    std::lock_guard<std::mutex> l(g_mu);
++    d->handle = g_next_handle;
++    g_next_handle += 0x10;
++    g_devices[d->handle] = d;
++  }
++  WarnF("winmm: wave output %u Hz, %u ch, %u bit on SDL driver '%s'\n", rate, ch, bits,
++        SDL_GetCurrentAudioDriver());
++  d->thread = CreateGuestThread(0x40000);
++  StartServiceThread(d->thread, [d] { Loop(d); });
++  Wr32(phwo, d->handle);
++  Notify(c, *d, kWomOpen, 0);
++  return kMmsyserrNoError;
++}
++
++// (hwo, pwh, cbwh)
++HLE("winmm.dll", waveOutPrepareHeader, 3) {
++  std::lock_guard<std::mutex> l(g_mu);
++  if (!Find(Arg(c, 0))) return kMmsyserrInvalHandle;
++  uint32_t hdr = Arg(c, 1);
++  if (!hdr || Arg(c, 2) < 32) return kMmsyserrInvalParam;
++  Wr32(hdr + 16, Rd32(hdr + 16) | kWhdrPrepared);
++  return kMmsyserrNoError;
++}
++
++HLE("winmm.dll", waveOutUnprepareHeader, 3) {
++  std::lock_guard<std::mutex> l(g_mu);
++  if (!Find(Arg(c, 0))) return kMmsyserrInvalHandle;
++  uint32_t hdr = Arg(c, 1);
++  if (!hdr || Arg(c, 2) < 32) return kMmsyserrInvalParam;
++  if (Rd32(hdr + 16) & kWhdrInQueue) return kWaverrStillPlaying;
++  Wr32(hdr + 16, Rd32(hdr + 16) & ~kWhdrPrepared);
++  return kMmsyserrNoError;
++}
++
++// (hwo, pwh, cbwh): the block's bytes go into the stream now.
++HLE("winmm.dll", waveOutWrite, 3) {
++  std::lock_guard<std::mutex> l(g_mu);
++  Device* d = Find(Arg(c, 0));
++  if (!d) return kMmsyserrInvalHandle;
++  uint32_t hdr = Arg(c, 1);
++  if (!hdr || Arg(c, 2) < 32) return kMmsyserrInvalParam;
++  uint32_t fl = Rd32(hdr + 16);
++  if (!(fl & kWhdrPrepared)) return kWaverrUnprepared;
++  if (fl & kWhdrInQueue) return kWaverrStillPlaying;
++  if (fl & (kWhdrBeginLoop | kWhdrEndLoop))
++    FatalF("waveOutWrite: looping blocks (WHDR_BEGINLOOP/ENDLOOP) are not implemented");
++  Wr32(hdr + 16, (fl & ~kWhdrDone) | kWhdrInQueue);
++  uint32_t data = Rd32(hdr), len = Rd32(hdr + 4);
++  if (len) {
++    SDL_PutAudioStreamData(d->stream, GPtr(data), int(len));
++    if (d->dump) std::fwrite(GPtr(data), 1, len, d->dump);
++  }
++  d->written += len;
++  d->queue.push_back({hdr, d->written});
++  g_cv.notify_all();
++  return kMmsyserrNoError;
++}
++
++// Stops playback and returns every queued block (WOM_DONE from the device
++// thread) before returning.
++HLE("winmm.dll", waveOutReset, 1) {
++  std::unique_lock<std::mutex> l(g_mu);
++  Device* d = Find(Arg(c, 0));
++  if (!d) return kMmsyserrInvalHandle;
++  SDL_ClearAudioStream(d->stream);
++  d->reset = true;
++  g_cv.notify_all();
++  if (std::this_thread::get_id() != d->host_id)
++    g_cv.wait(l, [d] { return !d->reset; });
++  return kMmsyserrNoError;
++}
++
++// (hwo, puDeviceID)
++HLE("winmm.dll", waveOutGetID, 2) {
++  std::lock_guard<std::mutex> l(g_mu);
++  if (!Find(Arg(c, 0))) return kMmsyserrInvalHandle;
++  if (!Arg(c, 1)) return kMmsyserrInvalParam;
++  Wr32(Arg(c, 1), 0);
++  return kMmsyserrNoError;
++}
++
++// Fails with WAVERR_STILLPLAYING while blocks are queued; otherwise the
++// handle is gone after WOM_CLOSE.
++HLE("winmm.dll", waveOutClose, 1) {
++  Device* d;
++  {
++    std::lock_guard<std::mutex> l(g_mu);
++    d = Find(Arg(c, 0));
++    if (!d) return kMmsyserrInvalHandle;
++    if (!d->queue.empty()) return kWaverrStillPlaying;
++    g_devices.erase(d->handle);
++    d->closing = true;
++    g_cv.notify_all();
++  }
++  // The device thread leaves its loop; the Device stays allocated, as that
++  // thread may still be reading it.
++  SDL_DestroyAudioStream(d->stream);
++  if (d->dump) std::fclose(d->dump);
++  Notify(c, *d, kWomClose, 0);
++  return kMmsyserrNoError;
+ }
+ 
+ }  // namespace

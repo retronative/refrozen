@@ -18,6 +18,9 @@ Modes (the command line's last character):
   M  minimize/restore (M4): the messages ShowWindow(SW_MINIMIZE /
      SW_RESTORE) and DefWindowProc(WM_SYSCOMMAND, SC_MINIMIZE / SC_RESTORE)
      send to an active window.
+  V  wave output (M5): device caps, format queries, a CALLBACK_FUNCTION
+     device (WOM_OPEN, WOM_DONE in order from another thread, WOM_CLOSE),
+     header flags and errors, waveOutReset. One 1/0 flag per check.
   O  overlapped file I/O through a completion port (M5): association,
      pending writes and reads at the OVERLAPPED's offset with their packets,
      append, end of file, hEvent's no-packet bit, a synchronous handle given
@@ -96,7 +99,7 @@ IMPORTS = [
                       "GetQueuedCompletionStatus", "CreateThread", "Sleep", "WaitForSingleObject",
                       "InitializeCriticalSection", "TryEnterCriticalSection", "LeaveCriticalSection",
                       "CreateFileA", "ReadFile", "WriteFile", "CloseHandle", "SetFilePointer",
-                      "SetLastError"]),
+                      "SetLastError", "GetCurrentThreadId"]),
     # Winsock 1.1 by ordinal (Wine's wsock32.spec): htonl, htons, inet_addr,
     # inet_ntoa, ntohl, ntohs, WSAGetLastError.
     ("wsock32.dll", [8, 9, 10, 11, 14, 15, 111]),
@@ -106,13 +109,14 @@ IMPORTS = [
                     "EndPaint", "FillRect", "DrawTextA", "PeekMessageA", "DispatchMessageA",
                     "PostMessageA", "SetTimer", "SetWindowPos"]),
     ("advapi32.dll", ["RegOpenKeyExA", "RegQueryValueExA"]),
-    ("winmm.dll", ["waveOutOpen"]),
+    ("winmm.dll", ["waveOutOpen", "waveOutGetDevCapsA", "waveOutPrepareHeader", "waveOutUnprepareHeader",
+                   "waveOutWrite", "waveOutReset", "waveOutClose", "waveOutGetID"]),
     ("gdi32.dll", ["ChoosePixelFormat", "SetPixelFormat"]),
     ("opengl32.dll", ["wglCreateContext", "wglMakeCurrent", "wglSwapLayerBuffers", "glGetError",
                       "glTexGeni", "glBegin", "glEnd"]),
 ]
 # fixed text offsets (function entries)
-WORKER, WNDPROC, TRYCS, PAINTPROC, MAIN = 0x10, 0x40, 0xC0, 0x100, 0x200
+WORKER, WNDPROC, TRYCS, PAINTPROC, WAVEPROC, MAIN = 0x10, 0x40, 0xC0, 0x100, 0x1C0, 0x240
 REG_KEY, REG_VALUE, REG_DWORD = "Software\\reFrozen Test", "Dword", 0x12345678
 
 
@@ -142,6 +146,15 @@ class Guest:
         self.wc3 = self.d.put(b"\0" * 40)
         self.wc4 = self.d.put(b"\0" * 40)
         self.ovl = self.d.put(b"\0" * 20)    # OVERLAPPED
+        # wave output: callback log (msg, p1, thread) x 16, two WAVEHDRs of 400
+        # bytes of 8-bit silence (50 ms at 8 kHz mono), formats, caps
+        self.wlog, self.wn = self.d.put(b"\0" * 12 * 16), self.d.put(b"\0" * 4)
+        self.wdata = self.d.put(b"\x80" * 400)
+        self.whdr1, self.whdr2 = self.d.put(b"\0" * 32), self.d.put(b"\0" * 32)
+        self.wfx8 = self.d.put(struct.pack("<HHIIHHH", 1, 1, 8000, 8000, 1, 8, 0))
+        self.wfxbad = self.d.put(struct.pack("<HHIIHHH", 2, 1, 8000, 8000, 1, 8, 0))  # ADPCM
+        self.wcaps = self.d.put(b"\0" * 52)
+        self.hwo, self.wmain, self.wsnap = self.d.put(b"\0" * 4), self.d.put(b"\0" * 4), self.d.put(b"\0" * 4)
         self.iobuf = self.d.put(b"\0" * 32)
         self.oport, self.ofile, self.obytes, self.okey, self.opovl, self.oev = (self.d.put(b"\0" * 4)
                                                                              for _ in range(6))
@@ -294,13 +307,10 @@ def build_text(g):
     a += g.call("LeaveCriticalSection", g.cs) + g.call("LeaveCriticalSection", g.cs)
     a += f"  mov dword ptr [{v['tryres']:#x}], 0x55\n" + trycs
     a += g.chk("cs: released, another thread enters", g.mem(v["tryres"], 1))
-    # -- waveOutOpen with no wave device: Wine's winmm tests accept
-    # MMSYSERR_NODRIVER (6) or MMSYSERR_BADDEVICEID (2) for the mapper; any
-    # device ID is out of range (BADDEVICEID).
-    a += g.call("waveOutOpen", v["hwave"], 0xFFFFFFFF, g.wfx, 0, 0, 0)
-    a += g.chk("wave: mapper finds no driver", "  cmp eax, 6\n  je 7f\n  cmp eax, 2\n7:\n")
-    a += g.call("waveOutOpen", v["hwave"], 0, g.wfx, 0, 0, 0)
-    a += g.chk("wave: device 0 is out of range", g.eq(2))
+    # -- waveOutOpen: one wave output device (0); device 1 is out of range
+    # (MMSYSERR_BADDEVICEID). The rest of wave output is mode V.
+    a += g.call("waveOutOpen", v["hwave"], 1, g.wfx, 0, 0, 0)
+    a += g.chk("wave: device 1 is out of range", g.eq(2))
     # -- Display devices (MSDN EnumDisplayDevices/ChangeDisplaySettingsEx;
     # Wine's tests: an unknown device name is DISP_CHANGE_BADPARAM).
     a += g.call("EnumDisplayDevicesA", 0, 0, g.dd, 0) + g.chk("display: adapter 0 exists", g.eq(1))
@@ -460,6 +470,50 @@ def build_text(g):
     d += paint_is("D: grown, CS_HREDRAW", 7, 1, 0, 0, 120, 50)
     g.d_code = d
     g.d_names, g.names = g.names[first_d:], g.names[:first_d]
+
+    # mode V: wave output (MSDN waveOut*; Wine's winmm delivers WOM_OPEN and
+    # WOM_CLOSE from waveOutOpen / waveOutClose and WOM_DONE from its device
+    # thread).
+    for h in (g.whdr1, g.whdr2):
+        g.d.b[h - g.d.va0:h - g.d.va0 + 8] = struct.pack("<II", g.wdata, 400)
+    first_v = len(g.names)
+    W = lambda va: f"dword ptr [{va:#x}]"
+    LOG = lambda i, k: f"dword ptr [{g.wlog + 12 * i + 4 * k:#x}]"
+    w5 = g.call("GetCurrentThreadId") + f"  mov dword ptr [{g.wmain:#x}], eax{NL}"
+    w5 += g.call("waveOutGetDevCapsA", 0, g.wcaps, 52) + g.chk("V: caps of device 0", g.eq(0))
+    w5 += g.chk("V: caps: 2 channels", g.mem(g.wcaps + 44, 2, "word"))
+    w5 += g.call("waveOutGetDevCapsA", 5, g.wcaps, 52) + g.chk("V: caps of device 5: BADDEVICEID", g.eq(2))
+    w5 += g.call("waveOutOpen", 0, 0xFFFFFFFF, g.wfxbad, 0, 0, 1) + g.chk("V: non-PCM query: WAVERR_BADFORMAT", g.eq(32))
+    w5 += g.call("waveOutOpen", 0, 0xFFFFFFFF, g.wfx8, 0, 0, 1) + g.chk("V: PCM query: supported", g.eq(0))
+    w5 += g.call("waveOutOpen", g.hwo, 0xFFFFFFFF, g.wfx8, TEXT + WAVEPROC, 0x77, 0x30000)
+    w5 += g.chk("V: open with CALLBACK_FUNCTION", g.eq(0))
+    w5 += g.chk("V: WOM_OPEN from waveOutOpen", g.mem(g.wn, 1) + f"  jne 9f{NL}" +
+                f"  cmp {LOG(0, 0)}, 0x3BB{NL}9:{NL}")
+    w5 += g.chk("V: ... on the calling thread", f"  mov eax, {LOG(0, 2)}{NL}  cmp eax, {W(g.wmain)}{NL}")
+    w5 += g.call("waveOutWrite", W(g.hwo), g.whdr1, 32) + g.chk("V: unprepared write: WAVERR_UNPREPARED", g.eq(34))
+    w5 += g.call("waveOutPrepareHeader", W(g.hwo), g.whdr1, 32) + g.call("waveOutPrepareHeader", W(g.hwo), g.whdr2, 32)
+    w5 += g.chk("V: prepared: WHDR_PREPARED", g.mem(g.whdr1 + 16, 2))
+    w5 += g.call("waveOutWrite", W(g.hwo), g.whdr1, 32) + g.call("waveOutWrite", W(g.hwo), g.whdr2, 32)
+    w5 += g.chk("V: written: WHDR_INQUEUE", g.mem(g.whdr2 + 16, 0x12))
+    w5 += g.call("waveOutUnprepareHeader", W(g.hwo), g.whdr1, 32) + g.chk("V: unprepare while queued: STILLPLAYING", g.eq(33))
+    w5 += g.call("waveOutClose", W(g.hwo)) + g.chk("V: close while queued: STILLPLAYING", g.eq(33))
+    w5 += g.call("Sleep", 600)
+    w5 += g.chk("V: both blocks returned in order", g.mem(g.wn, 3) + f"  jne 9f{NL}" +
+                f"  cmp {LOG(1, 0)}, 0x3BD{NL}  jne 9f{NL}  cmp {LOG(1, 1)}, {g.whdr1:#x}{NL}  jne 9f{NL}"
+                f"  cmp {LOG(2, 0)}, 0x3BD{NL}  jne 9f{NL}  cmp {LOG(2, 1)}, {g.whdr2:#x}{NL}9:{NL}")
+    w5 += g.chk("V: WOM_DONE from another thread", f"  mov eax, {LOG(1, 2)}{NL}  cmp eax, {W(g.wmain)}{NL}  setne al{NL}  cmp al, 1{NL}")
+    w5 += g.chk("V: done: WHDR_DONE, not in queue", g.mem(g.whdr1 + 16, 0x3))
+    # waveOutReset returns the queued block before it returns.
+    w5 += g.call("waveOutWrite", W(g.hwo), g.whdr1, 32) + g.call("waveOutReset", W(g.hwo))
+    w5 += f"  mov eax, {W(g.wn)}{NL}  mov dword ptr [{g.wsnap:#x}], eax{NL}"
+    w5 += g.chk("V: waveOutReset returned the block first", g.mem(g.wsnap, 4) + f"  jne 9f{NL}" + f"  cmp {LOG(3, 1)}, {g.whdr1:#x}{NL}9:{NL}")
+    w5 += g.call("waveOutUnprepareHeader", W(g.hwo), g.whdr1, 32) + g.call("waveOutUnprepareHeader", W(g.hwo), g.whdr2, 32)
+    w5 += g.chk("V: unprepared", g.mem(g.whdr1 + 16, 1))
+    w5 += g.call("waveOutClose", W(g.hwo)) + g.chk("V: close", g.eq(0))
+    w5 += g.chk("V: WOM_CLOSE from waveOutClose", f"  cmp {LOG(4, 0)}, 0x3BC{NL}")
+    w5 += g.call("waveOutGetID", W(g.hwo), g.wsnap) + g.chk("V: closed handle: MMSYSERR_INVALHANDLE", g.eq(5))
+    g.v_code = w5
+    g.v_names, g.names = g.names[first_v:], g.names[:first_v]
 
     # mode O: overlapped I/O (MSDN ReadFile / WriteFile / CreateIoCompletionPort;
     # "Synchronous and Asynchronous I/O"). File C:\\o.bin in the per-user tree.
@@ -641,6 +695,25 @@ paintproc:
   ret 16
 2:
   jmp dword ptr [{g.iat[('user32.dll', 'DefWindowProcA')]:#x}]
+.org {WAVEPROC:#x}, 0xCC
+waveproc:
+  cmp dword ptr [esp+12], 0x77
+  jne 1f
+  mov ecx, dword ptr [{g.wn:#x}]
+  cmp ecx, 16
+  jae 1f
+  lea edx, [ecx+ecx*2]
+  mov eax, dword ptr [esp+8]
+  mov dword ptr [{g.wlog:#x}+edx*4], eax
+  mov eax, dword ptr [esp+16]
+  mov dword ptr [{g.wlog + 4:#x}+edx*4], eax
+  inc dword ptr [{g.wn:#x}]
+  push edx
+  call dword ptr [{g.iat[('kernel32.dll', 'GetCurrentThreadId')]:#x}]
+  pop edx
+  mov dword ptr [{g.wlog + 8:#x}+edx*4], eax
+1:
+  ret 20
 .org {MAIN:#x}, 0xCC
 main:
 {g.call("GetCommandLineA")}
@@ -663,6 +736,8 @@ main:
   je mode_m
   cmp eax, 0x4F
   je mode_o
+  cmp eax, 0x56
+  je mode_v
 {g.stop_modes}{a}{finish}
 mode_d:
 {g.d_code}{finish}
@@ -670,6 +745,8 @@ mode_m:
 {g.m_code}
 mode_o:
 {g.o_code}{finish}
+mode_v:
+{g.v_code}{finish}
 mode_w:
 {w}
 mode_l:
@@ -713,7 +790,7 @@ def build_and_link(tmp):
     os.makedirs(sym, exist_ok=True)
     with open(os.path.join(sym, "functions.tsv"), "w") as f:
         f.write("entry\tmin\tmax\tchunks\tthunk\tnoreturn\tcallconv\tname\n")
-        for o in (0, WORKER, WNDPROC, TRYCS, PAINTPROC):
+        for o in (0, WORKER, WNDPROC, TRYCS, PAINTPROC, WAVEPROC):
             e = TEXT + o
             f.write(f"{e:08X}\t{e:08X}\t{e:08X}\t1\t0\t0\t__stdcall\tFUN_{e:08X}\n")
     for n, h in (("exports.tsv", "va\tkind\tmangled\tdemangled\n"), ("jumptables.tsv", "jmp\ttargets\n")):
@@ -815,6 +892,10 @@ def main():
                       [x[0] for x in segs[2]], [0x81, 0x01])
                 check("W: overlapped: its first ShowWindow ends with SIZE(RESTORED), MOVE",
                       [(x[0], x[1]) for x in segs[3]][-2:], [(0x05, 0), (0x03, 0)])
+
+            code, out, fatal = run(tmp, binp, "V")
+            check("V: runs to the end", (code, fatal), (0, None))
+            flags(g.v_names, out, "V")
 
             code, out, fatal = run(tmp, binp, "O")
             check("O: runs to the end", (code, fatal), (0, None))
