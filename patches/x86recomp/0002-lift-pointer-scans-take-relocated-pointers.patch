@@ -1,0 +1,167 @@
+diff --git a/src/runtime/pe_image.cpp b/src/runtime/pe_image.cpp
+index 2d223db..c881f86 100644
+--- a/src/runtime/pe_image.cpp
++++ b/src/runtime/pe_image.cpp
+@@ -1,5 +1,6 @@
+ #include "runtime/pe_image.h"
+ 
++#include <algorithm>
+ #include <cstdio>
+ #include <cstring>
+ #include <fstream>
+@@ -111,15 +112,18 @@ bool PeImage::Load(const std::string& path, GuestMemory& mem,
+     sections.push_back({name, image_base + va, vsize, ch});
+   }
+ 
+-  // Base relocations: add the load delta to every HIGHLOW fixup.
+-  if (image_base != preferred_base) {
++  // Base relocations: every HIGHLOW fixup site is recorded (the lifter uses
++  // them to tell pointers from numbers), and gets the load delta added when
++  // the image moves.
++  {
+     auto [rel_rva, rel_size] = dir(5);
+-    if (!rel_size) {
++    if (image_base != preferred_base && !rel_size) {
+       *err = "image has no relocations and cannot move from its preferred base";
+       return false;
+     }
+     const uint32_t delta = image_base - preferred_base;
+-    for (gaddr blk = image_base + rel_rva; blk < image_base + rel_rva + rel_size;) {
++    for (gaddr blk = image_base + rel_rva;
++         rel_size && blk < image_base + rel_rva + rel_size;) {
+       uint32_t page = mem.read<uint32_t>(blk), size = mem.read<uint32_t>(blk + 4);
+       if (size < 8) break;
+       for (uint32_t i = 8; i + 2 <= size; i += 2) {
+@@ -129,7 +133,8 @@ bool PeImage::Load(const std::string& path, GuestMemory& mem,
+           case 0:  // IMAGE_REL_BASED_ABSOLUTE: padding
+             break;
+           case 3:  // IMAGE_REL_BASED_HIGHLOW
+-            mem.write<uint32_t>(at, mem.read<uint32_t>(at) + delta);
++            relocs.push_back(at);
++            if (delta) mem.write<uint32_t>(at, mem.read<uint32_t>(at) + delta);
+             break;
+           default:
+             *err = "unsupported base relocation type " + std::to_string(e >> 12);
+@@ -138,6 +143,7 @@ bool PeImage::Load(const std::string& path, GuestMemory& mem,
+       }
+       blk += size;
+     }
++    std::sort(relocs.begin(), relocs.end());
+   }
+ 
+   // Imports: point every IAT slot at its thunk address.
+diff --git a/src/runtime/pe_image.h b/src/runtime/pe_image.h
+index 2aefaf0..571ab08 100644
+--- a/src/runtime/pe_image.h
++++ b/src/runtime/pe_image.h
+@@ -62,6 +62,7 @@ struct PeImage {
+   std::vector<PeSection> sections;
+   std::vector<PeImport> imports;
+   std::vector<PeExport> exports;  // forwarded exports are left out
++  std::vector<gaddr> relocs;      // HIGHLOW fixup sites (mapped VAs), sorted
+   PeTls tls;
+   bool has_tls = false;
+ 
+diff --git a/tools/lifter/main.cpp b/tools/lifter/main.cpp
+index 804233f..cd08dc5 100644
+--- a/tools/lifter/main.cpp
++++ b/tools/lifter/main.cpp
+@@ -27,6 +27,7 @@
+ // consistently. Then the functions are emitted into generated/gen_NNN.cpp
+ // plus a table file.
+ 
++#include <algorithm>
+ #include <cctype>
+ #include <cstdio>
+ #include <deque>
+@@ -200,8 +201,20 @@ int main(int argc, char** argv) {
+   std::deque<uint32_t> work(p.entries.begin(), p.entries.end());
+   std::set<uint32_t> done;
+   size_t from_code_ptrs = 0, from_data_ptrs = 0;
+-  auto candidate = [&](const lifter::Module* m, uint32_t t, size_t* counter) {
+-    if (p.TextOf(t) != m || p.entries.count(t)) return;
++  // In an image with base relocations every stored address has one (the
++  // loader could not move the image otherwise), so a dword at an
++  // unrelocated place is a number that merely looks like a code address:
++  // ASCII text and constants in a DLL based at 0x6F000000 do, by the
++  // thousand. Images without relocations keep the plain heuristic.
++  auto relocated = [](const lifter::Module* m, uint32_t at) {
++    const auto& r = m->img.relocs;
++    return r.empty() || std::binary_search(r.begin(), r.end(), at);
++  };
++  auto candidate = [&](const lifter::Module* m, uint32_t t, uint32_t at,
++                       size_t* counter) {
++    if (p.TextOf(t) != m || p.entries.count(t) || !relocated(m, at) ||
++        p.not_code.count(t))
++      return;
+     lifter::Insn in;
+     if (!dec.Decode(p, t, &in)) return;
+     p.entries.insert(t);
+@@ -214,7 +227,7 @@ int main(int argc, char** argv) {
+       if (!only.empty()) break;
+       if (sec.name != ".rdata" && sec.name != ".data") continue;
+       for (uint32_t a = sec.va; a + 4 <= sec.va + sec.vsize; a += 4)
+-        candidate(&m, p.mem.read<uint32_t>(a), &from_data_ptrs);
++        candidate(&m, p.mem.read<uint32_t>(a), a, &from_data_ptrs);
+     }
+   size_t recovered_tables = 0;
+   while (!work.empty()) {
+@@ -251,13 +264,25 @@ int main(int argc, char** argv) {
+     if (!only.empty()) continue;
+     for (const auto& [va, in] : f.insns) {
+       if (!in.ok) continue;
+-      for (int i = 0; i < in.d.operand_count_visible; i++)
+-        if (in.ops[i].type == ZYDIS_OPERAND_TYPE_IMMEDIATE &&
+-            !in.ops[i].imm.is_relative)
+-          candidate(fm, static_cast<uint32_t>(in.ops[i].imm.value.u),
+-                    &from_code_ptrs);
++      for (int i = 0; i < in.d.operand_count_visible; i++) {
++        if (in.ops[i].type != ZYDIS_OPERAND_TYPE_IMMEDIATE ||
++            in.ops[i].imm.is_relative)
++          continue;
++        const uint32_t t = static_cast<uint32_t>(in.ops[i].imm.value.u);
++        // Where the immediate's four bytes sit in the instruction.
++        uint32_t at = 0;
++        for (const auto& raw : in.d.raw.imm)
++          if (raw.size == 32 && static_cast<uint32_t>(raw.value.u) == t)
++            at = in.va + raw.offset;
++        if (at) candidate(fm, t, at, &from_code_ptrs);
++      }
+     }
+   }
++  for (uint32_t va : p.not_code)
++    if (p.entries.count(va)) {
++      std::fprintf(stderr, "manifest: data %08X is a function entry\n", va);
++      return 1;
++    }
+   std::printf("functions: %zu (%zu from Ghidra/exports, %zu discovered: "
+               "%zu via code pointers, %zu via data pointers; %zu weak)\n",
+               p.entries.size(), initial, p.entries.size() - initial,
+diff --git a/tools/lifter/program.cpp b/tools/lifter/program.cpp
+index d990c86..95056ae 100644
+--- a/tools/lifter/program.cpp
++++ b/tools/lifter/program.cpp
+@@ -133,6 +133,8 @@ bool Program::LoadManifest(const std::string& path, std::string* err) {
+       if (!name.empty()) names[va] = name;
+     } else if (kind == "name") {
+       names[va] = name;
++    } else if (kind == "data") {
++      not_code.insert(va);
+     } else if (kind == "resume") {
+       resume_sites.insert(va);
+     } else if (kind == "setjmp") {
+diff --git a/tools/lifter/program.h b/tools/lifter/program.h
+index 60d0f6a..18f9a0f 100644
+--- a/tools/lifter/program.h
++++ b/tools/lifter/program.h
+@@ -50,6 +50,10 @@ struct Program {
+   std::set<uint32_t> resume_sites;            // manifest: calls/jmps that
+                                               // abandon the stack (SEH,
+                                               // longjmp)
++  std::set<uint32_t> not_code;                // manifest: values a pointer
++                                              // scan must not take as entries
++                                              // (text in an image without
++                                              // relocations)
+   std::set<uint32_t> setjmps;                 // manifest: setjmp functions
+                                               // (their callers can be
+                                               // resumed by longjmp)

@@ -1,0 +1,129 @@
+diff --git a/src/runtime/dispatch.cpp b/src/runtime/dispatch.cpp
+index 5e9e34f..d181079 100644
+--- a/src/runtime/dispatch.cpp
++++ b/src/runtime/dispatch.cpp
+@@ -46,11 +46,12 @@ uint32_t g_lifted_count = 0;
+ 
+ CodeRange TextOf(const PeImage& img) {
+   CodeRange r;
+-  for (const auto& s : img.sections)
+-    if (s.name == ".text") {
+-      r.lo = s.va;
+-      r.size = s.vsize;
+-    }
++  gaddr lo, hi;
++  if (!img.CodeSpan(&lo, &hi))
++    FatalF("image at %08X: no executable section, or data between them",
++           img.image_base);
++  r.lo = lo;
++  r.size = hi - lo;
+   r.table.assign(r.size, nullptr);
+   for (uint32_t i = 0; i < g_lifted_count; i++) {
+     const LiftedFn& f = g_lifted[i];
+diff --git a/src/runtime/pe_image.cpp b/src/runtime/pe_image.cpp
+index c881f86..76dc612 100644
+--- a/src/runtime/pe_image.cpp
++++ b/src/runtime/pe_image.cpp
+@@ -214,4 +214,21 @@ bool PeImage::Load(const std::string& path, GuestMemory& mem,
+   return true;
+ }
+ 
++bool PeImage::CodeSpan(gaddr* lo, gaddr* hi) const {
++  constexpr uint32_t kScnMemExecute = 0x20000000;
++  gaddr l = 0, h = 0;
++  for (const auto& s : sections)
++    if (s.characteristics & kScnMemExecute) {
++      if (!h || s.va < l) l = s.va;
++      h = std::max(h, s.va + s.vsize);
++    }
++  if (!h) return false;
++  for (const auto& s : sections)
++    if (!(s.characteristics & kScnMemExecute) && s.va < h && s.va + s.vsize > l)
++      return false;
++  *lo = l;
++  *hi = h;
++  return true;
++}
++
+ }  // namespace recomp
+diff --git a/src/runtime/pe_image.h b/src/runtime/pe_image.h
+index 571ab08..3f01123 100644
+--- a/src/runtime/pe_image.h
++++ b/src/runtime/pe_image.h
+@@ -73,6 +73,11 @@ struct PeImage {
+   // false and fills err on failure.
+   bool Load(const std::string& path, GuestMemory& mem, std::string* err,
+             gaddr base = 0, const ImportBinder& bind = nullptr);
++
++  // [lo, hi) over every executable section: .text, and in some images more
++  // (Miles' mss32.dll keeps its mixer in MSSMIXER). False if there is none,
++  // or if another section lies between them (not supported).
++  bool CodeSpan(gaddr* lo, gaddr* hi) const;
+ };
+ 
+ }  // namespace recomp
+diff --git a/tools/lifter/program.cpp b/tools/lifter/program.cpp
+index 95056ae..4918c60 100644
+--- a/tools/lifter/program.cpp
++++ b/tools/lifter/program.cpp
+@@ -51,13 +51,8 @@ bool Program::Load(const std::string& path, const std::string& symdir,
+     return false;
+   }
+   const recomp::PeImage& img = m.img;
+-  for (const auto& s : img.sections)
+-    if (s.name == ".text") {
+-      m.text_lo = s.va;
+-      m.text_hi = s.va + s.vsize;
+-    }
+-  if (!m.text_hi) {
+-    *err = "no .text section";
++  if (!img.CodeSpan(&m.text_lo, &m.text_hi)) {
++    *err = "no executable section, or executable sections with data between them";
+     return false;
+   }
+   // Symbol files hold VAs at the preferred base; a moved module's are
+diff --git a/tools/pe_symbols.py b/tools/pe_symbols.py
+index f186842..67f4b5f 100644
+--- a/tools/pe_symbols.py
++++ b/tools/pe_symbols.py
+@@ -68,11 +68,12 @@ class PE:
+         o = self.off(rva)
+         return self.d[o:self.d.index(b"\0", o)].decode("latin1")
+ 
+-    def section_of(self, rva):
+-        for name, va, vsize, *_ in self.sections:
++    def executable(self, rva):
++        # Any executable section, not only .text (Miles keeps code in MSSMIXER).
++        for _, va, vsize, _, _, chars in self.sections:
+             if va <= rva < va + vsize:
+-                return name
+-        return "?"
++                return bool(chars & 0x20000000)
++        return False
+ 
+     def exports(self):
+         rva, size = self.dirs[0]
+@@ -147,12 +148,12 @@ def demangle(names):
+     return out
+ 
+ 
+-def classify(name, section):
++def classify(name, executable):
+     if name.startswith("??_C@"):
+         return "string"
+     if name.startswith("??_7"):
+         return "vftable"
+-    if section != ".text":
++    if not executable:
+         return "data"
+     return "func"
+ 
+@@ -173,7 +174,7 @@ def main():
+         f.write("va\tkind\tmangled\tdemangled\n")
+         for rva, ordinal, name in sorted(exps):
+             name = name or f"ord_{ordinal}"
+-            kind = classify(name, pe.section_of(rva))
++            kind = classify(name, pe.executable(rva))
+             kinds[kind] = kinds.get(kind, 0) + 1
+             f.write(f"{pe.image_base + rva:08X}\t{kind}\t{name}\t"
+                     f"{dem.get(name, '')}\n")

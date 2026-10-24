@@ -1,0 +1,113 @@
+diff --git a/tools/lifter/function.cpp b/tools/lifter/function.cpp
+index 531f606..febc67b 100644
+--- a/tools/lifter/function.cpp
++++ b/tools/lifter/function.cpp
+@@ -139,13 +139,39 @@ const Insn* Before(const Function& f, uint32_t va) {
+ 
+ }  // namespace
+ 
+-bool RecoverJumpTable(const Program& p, const Function& f, const Insn& jmp,
+-                      std::vector<uint32_t>* targets) {
++static bool IsTableJmp(const Insn& jmp) {
++  const auto& m = jmp.ops[0];
++  return jmp.ok && jmp.d.mnemonic == ZYDIS_MNEMONIC_JMP &&
++         m.type == ZYDIS_OPERAND_TYPE_MEMORY && m.mem.base == ZYDIS_REGISTER_NONE &&
++         m.mem.index != ZYDIS_REGISTER_NONE && m.mem.scale == 4;
++}
++
++// A switch whose index range the compiler proved has no bound check in
++// front of its jmp. In an image with base relocations the table still has
++// exact limits: its slots are the run of relocated dwords at the table
++// address, each pointing back into this function's code before the table
++// (MSVC emits the cases, then the table). The run ends at the first slot
++// that is not relocated (the next function's code, a byte index table) or
++// whose target lies outside [entry, table).
++static bool RecoverRelocatedTable(const Program& p, const Function& f, const Insn& jmp,
++                                  std::vector<uint32_t>* targets) {
++  const Module* mod = p.TextOf(jmp.va);
++  const auto& relocs = mod->img.relocs;
++  const uint32_t table = static_cast<uint32_t>(jmp.ops[0].mem.disp.value);
++  targets->clear();
++  for (uint32_t slot = table;; slot += 4) {
++    if (!std::binary_search(relocs.begin(), relocs.end(), slot)) break;
++    uint32_t t = p.mem.read<uint32_t>(slot);
++    if (p.TextOf(t) != mod || t < f.entry || t >= table) break;
++    if (std::find(targets->begin(), targets->end(), t) == targets->end())
++      targets->push_back(t);
++  }
++  return !targets->empty();
++}
++
++static bool RecoverBoundedTable(const Program& p, const Function& f, const Insn& jmp,
++                                std::vector<uint32_t>* targets) {
+   const auto& m = jmp.ops[0];
+-  if (!jmp.ok || jmp.d.mnemonic != ZYDIS_MNEMONIC_JMP ||
+-      m.type != ZYDIS_OPERAND_TYPE_MEMORY || m.mem.base != ZYDIS_REGISTER_NONE ||
+-      m.mem.index == ZYDIS_REGISTER_NONE || m.mem.scale != 4)
+-    return false;
+   // MSVC places the tables in .text after the function.
+   const Module* mod = p.TextOf(jmp.va);
+   auto in_text = [&](uint32_t a, uint32_t n) {
+@@ -212,6 +238,13 @@ bool RecoverJumpTable(const Program& p, const Function& f, const Insn& jmp,
+   return false;
+ }
+ 
++bool RecoverJumpTable(const Program& p, const Function& f, const Insn& jmp,
++                      std::vector<uint32_t>* targets) {
++  if (!IsTableJmp(jmp)) return false;
++  return RecoverBoundedTable(p, f, jmp, targets) ||
++         RecoverRelocatedTable(p, f, jmp, targets);
++}
++
+ void BuildFunction(const Program& p, const Decoder& dec, uint32_t entry,
+                    Function* out) {
+   Function& f = *out;
+diff --git a/tools/lifter/main.cpp b/tools/lifter/main.cpp
+index cd08dc5..b50fa0a 100644
+--- a/tools/lifter/main.cpp
++++ b/tools/lifter/main.cpp
+@@ -229,24 +229,28 @@ int main(int argc, char** argv) {
+       for (uint32_t a = sec.va; a + 4 <= sec.va + sec.vsize; a += 4)
+         candidate(&m, p.mem.read<uint32_t>(a), a, &from_data_ptrs);
+     }
+-  size_t recovered_tables = 0;
++  size_t recovered_tables = 0, completed_tables = 0;
+   while (!work.empty()) {
+     uint32_t e = work.front();
+     work.pop_front();
+     if (!done.insert(e).second) continue;
+     lifter::Function f;
+     lifter::BuildFunction(p, dec, e, &f);
+-    // Switch tables Ghidra did not export: recover them and rebuild, as
+-    // their targets may hold further switches.
++    // Switch tables Ghidra did not export, or exported with cases missing:
++    // recover them, add what is new, and rebuild, as their targets may hold
++    // further switches. Targets only grow, so this ends.
+     for (bool more = true; more;) {
+       more = false;
+       for (const auto& [va, in] : f.insns) {
+         std::vector<uint32_t> targets;
+-        if (p.jumptables.count(va) ||
+-            !lifter::RecoverJumpTable(p, f, in, &targets))
+-          continue;
+-        p.jumptables[va] = std::move(targets);
+-        recovered_tables++;
++        if (!lifter::RecoverJumpTable(p, f, in, &targets)) continue;
++        const bool known = p.jumptables.count(va);
++        auto& have = p.jumptables[va];
++        const size_t before = have.size();
++        for (uint32_t t : targets)
++          if (std::find(have.begin(), have.end(), t) == have.end()) have.push_back(t);
++        if (have.size() == before) continue;
++        (known ? completed_tables : recovered_tables)++;
+         more = true;
+       }
+       if (more) {
+@@ -289,6 +293,7 @@ int main(int argc, char** argv) {
+               from_code_ptrs, from_data_ptrs, p.weak.size());
+   std::printf("jump tables: %zu from Ghidra, %zu recovered\n",
+               p.jumptables.size() - recovered_tables, recovered_tables);
++  std::printf("jump tables completed (cases Ghidra missed): %zu\n", completed_tables);
+ 
+   // Pass 2: final CFGs and emission.
+   std::filesystem::create_directories(outdir);
