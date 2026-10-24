@@ -1,0 +1,257 @@
+diff --git a/src/runtime/dispatch.cpp b/src/runtime/dispatch.cpp
+index d181079..fe9150d 100644
+--- a/src/runtime/dispatch.cpp
++++ b/src/runtime/dispatch.cpp
+@@ -263,6 +263,21 @@ void InitDispatch() {
+   }
+ }
+ 
++// "game.dll+0x52C3F8" for an address inside a mapped image, else the VA.
++static std::string Where(uint32_t va) {
++  char buf[96];
++  const Process& p = *g_proc;
++  auto at = [&](const std::string& name, uint32_t base) {
++    std::snprintf(buf, sizeof buf, "%08X (%s+0x%X)", va, name.c_str(), va - base);
++    return std::string(buf);
++  };
++  if (va - p.img.image_base < p.img.image_size) return at(Game().exe_name, p.img.image_base);
++  for (const Module& m : p.modules)
++    if (va - m.img.image_base < m.img.image_size) return at(m.name, m.img.image_base);
++  std::snprintf(buf, sizeof buf, "%08X", va);
++  return buf;
++}
++
+ void Dispatch(Ctx& c, uint32_t target, uint32_t va) {
+   const CodeRange* r = &g_exe;
+   if (target - r->lo >= r->size) {
+@@ -273,14 +288,27 @@ void Dispatch(Ctx& c, uint32_t target, uint32_t va) {
+     r = nullptr;
+     for (const CodeRange& d : g_dlls)
+       if (target - d.lo < d.size) r = &d;
+-    if (!r) FatalF("indirect branch to %08X from %08X: not code", target, va);
++    if (!r)
++      FatalF("indirect branch from %s to %s: not in any lifted module's code "
++             "(data, or an address nothing is mapped at)",
++             Where(va).c_str(), Where(target).c_str());
+   }
+   if (GuestFn fn = r->table[target - r->lo]) {
+     fn(c);
+     return;
+   }
+-  FatalF("indirect branch to unlifted address %08X from %08X "
+-         "(add it to the manifest as a function entry)", target, va);
++  // The lifted function the target lies in, if any (searching back 64 KiB).
++  uint32_t inside = 0;
++  for (uint32_t off = target - r->lo; off > 0 && (target - r->lo) - off < 0x10000;)
++    if (r->table[--off]) {
++      inside = r->lo + off;
++      break;
++    }
++  FatalF("indirect branch from %s to %s: not a lifted function entry%s%s. If it is "
++         "one, add \"entry %08X\" to the module's manifest; if not, the guest state "
++         "below shows how it got here",
++         Where(va).c_str(), Where(target).c_str(), inside ? "; it lies after f_" : "",
++         inside ? Where(inside).c_str() : "", target);
+ }
+ 
+ // The continuation runs in the owning function's catch handler, where a
+diff --git a/src/runtime/hle/hle.h b/src/runtime/hle/hle.h
+index 2114745..dd4b710 100644
+--- a/src/runtime/hle/hle.h
++++ b/src/runtime/hle/hle.h
+@@ -57,6 +57,11 @@ uint32_t ImportThunk(const std::string& dll, const std::string& name);
+ // "KERNEL32.dll", "C:\x\Foo" -> "kernel32.dll", "foo.dll".
+ std::string NormaliseDll(std::string dll);
+ 
++// Before the EXE's entry point, on the main guest thread: the lifted DLLs
++// it imports statically and, first, theirs (DllMain in that order), as the
++// Windows loader does. They are never unloaded. A failed DllMain is fatal.
++void LoadStaticImports(Ctx& c);
++
+ // Called by Dispatch for any address in the thunk region.
+ void CallThunk(Ctx& c, uint32_t thunk);
+ 
+diff --git a/src/runtime/hle/kernel32.cpp b/src/runtime/hle/kernel32.cpp
+index 3629680..c8488d9 100644
+--- a/src/runtime/hle/kernel32.cpp
++++ b/src/runtime/hle/kernel32.cpp
+@@ -3,6 +3,7 @@
+ // kernel32_file.cpp, kernel32_sync.cpp, kernel32_misc.cpp and
+ // kernel32_seh.cpp.
+ 
++#include <algorithm>
+ #include <atomic>
+ #include <chrono>
+ #include <condition_variable>
+@@ -209,16 +210,49 @@ HLE("kernel32.dll", GetModuleFileNameA, 3) {
+   return uint32_t(s.size());
+ }
+ 
++// The lifted DLLs an image imports statically, in import order, once each.
++std::vector<Module*> LiftedImports(const PeImage& img) {
++  std::vector<Module*> out;
++  for (const PeImport& imp : img.imports)
++    if (Module* m = LiftedDll(imp.dll))
++      if (std::find(out.begin(), out.end(), m) == out.end()) out.push_back(m);
++  return out;
++}
++
++// Loads lifted DLL m as the Windows loader does: the lifted DLLs it imports
++// first (each counted once more), then its DllMain. `pin`: a static load,
++// never unloaded. Under g_loader_mu. False if a DllMain failed.
++bool LoadLifted(Ctx& c, Module& m, bool pin) {
++  if (pin) m.pinned = true;
++  if (m.refs++) return true;
++  if (m.stale) MapModule(m);
++  for (Module* dep : LiftedImports(m.img))
++    if (!LoadLifted(c, *dep, pin)) {
++      m.refs = 0;
++      return false;
++    }
++  if (!CallDllMain(c, m, kDllProcessAttach)) {
++    m.refs = 0;
++    return false;
++  }
++  return true;
++}
++
++// FreeLibrary's side: the last reference runs DllMain(DETACH), then
++// releases the lifted DLLs it imported. Pinned (static) loads stay.
++void ReleaseLifted(Ctx& c, Module& m) {
++  if (m.pinned || !m.refs || --m.refs) return;
++  CallDllMain(c, m, kDllProcessDetach);
++  for (Module* dep : LiftedImports(m.img)) ReleaseLifted(c, *dep);
++}
++
+ // LoadLibraryA/ExA: lifted DLLs, and the HLE modules.
+ uint32_t LoadModule(Ctx& c, const char* api, uint32_t name) {
+   std::string n = GStr(name);
+   if (Module* m = LiftedDll(n)) {
+     std::lock_guard<std::recursive_mutex> l(g_loader_mu);
+-    if (m->refs++) return m->img.image_base;
+-    if (m->stale) MapModule(*m);
+-    if (!CallDllMain(c, *m, kDllProcessAttach)) {
++    if (!LoadLifted(c, *m, false)) {
+       WarnF("%s(%s): DllMain failed\n", api, n.c_str());
+-      m->refs = 0;
+       SetLastError(kErrorDllInitFailed);
+       return 0;
+     }
+@@ -237,8 +271,7 @@ HLE("kernel32.dll", LoadLibraryExA, 3) { return LoadModule(c, "LoadLibraryExA",
+ 
+ HLE("kernel32.dll", FreeLibrary, 1) {
+   std::lock_guard<std::recursive_mutex> l(g_loader_mu);
+-  if (Module* m = LoadedDllAt(Arg(c, 0)); m && --m->refs == 0)
+-    CallDllMain(c, *m, kDllProcessDetach);
++  if (Module* m = LoadedDllAt(Arg(c, 0))) ReleaseLifted(c, *m);
+   return 1;
+ }
+ 
+@@ -1094,5 +1127,13 @@ HLE("kernel32.dll", GetLocaleInfoA, 4) { return LocaleInfo(c, false); }
+ HLE("kernel32.dll", GetLocaleInfoW, 4) { return LocaleInfo(c, true); }
+ 
+ }  // namespace
++
++void LoadStaticImports(Ctx& c) {
++  std::lock_guard<std::recursive_mutex> l(g_loader_mu);
++  for (Module* m : LiftedImports(g_proc->img))
++    if (!LoadLifted(c, *m, true))
++      FatalF("%s: DllMain failed while loading the EXE's static imports", m->name.c_str());
++}
++
+ }  // namespace hle
+ }  // namespace recomp
+diff --git a/src/runtime/process.cpp b/src/runtime/process.cpp
+index fb2157d..f94ffd1 100644
+--- a/src/runtime/process.cpp
++++ b/src/runtime/process.cpp
+@@ -214,6 +214,9 @@ static uint32_t RunGuestThread(Thread* t, uint32_t entry,
+   RegisterGuestHostThread("guest", t->tid);
+   uint32_t r;
+   try {
++    // The process entry point runs after the lifted DLLs the EXE imports
++    // have been loaded and initialised, as on Windows.
++    if (!param) hle::LoadStaticImports(t->ctx);
+     r = param ? CallGuest(t->ctx, entry, {*param}) : CallGuest(t->ctx, entry, {});
+   } catch (const GuestThreadExit& e) {
+     r = e.code;
+@@ -302,11 +305,31 @@ const PeImage* ImageAt(uint32_t va) {
+   return nullptr;
+ }
+ 
++// The IAT value for dll!name: a lifted DLL's export, by name or "#ordinal",
++// as the Windows loader binds it (war3.exe and game.dll import Storm.dll by
++// ordinal); anything else an HLE thunk. A lifted DLL must be mapped before
++// its importers, and must have the export.
++static gaddr BindImport(const std::string& dll, const std::string& name) {
++  const std::string n = hle::NormaliseDll(dll);
++  for (const Module& m : g_proc->modules) {
++    if (m.name != n) continue;
++    if (!m.img.image_size)
++      FatalF("import %s!%s: %s is not mapped yet (list it before its importers in "
++             "lifted_dlls)", dll.c_str(), name.c_str(), m.name.c_str());
++    const bool by_ordinal = !name.empty() && name[0] == '#';
++    const uint32_t ordinal = by_ordinal ? uint32_t(std::stoul(name.substr(1))) : 0;
++    for (const PeExport& e : m.img.exports)
++      if (by_ordinal ? e.ordinal == ordinal : e.name == name) return e.va;
++    FatalF("import %s!%s: the lifted DLL has no such export", dll.c_str(), name.c_str());
++  }
++  return hle::ImportThunk(dll, name);
++}
++
+ void MapModule(Module& m) {
+   Process& p = *g_proc;
+   if (m.img.image_size) p.mem.Decommit(m.img.image_base, m.img.image_size);
+   std::string err;
+-  if (!m.img.Load(m.host_path, p.mem, &err, m.base, hle::ImportThunk))
++  if (!m.img.Load(m.host_path, p.mem, &err, m.base, BindImport))
+     FatalF("lifted DLL %s: %s", m.name.c_str(), err.c_str());
+   // Windows XP did not set up static TLS for LoadLibrary'd DLLs either,
+   // so DLLs of that era have none.
+@@ -326,6 +349,8 @@ int RunProcess(const GameConfig& game, const std::string& exe_path,
+   x87::run::g_enabled = !(runs && runs[0] == '0');
+   const char* doubles = Env("X87_DOUBLE");
+   x87::run::g_doubles = !(doubles && doubles[0] == '0');
++  const char* trace = Env("TRACE");
++  g_trace = trace && trace[0] != '0';
+   p.game_args = game_args;
+   StartWatchdog();
+   if (!p.mem.Reserve()) FatalF("cannot reserve the guest arena");
+@@ -334,16 +359,21 @@ int RunProcess(const GameConfig& game, const std::string& exe_path,
+   // there, but the IAT values point at committed memory as on Windows.
+   if (!p.mem.Commit(kThunkBase, kThunkRegionSize, Prot::R))
+     FatalF("cannot commit the thunk region");
+-  std::string err;
+-  if (!p.img.Load(exe_path, p.mem, &err, 0, hle::ImportThunk))
+-    FatalF("%s", err.c_str());
++  // Lifted DLLs first, in lifted_dlls order, so that every importer (the
++  // EXE last) binds to exports that are already mapped. All are known
++  // before any is mapped, so an import of one listed later is refused
++  // instead of binding to an HLE thunk.
++  p.modules.reserve(game.lifted_dlls.size());
+   for (const auto& d : game.lifted_dlls) {
+     Module& m = p.modules.emplace_back();
+     m.name = hle::NormaliseDll(d.name);
+     m.host_path = HostPath(GuestGameDir() + "\\" + d.name);
+     m.base = d.base;
+-    MapModule(m);
+   }
++  for (Module& m : p.modules) MapModule(m);
++  std::string err;
++  if (!p.img.Load(exe_path, p.mem, &err, 0, BindImport))
++    FatalF("%s", err.c_str());
+ 
+   p.vm.Init(&p.mem, 0x00010000, kThunkBase);
+   p.vm.MarkReserved(p.img.image_base, p.img.image_size);
+diff --git a/src/runtime/runtime.h b/src/runtime/runtime.h
+index 00909a4..4045aa4 100644
+--- a/src/runtime/runtime.h
++++ b/src/runtime/runtime.h
+@@ -101,6 +101,7 @@ struct Module {
+   PeImage img;
+   int refs = 0;        // LoadLibrary count (under kernel32's loader lock)
+   bool stale = false;  // has run since it was mapped: map afresh on load
++  bool pinned = false; // loaded with the EXE (static import): never unloaded
+ };
+ 
+ struct Process {

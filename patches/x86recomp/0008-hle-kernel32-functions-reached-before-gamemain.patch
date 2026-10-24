@@ -1,0 +1,80 @@
+diff --git a/src/runtime/hle/kernel32.cpp b/src/runtime/hle/kernel32.cpp
+index c8488d9..50fb65e 100644
+--- a/src/runtime/hle/kernel32.cpp
++++ b/src/runtime/hle/kernel32.cpp
+@@ -246,6 +246,15 @@ void ReleaseLifted(Ctx& c, Module& m) {
+   for (Module* dep : LiftedImports(m.img)) ReleaseLifted(c, *dep);
+ }
+ 
++// DLL_THREAD_ATTACH/DETACH are never sent to lifted DLLs, so for a loaded
++// one the request is already met.
++HLE("kernel32.dll", DisableThreadLibraryCalls, 1) {
++  std::lock_guard<std::recursive_mutex> l(g_loader_mu);
++  if (LoadedDllAt(Arg(c, 0))) return 1;
++  SetLastError(kErrorModNotFound);
++  return 0;
++}
++
+ // LoadLibraryA/ExA: lifted DLLs, and the HLE modules.
+ uint32_t LoadModule(Ctx& c, const char* api, uint32_t name) {
+   std::string n = GStr(name);
+@@ -298,6 +307,7 @@ HLE("kernel32.dll", GetProcAddress, 2) {
+ }
+ 
+ HLE("kernel32.dll", GetCommandLineA, 0) { return g_proc->cmdline_a; }
++HLE("kernel32.dll", GetCommandLineW, 0) { return g_proc->cmdline_w; }
+ 
+ HLE("kernel32.dll", GetStartupInfoA, 1) {
+   uint32_t si = Arg(c, 0);
+@@ -379,6 +389,9 @@ HLE("kernel32.dll", SetConsoleCtrlHandler, 2) { return 1; }
+ HLE("kernel32.dll", GetSystemDirectoryA, 2) {
+   return CopyOut(Arg(c, 0), Arg(c, 1), "C:\\WINDOWS\\system32");
+ }
++HLE("kernel32.dll", GetWindowsDirectoryA, 2) {
++  return CopyOut(Arg(c, 0), Arg(c, 1), "C:\\WINDOWS");  // as SystemRoot/windir
++}
+ 
+ HLE("kernel32.dll", GetCurrentProcess, 0) { return 0xFFFFFFFF; }
+ HLE("kernel32.dll", GetCurrentProcessId, 0) { return kGuestPid; }
+@@ -883,6 +896,14 @@ HLE("kernel32.dll", InterlockedExchange, 2) {
+   return __atomic_exchange_n(reinterpret_cast<uint32_t*>(GPtr(Arg(c, 0))),
+                              Arg(c, 1), __ATOMIC_SEQ_CST);
+ }
++// (Destination, Exchange, Comparand): returns the initial value.
++HLE("kernel32.dll", InterlockedCompareExchange, 3) {
++  GuestSyncPoint sync;
++  uint32_t expected = Arg(c, 2);
++  __atomic_compare_exchange_n(reinterpret_cast<uint32_t*>(GPtr(Arg(c, 0))), &expected,
++                              Arg(c, 1), false, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
++  return expected;
++}
+ 
+ // ---- time ----------------------------------------------------------------
+ 
+diff --git a/src/runtime/hle/kernel32_file.cpp b/src/runtime/hle/kernel32_file.cpp
+index 5ac948d..4bba723 100644
+--- a/src/runtime/hle/kernel32_file.cpp
++++ b/src/runtime/hle/kernel32_file.cpp
+@@ -579,6 +579,22 @@ HLE("kernel32.dll", GetCurrentDirectoryA, 2) {
+   return CopyOut(buf, size, d);
+ }
+ 
++HLE("kernel32.dll", SetCurrentDirectoryA, 1) {
++  std::string g = AbsGuest(GStr(Arg(c, 0)));
++  struct stat st;
++  if (stat(HostPath(g).c_str(), &st) != 0) {
++    SetLastError(ErrnoToWin(errno));
++    return 0;
++  }
++  if (!S_ISDIR(st.st_mode)) {
++    SetLastError(267);  // ERROR_DIRECTORY
++    return 0;
++  }
++  std::lock_guard<std::mutex> l(g_cwd_mu);
++  g_cwd = g;
++  return 1;
++}
++
+ HLE("kernel32.dll", GetFullPathNameA, 4) {
+   std::string full = AbsGuest(GStr(Arg(c, 0)));
+   uint32_t size = Arg(c, 1), buf = Arg(c, 2), filepart = Arg(c, 3);
