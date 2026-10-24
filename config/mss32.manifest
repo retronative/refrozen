@@ -2,4 +2,79 @@
 # Entries the pointer scans cannot see: Miles keeps a table of mixer routine
 # pointers inside its executable MSSMIXER section (relocated dwords at
 # 2113CDEA, 2113CDFA, 2113CEEA, 2113CEFA), which the data scan does not cover.
-entry 21139000  # mixer routine at the start of MSSMIXER (xor eax,eax; mov al,[esi]; ...)
+# The table itself: 128 relocated dwords at 2113CDEA-2113CFE9 (the four above
+# are its first slots), every one pointing at a mixer routine in MSSMIXER:
+# 72 distinct entries, read from the image's base relocations (M5: Miles'
+# mixer dispatched to 211394A6 once the wave device existed).
+entry 21139000
+entry 21139036
+entry 21139079
+entry 211390A4
+entry 211390D7
+entry 2113913C
+entry 211391A0
+entry 211391DB
+entry 2113921F
+entry 2113926A
+entry 211392D6
+entry 21139308
+entry 21139354
+entry 211393D7
+entry 21139458
+entry 211394A6
+entry 211394F7
+entry 21139555
+entry 211395B8
+entry 2113960F
+entry 21139662
+entry 2113973A
+entry 2113980D
+entry 211398E2
+entry 211399B5
+entry 21139A37
+entry 21139ABB
+entry 21139B16
+entry 21139B7A
+entry 21139C7A
+entry 21139DCB
+entry 21139EA0
+entry 21139FC5
+entry 2113A029
+entry 2113A0B5
+entry 2113A113
+entry 2113A17F
+entry 2113A25A
+entry 2113A35A
+entry 2113A432
+entry 2113A51E
+entry 2113A5C2
+entry 2113A663
+entry 2113A6D1
+entry 2113A742
+entry 2113A89A
+entry 2113A9EB
+entry 2113AB14
+entry 2113AC45
+entry 2113ACAD
+entry 2113AD11
+entry 2113AD4B
+entry 2113AD8F
+entry 2113AE18
+entry 2113AE99
+entry 2113AEF6
+entry 2113AF47
+entry 2113AFC8
+entry 2113B04C
+entry 2113B0A6
+entry 2113B10A
+entry 2113B20C
+entry 2113B35D
+entry 2113B440
+entry 2113B565
+entry 2113B603
+entry 2113B6A4
+entry 2113B711
+entry 2113B782
+entry 2113B8DC
+entry 2113BA2D
+entry 2113BB54
