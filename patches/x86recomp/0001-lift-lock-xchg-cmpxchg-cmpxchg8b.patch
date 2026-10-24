@@ -1,0 +1,234 @@
+diff --git a/src/runtime/lifted.h b/src/runtime/lifted.h
+index bdcbb82..549c1d2 100644
+--- a/src/runtime/lifted.h
++++ b/src/runtime/lifted.h
+@@ -394,6 +394,30 @@ inline T* AtomicPtr(uint8_t* b, uint32_t a) {
+   return reinterpret_cast<T*>(b + a);
+ }
+ 
++// One seq_cst compare-and-swap; returns the value memory held, which is
++// `expected` exactly when `desired` was stored (lock cmpxchg, cmpxchg8b).
++template <typename T>
++[[gnu::always_inline]] inline T CasSeen(T* p, T expected, T desired) {
++  __atomic_compare_exchange_n(p, &expected, desired, false, __ATOMIC_SEQ_CST,
++                              __ATOMIC_SEQ_CST);
++  return expected;
++}
++
++// cmpxchg8b m64: if edx:eax equals [p], store ecx:ebx and set ZF; otherwise
++// load [p] into edx:eax and clear ZF. No other flag changes. Atomic with or
++// without lock, which is stronger than unlocked x86 needs.
++[[gnu::always_inline]] inline void Cmpxchg8b(Flags& f, uint64_t* p,
++                                             uint32_t& eax, uint32_t& edx,
++                                             uint32_t ebx, uint32_t ecx) {
++  const uint64_t want = (uint64_t(edx) << 32) | eax;
++  const uint64_t seen = CasSeen(p, want, (uint64_t(ecx) << 32) | ebx);
++  f.zf = seen == want;
++  if (!f.zf) {
++    eax = uint32_t(seen);
++    edx = uint32_t(seen >> 32);
++  }
++}
++
+ }  // namespace lift
+ }  // namespace recomp
+ 
+diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
+index 143232f..cd58753 100644
+--- a/tests/CMakeLists.txt
++++ b/tests/CMakeLists.txt
+@@ -27,6 +27,14 @@ target_compile_options(sse_rsqrt_test PRIVATE -O2)
+ add_test(NAME sse_rsqrt COMMAND sse_rsqrt_test)
+ set_tests_properties(sse_rsqrt PROPERTIES TIMEOUT 300)
+ 
++# lift_atomic_test: hand-computed lock cmpxchg / cmpxchg8b semantics and a
++# two-thread atomicity check of cmpxchg8b; portable.
++add_executable(lift_atomic_test lift_atomic_test.cpp)
++target_include_directories(lift_atomic_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
++target_compile_features(lift_atomic_test PRIVATE cxx_std_20)
++add_test(NAME lift_atomic COMMAND lift_atomic_test)
++set_tests_properties(lift_atomic PROPERTIES TIMEOUT 60)
++
+ # digital_reverb_test: the Miles-compatible digital reverb against a hash
+ # of its own output recorded when it matched the original
+ # (recomp_add_digital_reverb_test compares with the original itself);
+diff --git a/tests/lift_atomic_test.cpp b/tests/lift_atomic_test.cpp
+new file mode 100644
+index 0000000..3c7f726
+--- /dev/null
++++ b/tests/lift_atomic_test.cpp
+@@ -0,0 +1,134 @@
++// Hand-computed cases for the compare-and-swap helpers behind lock cmpxchg
++// and cmpxchg8b (lifted.h), with expected values from the Intel manual
++// (CMPXCHG, CMPXCHG8B), plus a two-thread check that cmpxchg8b is one
++// atomic 64-bit access. Portable: runs on arm64 hosts too.
++
++#include <cstdint>
++#include <cstdio>
++#include <thread>
++
++#include "runtime/lifted.h"
++
++namespace L = recomp::lift;
++
++namespace {
++
++int g_fail = 0;
++
++void Expect(bool ok, const char* what) {
++  if (!ok) {
++    g_fail++;
++    std::printf("FAIL %s\n", what);
++  }
++}
++
++recomp::Flags OtherFlagsSet() {
++  recomp::Flags f{};
++  f.cf = f.pf = f.af = f.sf = f.of = true;
++  return f;
++}
++
++bool OtherFlagsKept(const recomp::Flags& f) {
++  return f.cf && f.pf && f.af && f.sf && f.of;
++}
++
++void Cmpxchg8bEqual() {
++  uint64_t m = 0x1122334455667788ull;
++  uint32_t eax = 0x55667788, edx = 0x11223344;
++  recomp::Flags f = OtherFlagsSet();
++  L::Cmpxchg8b(f, &m, eax, edx, /*ebx=*/0xEEFF0011, /*ecx=*/0xAABBCCDD);
++  Expect(m == 0xAABBCCDDEEFF0011ull, "cmpxchg8b equal: stores ecx:ebx");
++  Expect(f.zf, "cmpxchg8b equal: ZF=1");
++  Expect(eax == 0x55667788 && edx == 0x11223344,
++         "cmpxchg8b equal: edx:eax unchanged");
++  Expect(OtherFlagsKept(f), "cmpxchg8b equal: other flags unchanged");
++}
++
++void Cmpxchg8bNotEqual() {
++  uint64_t m = 0x0000000100000002ull;
++  uint32_t eax = 2, edx = 0;
++  recomp::Flags f = OtherFlagsSet();
++  f.zf = true;
++  L::Cmpxchg8b(f, &m, eax, edx, 0xDEADBEEF, 0xDEADBEEF);
++  Expect(m == 0x0000000100000002ull, "cmpxchg8b differ: memory unchanged");
++  Expect(!f.zf, "cmpxchg8b differ: ZF=0");
++  Expect(eax == 2 && edx == 1, "cmpxchg8b differ: edx:eax = memory");
++  Expect(OtherFlagsKept(f), "cmpxchg8b differ: other flags unchanged");
++}
++
++// Only the high halves differ: a 32-bit compare would wrongly succeed.
++void Cmpxchg8bHighHalfDiffers() {
++  uint64_t m = 0xFFFFFFFF00000000ull;
++  uint32_t eax = 0, edx = 0;
++  recomp::Flags f{};
++  L::Cmpxchg8b(f, &m, eax, edx, 1, 1);
++  Expect(m == 0xFFFFFFFF00000000ull, "cmpxchg8b high half: memory unchanged");
++  Expect(!f.zf && eax == 0 && edx == 0xFFFFFFFF,
++         "cmpxchg8b high half: ZF=0, edx:eax = memory");
++}
++
++// lock cmpxchg as emitted: d = CasSeen(dest, acc, src); flags = CMP acc, d;
++// the accumulator takes d when they differ.
++void LockCmpxchg32() {
++  uint32_t m = 5, eax = 5;
++  recomp::Flags f{};
++  uint32_t d = L::CasSeen<uint32_t>(&m, eax, 9);
++  (void)L::Sub<4>(f, eax, d);
++  Expect(m == 9 && f.zf && !f.cf && !f.sf, "lock cmpxchg equal: stores, ZF=1");
++
++  m = 2;
++  eax = 1;
++  d = L::CasSeen<uint32_t>(&m, eax, 9);
++  (void)L::Sub<4>(f, eax, d);
++  if (!f.zf) eax = d;
++  // CMP 1, 2: 1 - 2 borrows (CF=1), result 0xFFFFFFFF (SF=1, ZF=0).
++  Expect(m == 2 && !f.zf && f.cf && f.sf && !f.of && eax == 2,
++         "lock cmpxchg differ: memory kept, eax = memory, CMP flags");
++}
++
++void LockCmpxchg8Bit() {
++  uint8_t m[4] = {0x11, 0x7F, 0x22, 0x33};
++  recomp::Flags f{};
++  uint32_t d = L::CasSeen<uint8_t>(&m[1], 0x7F, 0x80);
++  (void)L::Sub<1>(f, 0x7F, d);
++  Expect(m[1] == 0x80 && f.zf, "lock cmpxchg byte: stores");
++  Expect(m[0] == 0x11 && m[2] == 0x22 && m[3] == 0x33,
++         "lock cmpxchg byte: neighbours untouched");
++}
++
++// Two threads add 1 to a 64-bit counter through cmpxchg8b retry loops (as
++// Storm's SInterlocked* do). Torn or non-atomic updates lose increments.
++void Cmpxchg8bAtomic() {
++  alignas(8) uint64_t counter = 0xFFFFFFF0ull;  // crosses the 32-bit carry
++  constexpr int kPerThread = 200000;
++  auto worker = [&] {
++    for (int i = 0; i < kPerThread; i++) {
++      recomp::Flags f{};
++      uint32_t eax = 0, edx = 0;
++      do {
++        const uint64_t want = (uint64_t(edx) << 32) | eax;
++        const uint64_t next = want + 1;
++        L::Cmpxchg8b(f, &counter, eax, edx, uint32_t(next),
++                     uint32_t(next >> 32));
++      } while (!f.zf);
++    }
++  };
++  std::thread a(worker), b(worker);
++  a.join();
++  b.join();
++  Expect(counter == 0xFFFFFFF0ull + 2ull * kPerThread,
++         "cmpxchg8b: concurrent increments all kept");
++}
++
++}  // namespace
++
++int main() {
++  Cmpxchg8bEqual();
++  Cmpxchg8bNotEqual();
++  Cmpxchg8bHighHalfDiffers();
++  LockCmpxchg32();
++  LockCmpxchg8Bit();
++  Cmpxchg8bAtomic();
++  std::printf("lift_atomic: %s\n", g_fail ? "FAILED" : "ok");
++  return g_fail ? 1 : 0;
++}
+diff --git a/tools/lifter/emit.cpp b/tools/lifter/emit.cpp
+index 737ca9a..7bd1d24 100644
+--- a/tools/lifter/emit.cpp
++++ b/tools/lifter/emit.cpp
+@@ -1652,7 +1652,11 @@ void InsnEmitter::Emit() {
+   }
+ 
+   if (!PrepareMem()) return Unimpl();
+-  if (locked) return EmitLocked();
++  // xchg with memory is always atomic below; cmpxchg and cmpxchg8b are
++  // compare-and-swaps rather than read-modify-write loops.
++  if (locked && m != ZYDIS_MNEMONIC_XCHG && m != ZYDIS_MNEMONIC_CMPXCHG &&
++      m != ZYDIS_MNEMONIC_CMPXCHG8B)
++    return EmitLocked();
+ 
+   switch (m) {
+     case ZYDIS_MNEMONIC_NOP:
+@@ -1869,8 +1873,22 @@ void InsnEmitter::Emit() {
+       }
+       return;
+     }
++    case ZYDIS_MNEMONIC_CMPXCHG8B:
++      L("::recomp::lift::Cmpxchg8b(F, ::recomp::lift::AtomicPtr<uint64_t>(B, m0), "
++        "eax, edx, ebx, ecx);");
++      return;
+     case ZYDIS_MNEMONIC_CMPXCHG: {
+       int n = Bytes(0);
++      if (locked) {
++        const char* t = MemType(n);
++        const std::string acc = ReadReg(Acc(n));
++        L(Fmt("const uint32_t d = ::recomp::lift::CasSeen<%s>("
++              "::recomp::lift::AtomicPtr<%s>(B, m0), %s(%s), %s(%s));",
++              t, t, t, acc.c_str(), t, Read(1).c_str()));
++        L(Fmt("(void)::recomp::lift::Sub<%d>(F, %s, d);", n, acc.c_str()));
++        L("if (!F.zf) { " + WriteReg(Acc(n), "d") + " }");
++        return;
++      }
+       L("const uint32_t d = " + Read(0) + ";");
+       L(Fmt("(void)::recomp::lift::Sub<%d>(F, %s, d);", n, ReadReg(Acc(n)).c_str()));
+       L("if (F.zf) { " + Write(0, Read(1)) + " } else { " + WriteReg(Acc(n), "d") + " }");

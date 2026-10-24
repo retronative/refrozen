@@ -1,0 +1,43 @@
+# Game data is NEVER committed. Players supply their own copy.
+/game
+/private
+*.exe
+*.dll
+*.mpq
+*.MPQ
+*.w3x
+*.w3m
+*.w3g
+*.mix
+*.blp
+*.mdx
+*.zip
+
+# Generated recompiler output (from the player's own binaries)
+/generated
+
+# Build output and packages
+build/
+out/
+.cache/
+*.dmg
+*.dSYM/
+xcuserdata/
+
+# Third-party tool checkouts and builds
+/tools
+
+# Logs
+*.log
+
+# macOS / editors
+.DS_Store
+.vscode/
+.idea/
+
+# Python
+__pycache__/
+*.pyc
+
+# Local debugging log (AGENTS.md)
+WORKLOG.local.md
