@@ -1,6 +1,6 @@
 # reFrozen — Feasibility
 
-Status: **M0 and M1 passed (signed off 2026-10-24); M2 passed (2026-10-24), awaiting the user's sign-off.** Labels: VERIFIED (observed locally, reproducible),
+Status: **M0, M1 and M2 passed (signed off 2026-10-24); M3 passed (2026-10-24), awaiting the user's sign-off.** Labels: VERIFIED (observed locally, reproducible),
 OBSERVED (stated by a cited external source, not reproduced here), HYPOTHESIS, FALSIFIED,
 UNRESOLVED. The full research report with sources is
 [research/reports/WC3 native macOS port methods.md](research/reports/WC3%20native%20macOS%20port%20methods.md).
@@ -10,12 +10,13 @@ UNRESOLVED. The full research report with sources is
 | Question | Answer |
 |---|---|
 | Is the input the right release? | **Yes.** WC3 RoC + TFT 1.21b (enGB), patched with the official 1.26a English patch to build 1.26.0.6401. All binaries are x86 Win32 PE, MSVC 2005 (linker 8.0), unpacked (§2). |
-| Recompile toolchain | **x86recomp + 8 reFrozen patches.** All ten modules (war3.exe, game.dll, Storm.dll, Mss32.dll, msvcr80.dll, 5 Miles providers) lift with 0 reachable unimplemented sites, pass the structural audit, are byte-identical across runs and compile for arm64 (§7, §9). |
+| Recompile toolchain | **x86recomp + 10 reFrozen patches.** All eleven modules (war3.exe, game.dll, Storm.dll, Mss32.dll, msvcr80.dll, ijl15.dll, 5 Miles providers) lift with 0 reachable unimplemented sites, pass the structural audit, are byte-identical across runs and compile for arm64 (§7, §9, §10). |
 | Native process (M2) | **Reaches `GameMain`.** One arm64 executable (`build/main/refrozen`) maps all ten modules at their preferred bases, binds all 675 cross-module imports (Storm by ordinal, Miles by name) to the lifted exports, runs the DllMains dependencies-first and calls `game.dll!GameMain`; every Win32 import without a handler is a strict stub (§9). |
+| Runtime initialization (M3) | **Reaches the main menu loop** on the player's native install (CD keys stored as the official installer stores them), with the game's own OpenGL renderer on x86recomp's GL HLE; 3 consecutive launches, no fatal stop; sound is off (no wave device until M5) (§10). |
 | DotA target | **DotA 6.85oz LoD** (pure JASS) for the offline milestones; iCCup native-plugin builds (6.83se/6.83s/6.85.308) deferred to M8, iCCup online compatibility, which needs M7 and iCCup's official cooperation (§5). |
 | Miles | **Recompile Mss32.dll 6.1d and its providers** rather than extend x86recomp's Miles HLE (§8). |
 | Reimplementation instead? | **No** for this goal. No open-source engine plays DotA 6.83 or keeps lockstep with real 1.26a clients. |
-| Native install path | **Done.** `scripts/native_install.py` installs RoC + TFT and applies the 1.26a patch with no Wine; it reproduces the official result (all loose files byte-identical, all MPQ contents identical except the CD-key files), deterministically (§1). |
+| Native install path | **Done.** `scripts/native_install.py` installs RoC + TFT, stores the CD keys as the installer does, and applies the 1.26a patch with no Wine; it reproduces the official result (all loose files and MPQ contents identical except the two `font.ccd` files), deterministically (§1, §10). |
 | DotA on 1.26a | **Pure-JASS DotA maps work** (6.85oz LoD plays, IMBA loads, in the official client). **`DotA v6.83se` does not**: it is an iCCup build whose logic is a native plugin DLL, and stock 1.26a crashes loading it (§5). |
 
 ## 1. Inputs and install (VERIFIED 2026-10-24)
@@ -178,12 +179,12 @@ Static: `scripts/map_check.py <map> game/native-install` (MPQ/HM3W/w3i headers; 
   nothing iCCup-specific is implemented or tested on the network before then.
 
 ## 6. Compatibility issues carried forward
-- **CD-key step (UNRESOLVED, M3):** the native installer leaves the 5 `font\font.*` files as
-  shipped. The installer encodes the key (`cdkey26`, `cdkey1encode`) into them; per the project
+- **CD-key step (RESOLVED in M3, §10, except `font.ccd`):** the native installer left the 5
+  `font\font.*` files as shipped. The installer encodes the key (`cdkey26`, `cdkey1encode`) into them; per the project
   rule the port follows that practice, so the encoding must be reproduced from the installer and
   checked against the oracle made with the test key. Whether 1.26a needs these files for offline
   play is not yet tested.
-- **Intro movies (VERIFIED, M3):** on a fresh profile the client plays its intro through
+- **Intro movies (VERIFIED; M3 seeds `seenintromovie`, §10):** on a fresh profile the client plays its intro through
   DirectShow (`blizzard.ax`) and does not check for failure: with no splitter filters it calls
   through a null graph (`game.dll` `0x6F52C3F8`, `QueryInterface(IID_IMediaPosition)`). Under Wine
   (no GStreamer) that crashes every launch; `HKCU\…\Warcraft III\Misc\seenintromovie=1` avoids it.
@@ -319,6 +320,15 @@ the price of one HLE entry and the import binding Storm already needs. Revisit i
 HLE's gaps (no notifications) block Miles at M3/M5. x86recomp's `recomp_mss32` is not linked.
 
 ## 9. M2: native link and process start (VERIFIED 2026-10-24)
+
+**Corrections found in M3 (§10):** (1) "DllMains run … as on Windows" missed one part of the
+contract: Windows passes DllMain a non-NULL `lpReserved` for the EXE's static imports and NULL for
+LoadLibrary; the M2 loader passed NULL always, and Storm.dll, attached with NULL, seeds its MPQ
+crypt table so that no file opens. Fixed in patch 0009. (2) `import_coverage.py` counted handlers
+of HLE modules `refrozen` does not link: game.dll's 48 opengl32 imports were reported as handled
+but were strict stubs; at the M2 tree the true totals were 922 handled, 412 stubs. (3)
+`TryEnterCriticalSection` was among the "accepted" GetProcAddress NULLs, but game.dll calls the
+pointer without checking it (6F6EB550); it exists on every NT system and is now implemented.
 
 Toolchain: x86recomp `ad1b16b` + `patches/x86recomp/0001`–`0008` (a fresh clone at `ad1b16b` with
 the series applied by `git apply` is identical to the tree tested), LLVM 23.1.4, CMake + Ninja.
@@ -460,3 +470,115 @@ REFROZEN_TRACE=1 scripts/run_attempt.sh m2-trace 120
 - **Indirect jumps** are validated only when taken; unseen targets are found at run time (with
   the diagnostic above).
 - `DirectSoundCreate`, CD-key data, DirectShow movies (§6, §8) and memory ordering (§7) are open.
+
+## 10. M3: runtime initialization to the main menu loop (VERIFIED 2026-10-24)
+
+Toolchain: x86recomp `ad1b16b` + `patches/x86recomp/0001`–`0010` (a fresh clone with the series
+applied is identical to the tree tested). Install: `scripts/native_install.py` with the test keys
+of the player's readme (development only; nothing key-derived is stored in the repository).
+
+**Acceptance (`scripts/m3_accept.sh 3 60`, final tree):** 3 consecutive launches, each 60 s:
+no FATAL, no watchdog report (the runtime reports any 5 s without a presented frame), still
+running at the deadline, frames saved from each. The saved frames show the Frozen Throne main
+menu (3D background animated, all buttons, version 1.26.0.6401) with the game's own dialog
+"Unable to initialize base sound services, sound is disabled" (no wave device, below). A
+foreground launch without the focus hook (the player's path) presented frames for 60 s, no
+fatal. Earlier full runs (before the last fixes) presented 4,200–5,400 frames per minute; the
+final runs 1,200–3,000 on a host at load average 13–24; frame rate is not an M3 criterion.
+
+**Root causes on the way (each from a stop or a hang, each fixed and tested):**
+
+| Stop / symptom | Cause | Fix |
+|---|---|---|
+| `GetDiskFreeSpaceA` (Storm) | not implemented | NT semantics, statvfs of the per-user volume (Wine's tests for the root forms) |
+| `ImmAssociateContextEx` | imm32 not implemented | the IMM-disabled system (en-US XP), ReactOS's results for all 9 imported functions |
+| "Warcraft III was unable to initialize" | game.dll's product check (6F009950) decodes the installed CD-key files `font\font.gid`/`.exp`; the native install left the shipped placeholders | the installer's key step reproduced (below) |
+| …still: no MPQ file opens | Storm's crypt table seeded with 0x10000100 by its DllMain when `lpReserved` is NULL (a dynamic load); the loader passed NULL for static imports | static imports get a zeroed CONTEXT on the initial thread's stack as `lpReserved` (MSDN contract) |
+| "unable to initialize DirectX" | no `d3d8.dll` (Direct3D 8 is M4) | the game's own `Gfx OpenGL` setting (REG_DWORD 1) and x86recomp's existing `recomp_opengl`, linked |
+| `EnumDisplayDevicesA`, `ChangeDisplaySettingsExA`, `glTexGeni`, `wglSwapLayerBuffers`, `GetSystemDefaultLangID`, `OpenEventA`, `GetProfileStringA`, `waveOutOpen`, `CreateIoCompletionPort` | not implemented | each to its documented behaviour (patch 0009); forms not needed stop explicitly |
+| `ijl15.dll!#2` | the Intel JPEG Library (JPEG BLP textures) is a shipped x86 DLL | lifted as the 11th module; ~40 MMX/SSE2 forms and the `movhps` store (patch 0010) |
+| indirect branch 6002E0B2 → 6002E1F4 | `mov eax,[t+4*i]; jmp eax` with the table in `.data` (Intel's compiler), not recovered | recovery of the load-then-jump form; tables outside `.text` need every slot relocated |
+| undecodable 6002D1C1 | Ghidra listed index −1 of a computed jump (an impossible case inside a `lea`) | `config/jumptable_corrections.tsv` with the derivation |
+| 2 code pointers unexplained (validator) | relocated slots in `.data1` and unaligned ones were never scanned | every relocated slot outside executable sections is scanned (images with relocations) |
+| running, but no frame ever | Windows sends `WM_SIZE`/`WM_MOVE` after `WM_CREATE` (popups) and on maximize; the runtime never did, so the GL device never learnt its size | the creation/maximize/first-show sequences of Wine's message tests |
+
+**CD keys, as the installer stores them.** The cipher of the `font\font.*` files was recovered
+from game.dll's reader (6F553AA0 → 6F555630, `scripts/font_keydata.py`): a SHA-1 compression with
+SHA-0's message schedule, rotations built from arithmetic shifts and little-endian words
+(Battle.net's "broken SHA-1"), IDEA (PGP's reference implementation on little-endian words: it
+passes IDEA's published test vector), and keys from the CRT's `rand()` after fixed seeds. The
+installer's `<encrypt object="cdkey26">` writes the key (26 characters, upper case, no dashes, NUL)
+into `font.gid` (war3.mpq) / `font.exp` (War3x.mpq), `<encrypt object="user">` the owner's name
+(NUL) into `font.clh`, zero-padded to one 64-byte block. The encoder reproduces the official
+installer's three files byte for byte from the same keys and name. `native_install.py` asks for the
+keys like the installer (stdin when not a terminal) and stores them nowhere else; `--verify`
+against the Wine oracle: **PASS**, every loose file and MPQ entry identical except the two
+`font.ccd` files (`cdkey1encode`, not reproduced: game.dll's decoder rejects both the shipped and
+the official one, so the game behaves the same). The installer's own key checksum is not
+reproduced; the game validates the keys when it starts (the check above), unchanged. While testing
+the decoder, the strings in the *shipped placeholder* files (Blizzard's, from the install media)
+were printed once into the development session; no key of the player's was ever printed or
+written outside the MPQs.
+
+**Settings seeded** (first run only: the registry file does not exist yet; a profile from M2
+lacks them): `HKCU\…\Warcraft III\Gfx OpenGL` = 1 and `…\Misc\seenintromovie` = 1, both REG_DWORD
+as game.dll's settings table declares them (type 4); `GameConfig::registry_dwords` is new in 0009.
+
+**Decisions:**
+- **Renderer:** the game's OpenGL path on x86recomp's existing GL HLE; Direct3D 8 stays M4. The GL
+  context does not model texture-coordinate generation: `glTexGeni` now keeps its state with
+  GL 1.1's errors, but enabling `TEXTURE_GEN_S/T` is still reported as unsupported (INVALID_ENUM
+  and a warning, upstream's model for GL gaps), an M4 risk.
+- **Sound:** a system without a wave output device (`waveOutOpen`: MMSYSERR_NODRIVER for the
+  mapper, BADDEVICEID otherwise), the codes Windows gives such a machine; Miles runs silent and the
+  game shows its dialog. Audio output is M5.
+- **Background runs** never get host focus: `REFROZEN_TEST_FOCUS=follow` activates the game's window
+  guest-side (test hook; players get real focus events).
+
+**CRT and game fallback paths (investigated statically):** msvcr80's `_encode_pointer` /
+`_decode_pointer` return the pointer unchanged when `EncodePointer` is missing (the XP-before-SP2
+path, consistent both ways); with any `Fls*` function missing it switches to TLS (`TlsGetValue`,
+`TlsSetValue`, `TlsFree`, and a `TlsAlloc` wrapper that ignores the FLS callback), so per-thread CRT
+data is freed only on DLL_THREAD_DETACH, which the runtime never sends (a small leak per exiting
+CRT thread). game.dll falls back from `GetSystemDefaultUILanguage` to `GetSystemDefaultLangID`
+(observed) and skips its privilege check when `AllocateAndInitializeSid` is missing (6F00BB00).
+
+**Thread synchronization:** named events/mutexes now fail on another type's name as Windows does
+(ERROR_INVALID_HANDLE); I/O completion ports queue posted packets FIFO and wake blocked
+`GetQueuedCompletionStatus` threads (the game creates a port and 16 workers for networking; no
+packet is posted before the menu); `TryEnterCriticalSection` uses XP's algorithm on the guest
+`CRITICAL_SECTION`. The completion port's concurrency limit (a scheduling hint) is not modelled.
+
+**Lift:** 11 modules, 94,489 functions, 2,823,428 instructions, 241 files; two lifts byte-identical,
+tree hash `e9333df8d9039d68b91c720b7275b66f3a8d1a073a10ea38aa05cdc52795b7e7`; `validate_lift.py`
+HARD PASS on all eleven; 744 unimplemented sites, all in the documented-unreachable functions.
+Imports (`import_coverage.py`, linked HLE modules only): 678 cross-module (all resolve), 1,063
+handled, 327 strict stubs.
+
+**Tests and mutation gate** (`reference/TEST_COVERAGE.md`): 249 checks in the project's tests
+(lifter 108, loader 18, Win32 95, key files 23, jump-table corrections 5), all passing; ctest 16/16;
+87 mutants over M2 and M3, 86 KILLED, 1 documented EQUIVALENT, 0 survivors; the 53 packed-integer
+expectations agree 53/53 with x86-64 under Rosetta 2.
+
+**Verify:**
+```sh
+scripts/setup_tools.sh
+/opt/homebrew/bin/python3 -I scripts/native_install.py ... --owner "<name>" --verify game/wine-oracle
+scripts/lift.sh && cmake -S . -B build/main && ninja -C build/main refrozen
+for t in test_lifter_patches test_loader test_win32 test_font_keydata test_jumptable_corrections; do
+  /opt/homebrew/bin/python3 -I tests/$t.py; done
+/opt/homebrew/bin/python3 -I tests/mutate.py
+scripts/m3_accept.sh 3 60
+```
+
+**Remaining risks (for M4+):**
+- 327 strict stubs remain; upstream fake-success no-ops met on the way and not changed:
+  `InvalidateRect`, `UpdateWindow`, `FillRect`, `DrawTextA` (return success, do nothing).
+- Rendering correctness is not checked (M4): texture-coordinate generation, the GL HLE's gaps,
+  Direct3D 8; input (mouse/keyboard into the menu) not exercised; the sound dialog must be
+  dismissed by the player.
+- Accepted GetProcAddress NULLs left: `Fls*`, `Encode/DecodePointer`, `FindActCtxSectionStringW`,
+  `GetSystemDefaultUILanguage`, `AllocateAndInitializeSid` (fallbacks above); no
+  DLL_THREAD_ATTACH/DETACH.
+- `font.ccd` not reproduced; the installer's key checksum not reproduced (the game checks keys).
+- Memory ordering in game.dll's threads (16 network workers now exist) is not audited.

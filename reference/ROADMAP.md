@@ -8,6 +8,12 @@ criteria are met **and observed**. Each milestone records **Evidence** (what was
 States: **Passed**, **Partial** (lists the unmet criteria), **Blocked** (root cause or the
 unknown documented). Diagnosing a failure is progress; it does not pass a criterion.
 
+**Mutation gate (from M3, every milestone):** a milestone is not signed off until every behaviour
+it adds or changes has focused tests with independently derived expected values, its mutants in
+`tests/mutants.py` are all KILLED or documented EQUIVALENT by `tests/mutate.py` (survivors fixed
+by better tests), earlier milestones' mutants still pass, and `reference/TEST_COVERAGE.md` records
+each mutant, its expected failure and the observed result (AGENTS.md, "Mutation gate").
+
 **Order: offline first.** A playable local match comes first, then AI bots, then LAN and private
 multiplayer (M7), and only then the iCCup online community (M8), which also depends on iCCup's
 official cooperation. Nothing network-facing is needed before M7.
@@ -63,7 +69,7 @@ official cooperation. Nothing network-facing is needed before M7.
   Miles; run-time indirect jumps (2,535 `jmp reg` in game.dll) not checked statically; lock-free
   memory ordering not audited.
 
-## M2 — Native link and process start *(Passed 2026-10-24, pending the user's sign-off)*
+## M2 — Native link and process start *(Passed 2026-10-24, signed off by the user)*
 - **Scope:** a game project (`GameConfig`, `RunProcess`), strict import stubs generated from the
   imports, 0 unresolved symbols; the process reaches `GameMain` in `game.dll`. msvcr80.dll
   (the CRT war3.exe, game.dll and Storm import) is lifted as a 10th module.
@@ -99,11 +105,32 @@ official cooperation. Nothing network-facing is needed before M7.
   fallbacks; no DLL_THREAD_ATTACH/DETACH; indirect targets validated only when taken;
   DirectSoundCreate, CD-key data, DirectShow movies, memory ordering.
 
-## M3 — Runtime initialization
-- CRT, threads, registry seed (the installer's values), file I/O and Storm's MPQ access on the
-  native install; the CD-key data the game reads at startup (installer encoding, §6); intro
-  movies skipped or played (DirectShow / `blizzard.ax` path, §6).
-- **Accept:** reaches the main menu loop without a fatal stop, 3 consecutive launches.
+## M3 — Runtime initialization *(Passed 2026-10-24, pending the user's sign-off)*
+- **Scope:** CRT, threads, registry seed, file I/O and Storm's MPQ access on the native install;
+  the CD-key data the game reads at startup; intro movies skipped (`seenintromovie`).
+- **Accept → Evidence** (FEASIBILITY §10):
+  - Main menu loop, 3 consecutive launches, no fatal stop → `scripts/m3_accept.sh 3 60`: 3/3 PASS
+    (no FATAL, no watchdog report, alive at 60 s, frames saved); the frames show the TFT main menu
+    with the game's "sound is disabled" dialog. A foreground launch (no test hook) likewise.
+  - CD keys per the installer → the cipher of `fontont.*` recovered from game.dll; the native
+    installer's files are byte-identical to the official installer's for the same keys and name;
+    `--verify` PASS except `font.ccd` (not reproduced; the game rejects both versions). The game's
+    own key check runs unchanged.
+  - Win32 implemented from observed stops, strict elsewhere → 9 stops fixed to documented
+    behaviour; unneeded forms stop explicitly; 327 strict stubs remain. ijl15.dll lifted
+    (11 modules) with ~40 new MMX/SSE2 forms. Loader fix: static DllMains get a non-NULL
+    `lpReserved` (Storm's MPQ access depended on it). Windows' `WM_SIZE`/`WM_MOVE` sequences
+    (the last blocker: the GL device never learnt its size).
+  - Renderer → the game's own OpenGL setting on x86recomp's GL HLE (Direct3D 8 is M4). Sound →
+    no wave device (Windows' error codes); audio output is M5.
+  - CRT fallbacks and thread synchronization → investigated where reached (FEASIBILITY §10);
+    named-object type checks, I/O completion ports, TryEnterCriticalSection implemented and tested.
+  - Mutation gate → 87 mutants (M2 + M3): 86 KILLED, 1 documented EQUIVALENT, 0 survivors;
+    249 checks; ctest 16/16; lift byte-identical twice (`e9333df8…95b7e7`), validator HARD PASS.
+- **Verify:** FEASIBILITY §10.
+- **Risks carried to M4:** rendering correctness unverified (texgen enabling unsupported in the GL
+  HLE; Direct3D 8 absent); input untested; upstream fake-success no-ops (`InvalidateRect`,
+  `UpdateWindow`, `FillRect`, `DrawTextA`); `font.ccd`; game.dll's threads' memory ordering.
 
 ## M4 — Menus on screen
 - D3D8 or the `-opengl` renderer on x86recomp's `gfx::Device` (Metal), input, the main menu

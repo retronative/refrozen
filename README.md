@@ -19,7 +19,7 @@ Native recompilation of Warcraft III: The Frozen Throne (1.26a) for Apple Silico
 
 ## Status
 
-**M2 complete (pending sign-off):** the recompiled Warcraft III 1.26a modules link into one native arm64 macOS process that loads them as Windows would and reaches `GameMain` in `game.dll`. Nothing is on screen yet (M3: runtime initialization up to the main menu). Offline target: DotA 6.85oz LoD. Milestones and their gates are in
+**M3 complete (pending sign-off):** the recompiled Warcraft III 1.26a reaches its main menu natively on Apple Silicon, rendered by the game's OpenGL path, from an install made natively from your own installers (CD keys stored as the official installer stores them). Sound is not implemented yet (M5); Direct3D 8, input and rendering checks are next (M4). Offline target: DotA 6.85oz LoD. Milestones and their gates are in
 [reference/ROADMAP.md](reference/ROADMAP.md); open questions are in
 [reference/FEASIBILITY.md](reference/FEASIBILITY.md).
 

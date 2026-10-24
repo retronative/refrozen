@@ -13,10 +13,11 @@ ReCarbon (`../recarbon`); reusable lessons are in `../game-port-knowledge`.
 | `../DOTA/` | The player's own game installers, client pack and maps | **Read-only.** Never commit anything from it. |
 | `game/` | Extracted tomes, 1.26a oracle binaries (`oracle-1.26a/`), Ghidra project, symbols, generated code, launch logs (`attempts/`), reports | git-ignored, proprietary-derived |
 | `tools/` | x86recomp (pinned + patches), Wine (dev oracle only) | git-ignored |
-| `patches/x86recomp/` | Our x86recomp patches 0001–0008, applied in order by `scripts/setup_tools.sh` | Each with tests that fail under mutation: lifter patches in `tests/test_lifter_patches.py` (hand-computed) and x86recomp's `lift_atomic_test`; runtime/loader/HLE patches in `tests/test_loader.py`. A patch is a diff against the tree with the earlier ones applied. |
+| `patches/x86recomp/` | Our x86recomp patches 0001–0010, applied in order by `scripts/setup_tools.sh` | Each with tests that fail under mutation: lifter patches in `tests/test_lifter_patches.py` (hand-computed) and x86recomp's `lift_atomic_test`; runtime/loader/HLE patches in `tests/test_loader.py` and `tests/test_win32.py`. A patch is a diff against the tree with the earlier ones applied. |
 | `CMakeLists.txt`, `src/` | The game project: `refrozen` = lifted code + x86recomp runtime (`GameConfig` in `src/main.cpp`) | Lifted DLLs listed in dependency order. Win32 functions are added to the runtime (a patch), never stubbed to succeed. |
-| `config/` | Lifter manifests per module (`<module>.manifest`), `unreachable.tsv`, and the pinned lift input `symbols/<module>/functions.tsv`, `jumptables.tsv` | Addresses, flags and evidence only, no game bytes. Every manifest entry says why. Refresh `symbols/` only deliberately (Ghidra varies between runs) and record the new lift hash. |
-| `scripts/` | Install/patch, lift (`lift.sh`), audit (`validate_lift.py`), import coverage (`import_coverage.py`), launches (`run_attempt.sh`), Ghidra scripts (`ghidra/`), map checks | |
+| `config/` | Lifter manifests per module (`<module>.manifest`), `unreachable.tsv`, `jumptable_corrections.tsv`, and the pinned lift input `symbols/<module>/functions.tsv`, `jumptables.tsv` | Addresses, flags and evidence only, no game bytes. Every manifest entry and correction says why. Refresh `symbols/` only deliberately (Ghidra varies between runs) and record the new lift hash. |
+| `scripts/` | Install/patch (incl. the CD-key step, `font_keydata.py`), lift (`lift.sh`, `jumptable_corrections.py`), audit (`validate_lift.py`), import coverage (`import_coverage.py`), launches (`run_attempt.sh`, `m3_accept.sh`), Ghidra scripts (`ghidra/`), map checks | |
+| `tests/` | Regression tests and the mutation gate (`mutate.py`, registry `mutants.py`) | See "Mutation gate". |
 | `reference/` | Feasibility, roadmap, research (`research/`) | |
 
 ## Commands
@@ -26,8 +27,12 @@ scripts/setup_tools.sh   # x86recomp (refrozen branch) + build/mpq_extract, bnup
 ctest --test-dir tools/x86recomp/out/build/debug   # "pacing" is a known timing flake (FEASIBILITY §7)
 /opt/homebrew/bin/python3 -I tests/test_lifter_patches.py
 /opt/homebrew/bin/python3 -I tests/test_loader.py
-# Per module (symbols dir names: war3 game storm mss32 msvcr80 mp3dec_asi mssfast_m3d msseax2_m3d
-# mssdolby_m3d reverb3_flt), e.g. game.dll: Ghidra analysis + exports (JDK 25, ~4 min for game.dll),
+/opt/homebrew/bin/python3 -I tests/test_win32.py
+/opt/homebrew/bin/python3 -I tests/test_font_keydata.py       # needs game/wine-oracle + the readme
+/opt/homebrew/bin/python3 -I tests/test_jumptable_corrections.py
+/opt/homebrew/bin/python3 -I tests/mutate.py [--milestone M3]  # the mutation gate (scratch tree)
+# Per module (symbols dir names: war3 game storm mss32 msvcr80 ijl15 mp3dec_asi mssfast_m3d
+# msseax2_m3d mssdolby_m3d reverb3_flt), e.g. game.dll: Ghidra analysis + exports (JDK 25, ~4 min for game.dll),
 JAVA_HOME=/opt/homebrew/opt/openjdk@25 MAXMEM=8G /opt/homebrew/opt/ghidra/libexec/support/analyzeHeadless \
   game/ghidra reFrozen -import game/native-install/game.dll -overwrite \
   -scriptPath tools/x86recomp/tools/ghidra \
@@ -39,7 +44,7 @@ JAVA_HOME=/opt/homebrew/opt/openjdk@25 /opt/homebrew/opt/ghidra/libexec/support/
   -scriptPath scripts/ghidra -postScript ExportInstructions.java game/symbols/game
 # game/symbols/ (Ghidra output) is development-only: the audit's instructions.tsv/noncode.tsv,
 # and the source when refreshing config/symbols/ on purpose. lift.sh runs pe_symbols.py itself.
-scripts/lift.sh          # all ten modules from config/symbols + pe_symbols -> game/generated/war3
+scripts/lift.sh          # all eleven modules from config/symbols + pe_symbols -> game/generated/war3
 /opt/homebrew/bin/python3 -I scripts/validate_lift.py --generated game/generated/war3 \
   --unreachable config/unreachable.tsv \
   --module game/native-install/war3.exe game/symbols-lift/war3 \
@@ -47,6 +52,7 @@ scripts/lift.sh          # all ten modules from config/symbols + pe_symbols -> g
   --module game/native-install/Storm.dll game/symbols-lift/storm \
   --module game/native-install/Mss32.dll game/symbols-lift/mss32 \
   --module game/native-install/msvcr80.dll game/symbols-lift/msvcr80 \
+  --module game/native-install/ijl15.dll game/symbols-lift/ijl15 \
   --module game/native-install/redist/miles/Mp3dec.asi game/symbols-lift/mp3dec_asi \
   --module game/native-install/redist/miles/Mssfast.m3d game/symbols-lift/mssfast_m3d \
   --module game/native-install/redist/miles/Msseax2.m3d game/symbols-lift/msseax2_m3d \
@@ -58,12 +64,16 @@ ninja -C build/main refrozen
 /opt/homebrew/bin/python3 -I scripts/import_coverage.py --tsv game/reports/import_coverage.tsv
 scripts/run_attempt.sh <name> [secs]   # log in game/attempts/<name>.log; exit 0 iff GameMain reached
 REFROZEN_TRACE=1 scripts/run_attempt.sh <name>-trace 120   # every HLE call, DllMain order
+scripts/m3_accept.sh [launches] [secs]  # M3: main menu loop, no fatal, frames presented (defaults 3, 60)
+# Background runs never get host focus: REFROZEN_TEST_FOCUS=follow activates the game guest-side.
+# REFROZEN_SHOT_EVERY=N REFROZEN_SHOT_DIR=<dir> saves every Nth presented frame (local only: game imagery).
 ```
 
 ```sh
-# Native install + 1.26a patch (the player's path; no Wine), optional check against the oracle:
+# Native install + 1.26a patch (the player's path; no Wine), optional check against the oracle.
+# Asks for the two CD keys as the installer does (stdin when not a terminal); --owner is the name.
 /opt/homebrew/bin/python3 -I scripts/native_install.py --roc "<RoC installer>" --tft "<TFT installer>" \
-  --patch "<War3TFT_126a_English.exe>" --out game/native-install [--verify "<oracle install>"]
+  --patch "<War3TFT_126a_English.exe>" --out game/native-install --owner "<name>" [--verify "<oracle install>"]
 /opt/homebrew/bin/python3 -I tests/test_bnupdate_patch.py
 /opt/homebrew/bin/python3 -I scripts/map_check.py "<map.w3x>" game/native-install   # pjass in tools/pjass
 scripts/wine_loadtest.sh game/wine-oracle 'Maps\Download\<map>.w3x' 60 game/loadtest/<name>  # dev oracle
@@ -79,6 +89,25 @@ scripts/wine_loadtest.sh game/wine-oracle 'Maps\Download\<map>.w3x' 60 game/load
   and after any lifter change, and keep two lifts byte-identical.
 - `validate_lift.py` must stay HARD PASS. Unimplemented sites may only remain in functions listed
   in `config/unreachable.tsv` with evidence that they cannot run; they stay fatal at run time.
+
+## Mutation gate (mandatory from M3; ReCarbon's practice)
+
+- Every new or changed runtime behaviour (Win32 semantics, error handling, memory operations,
+  module loading, threading, synchronization, game initialization; lifter and install steps too)
+  gets a focused test whose expected values are derived independently: manuals and MSDN, Wine's
+  conformance tests or ReactOS where named, published vectors, the original tools' output. Never
+  from our own code.
+- Each such change gets mutants in `tests/mutants.py` (file, exact old/new text, the test, the
+  check expected to fail). `tests/mutate.py` plants them in a scratch copy (`build/mutate/`, never
+  the real tree), checks the baseline passes first, and classifies each mutant KILLED,
+  KILLED-OTHER, TIMEOUT, SURVIVED, EQUIVALENT (documented, with the reason it cannot differ) or
+  INVALID (does not apply or does not build: never a kill).
+- A milestone is not signed off until the gate passes for its mutants (all KILLED or documented
+  EQUIVALENT; survivors fixed by better tests, not weaker mutants) and `reference/TEST_COVERAGE.md`
+  records each mutant, its expected failure, the observed result and any survivors. Earlier
+  milestones' mutants stay in the registry and are re-run.
+- Tests stay deterministic; never weaken an assertion, suppress a failure or change production
+  behaviour only to satisfy a test.
 
 ## Conventions
 
