@@ -34,6 +34,7 @@ EMIT = "tools/x86recomp/tools/lifter/emit.cpp"
 FUNC = "tools/x86recomp/tools/lifter/function.cpp"
 SEH = "tools/x86recomp/src/runtime/hle/kernel32_seh.cpp"
 NET = "tools/x86recomp/src/runtime/hle/shell_net.cpp"
+WAVEC = "tools/x86recomp/src/runtime/hle/winmm_wave.cpp"
 DISP = "tools/x86recomp/src/runtime/dispatch.cpp"
 LMAIN = "tools/x86recomp/tools/lifter/main.cpp"
 NI = "scripts/native_install.py"
@@ -677,4 +678,41 @@ MUTANTS = [
          old='HLE_NAMED("wsock32.dll", "#111", WSAGetLastError, 0) { return Rd32(CurrentThread()->teb + 0x34); }',
          new='HLE_NAMED("wsock32.dll", "#111", WSAGetLastError, 0) { return 0; }',
          expect="wsock: WSAGetLastError is the last error"),
+    # ---- M5: wave output (winmm) ---------------------------------------------
+    dict(id="M5-A1", milestone="M5", area="audio", file=WAVEC, test="win32",
+         fault="the resampler's held-back frames keep the last block queued",
+         old="  d->slack = 16 * align;\n", new="",
+         expect="V: both blocks returned in order"),
+    dict(id="M5-A2", milestone="M5", area="audio", file=WAVEC, test="win32",
+         fault="no WOM_OPEN",
+         old="  Wr32(phwo, d->handle);\n  Notify(c, *d, kWomOpen, 0);",
+         new="  Wr32(phwo, d->handle);",
+         expect="V: WOM_OPEN from waveOutOpen"),
+    dict(id="M5-A3", milestone="M5", area="audio", file=WAVEC, test="win32",
+         fault="no WOM_CLOSE",
+         old="  if (d->dump) std::fclose(d->dump);\n  Notify(c, *d, kWomClose, 0);",
+         new="  if (d->dump) std::fclose(d->dump);",
+         expect="V: WOM_CLOSE from waveOutClose"),
+    dict(id="M5-A4", milestone="M5", area="audio", file=WAVEC, test="win32",
+         fault="an unprepared block is accepted",
+         old="  if (!(fl & kWhdrPrepared)) return kWaverrUnprepared;\n", new="",
+         expect="V: unprepared write: WAVERR_UNPREPARED"),
+    dict(id="M5-A5", milestone="M5", area="audio", file=WAVEC, test="win32",
+         fault="waveOutReset returns before the blocks are",
+         old="  if (std::this_thread::get_id() != d->host_id)\n    g_cv.wait(l, [d] { return !d->reset; });\n",
+         new="",
+         expect="V: waveOutReset returned the block first"),
+    dict(id="M5-A6", milestone="M5", area="audio", file=WAVEC, test="win32",
+         fault="non-PCM formats accepted",
+         old="  if (tag != 1 /* WAVE_FORMAT_PCM */ || (ch != 1 && ch != 2) ||",
+         new="  if ((ch != 1 && ch != 2) ||",
+         expect="V: non-PCM query: WAVERR_BADFORMAT"),
+    dict(id="M5-A7", milestone="M5", area="audio", file=WAVEC, test="win32",
+         fault="a device with queued blocks can be closed",
+         old="    if (!d->queue.empty()) return kWaverrStillPlaying;\n", new="",
+         expect="V: close while queued: STILLPLAYING"),
+    dict(id="M5-A8", milestone="M5", area="audio", file=WAVEC, test="win32",
+         fault="caps report mono",
+         old="  woc[44] = 2;  // wChannels", new="  woc[44] = 1;  // wChannels",
+         expect="V: caps: 2 channels"),
 ]
