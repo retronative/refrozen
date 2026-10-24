@@ -41,3 +41,6 @@ __pycache__/
 
 # Local debugging log (AGENTS.md)
 WORKLOG.local.md
+
+# Frames saved by a run without a shot directory (game imagery)
+/*.bmp

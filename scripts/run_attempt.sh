@@ -13,6 +13,10 @@ NAME="$1"; SECS="${2:-30}"; shift; [ $# -gt 0 ] && shift
 LOG="$ROOT/game/attempts/$NAME.log"
 mkdir -p "$ROOT/game/attempts"
 
+# Frames saved by REFROZEN_SHOT_EVERY / TEST_INPUT "shot" (game imagery) stay in
+# game/attempts, never in the working directory.
+export REFROZEN_SHOT_DIR="${REFROZEN_SHOT_DIR:-$ROOT/game/attempts/$NAME-shots}"
+mkdir -p "$REFROZEN_SHOT_DIR"
 REFROZEN_BACKGROUND=1 "$ROOT/build/main/refrozen" "$@" > "$LOG" 2>&1 &
 pid=$!
 status=timeout
