@@ -35,3 +35,4 @@ cmake --build --preset debug
 
 clang -O2 -Wall -I/opt/homebrew/opt/stormlib/include "$ROOT/scripts/mpq_extract.c" \
   -L/opt/homebrew/opt/stormlib/lib -lstorm -o "$ROOT/build/mpq_extract"
+clang -O2 -Wall -Wextra "$ROOT/scripts/bnupdate_patch.c" -o "$ROOT/build/bnupdate_patch"
