@@ -762,6 +762,71 @@ def test_simd():
             check(f"0010 {asm}", res.get(str(i)), w)
 
 
+# ---- 0011: PUSH/POP slots are the instruction's operand size -------------------
+
+# (name, bytes of the sequence, ESP change, top dword after it). Each case runs
+#   mov ebp, esp; <sequence>; mov eax, esp; sub eax, ebp; mov ecx, [esp];
+#   mov esp, ebp; ret
+# on a stack filled with AAh below a DEADBEEFh top dword, with
+# ebx = 11112222h, esi = 33334444h, eax = 5555BEEFh. SDM vol. 2 PUSH/POP: the
+# slot is the operand size (32 unless 66h); a segment register pushed with a
+# 32-bit operand size takes 4 bytes, recent Intel processors writing only its
+# 16-bit selector (DS/ES read 0023h in a Win32 process), so AAAAh stays above.
+STACK_CASES = [
+    ("push ds", b"\x1E", -4, 0xAAAA0023),
+    ("push es", b"\x06", -4, 0xAAAA0023),
+    ("push es; pop es", b"\x06\x07", 0, 0xDEADBEEF),
+    ("push ds; pop es", b"\x1E\x07", 0, 0xDEADBEEF),
+    # Miles' MIXER_shutdown frame is balanced, so ebx and esi come back: pushed
+    # again after it, they are the top dword
+    ("frame; push ebx", b"\x53\x56\x1E\x06\x07\x1F\x5E\x5B\x53", -4, 0x11112222),
+    ("frame; push esi", b"\x53\x56\x1E\x06\x07\x1F\x5E\x5B\x56", -4, 0x33334444),
+    # 66h: two-byte slots; the old top dword's upper half shows through
+    ("push ax", b"\x66\x50", -2, 0xBEEFBEEF),
+    ("push word 1234h", b"\x66\x68\x34\x12", -2, 0xBEEF1234),
+    ("push ax; pop ax", b"\x66\x50\x66\x58", 0, 0xDEADBEEF),
+    ("pop ax", b"\x66\x58", 2, 0xAAAADEAD),
+    # 32-bit forms unchanged
+    ("push ebx", b"\x53", -4, 0x11112222),
+    ("push 7Fh", b"\x6A\x7F", -4, 0x0000007F),
+]
+
+
+def test_stack_forms():
+    code = b""
+    for _name, seq, _d, _top in STACK_CASES:
+        body = b"\x89\xE5" + seq + b"\x89\xE0\x29\xE8\x8B\x0C\x24\x89\xEC\xC3"
+        code += body + b"\xCC" * (-len(body) % 32)
+    entries = [TEXT + 32 * i for i in range(len(STACK_CASES))]
+    with tempfile.TemporaryDirectory() as tmp:
+        r, fns, out = lift(tmp, pe(code, b"\0" * 0x40, None), entries)
+        check("0011 lift succeeds", r.returncode, 0)
+        decls, body = "", ""
+        for i in range(len(STACK_CASES)):
+            f = f"f_{TEXT + 32 * i:08X}"
+            decls += f"void {f}(Ctx&);\n"
+            body += ("  { Ctx c{}; c.esp = 0x2FFF00; std::memset(g_guest_base + 0x2FFE00, 0xAA, 0x200);\n"
+                     "    lift::Wr<uint32_t>(g_guest_base, c.esp, 0xDEADBEEF);\n"
+                     "    c.ebx = 0x11112222; c.esi = 0x33334444; c.eax = 0x5555BEEF;\n"
+                     f"    gen::{f}(c);\n"
+                     f"    std::printf(\"{i} %d %08X\\n\", int(c.eax), c.ecx); }}\n")
+        with open(os.path.join(tmp, "harness.cpp"), "w") as f:
+            f.write(SIMD_HARNESS.replace("@DECLS@", decls).replace("@BODY@", body))
+        srcs = [os.path.join(out, n) for n in sorted(os.listdir(out)) if n.startswith("gen_")]
+        binp = os.path.join(tmp, "t")
+        cc = subprocess.run([CXX, "-std=c++20", "-O1", "-w", "-I", os.path.join(X86, "src"),
+                             os.path.join(tmp, "harness.cpp"), *srcs, "-L", BUILD, "-lrecomp_x87",
+                             "-lrecomp_image", "-Wl,-rpath," + BUILD, "-o", binp], capture_output=True, text=True)
+        check("0011 lifted code compiles", cc.returncode, 0)
+        if cc.returncode:
+            print(cc.stderr[:3000])
+            return
+        res = dict(l.split(" ", 1) for l in subprocess.run([binp], capture_output=True, text=True).stdout.splitlines()
+                   if " " in l)
+        for i, (name, _seq, delta, top) in enumerate(STACK_CASES):
+            check(f"0011 {name}", res.get(str(i)), f"{delta} {top:08X}")
+
+
 def main():
     test_reloc_discovery()
     test_mmx_sse()
@@ -771,6 +836,7 @@ def main():
     test_simd()
     test_jump_table_load()
     test_data_section_pointers()
+    test_stack_forms()
     print("lifter patches:", "FAILED" if failures else "ok")
     return 1 if failures else 0
 
