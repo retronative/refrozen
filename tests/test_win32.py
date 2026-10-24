@@ -572,9 +572,11 @@ def build_text(g):
     g.o_code = o
 
     # mode F: a visible maximized popup (WS_POPUP | WS_VISIBLE | WS_MAXIMIZE)
-    # covers the screen; ~8 s of PeekMessage/DispatchMessage (TEST_INPUT is
-    # injected by the pump), keeping the lParams of the first 4
-    # WM_LBUTTONDOWNs; prints the work area (the client) and them.
+    # covers the screen; 800 rounds of PeekMessage/DispatchMessage, sleeping
+    # 10 ms when the queue is empty (~8 s; TEST_INPUT is injected by the
+    # pump), keeping the lParams of the first 4 WM_LBUTTONDOWNs; prints the
+    # work area (the client) and them. Every round counts, so a runtime that
+    # floods the queue (an unvalidated WM_PAINT) ends the loop, not the test.
     f = mkclass + win("f", 0x91000000, 0, 0, 100, 100) + f"  mov dword ptr [{v['hwnd']:#x}], eax{NL}"
     f += g.call("ShowWindow", P("hwnd"), 5) + "  mov esi, 800\n3:\n"
     f += g.call("PeekMessageA", g.msg, 0, 0, 0, 1) + f"""  test eax, eax
@@ -588,7 +590,8 @@ def build_text(g):
   mov dword ptr [{g.clicks:#x}+ecx*4], eax
   inc dword ptr [{v['cn']:#x}]
 5:
-""" + g.call("DispatchMessageA", g.msg) + "  jmp 3b\n4:\n" + g.call("Sleep", 10) + "  dec esi\n  jnz 3b\n"
+""" + g.call("DispatchMessageA", g.msg) + "  jmp 6f\n4:\n" + g.call("Sleep", 10)
+    f += "6:\n  dec esi\n  jnz 3b\n"
     f += g.call("SystemParametersInfoA", 0x30, 0, g.rect, 0)  # SPI_GETWORKAREA
     f += g.call("wsprintfA", g.out, g.str("R%X,%X C%X:%X,%X,%X,%X\n"), f"dword ptr [{g.rect + 8:#x}]",
                 f"dword ptr [{g.rect + 12:#x}]", P("cn"), *(f"dword ptr [{g.clicks + 4 * i:#x}]" for i in range(4)))
