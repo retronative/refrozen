@@ -658,8 +658,8 @@ minimap previews and map details match the D3D8 oracle on every screen.
   1,063 / 327).
 
 **Tests and mutation gate** (`reference/TEST_COVERAGE.md`): 361 checks (lifter 122, loader 23,
-Win32 151, GL context 37, key files 23, jump-table corrections 5), all passing; ctest 17/18 (`pacing`
-fails on a loaded host, a frame 98 ms late; timing only, code unchanged); 120 mutants over M2–M4:
+Win32 151, GL context 37, key files 23, jump-table corrections 5), all passing; ctest 18/18 (`pacing`
+passes 3/3 on a quiet host and failed once under load, a frame 98 ms late; timing only); 120 mutants over M2–M4:
 119 KILLED, 1 documented EQUIVALENT (M3-F9), 0 survivors (M4-D7 survived its first run and led to a
 stronger check; M4-L4 was first killed by the wrong check).
 

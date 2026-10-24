@@ -132,7 +132,7 @@ official cooperation. Nothing network-facing is needed before M7.
   HLE; Direct3D 8 absent); input untested; upstream fake-success no-ops (`InvalidateRect`,
   `UpdateWindow`, `FillRect`, `DrawTextA`); `font.ccd`; game.dll's threads' memory ordering.
 
-## M4 — Interactive menus and rendering correctness *(Passed 2026-10-25, pending the user's sign-off)*
+## M4 — Interactive menus and rendering correctness *(Passed 2026-10-25; progression to M5 approved under the user's overnight delegation, final sign-off with the user)*
 - **Scope (the user's 2026-10-25 request):** main menu and Custom Game interface fully interactive
   and visually correct: mouse, keyboard, focus, resize, minimize/restore, menu navigation;
   rendering compared with the official 1.26a Wine oracle; observed GL defects fixed;
@@ -154,7 +154,7 @@ official cooperation. Nothing network-facing is needed before M7.
     caught as Wine's loader does; execute faults through the guest SEH chain.
   - Tests and mutation gate → 361 checks (lifter 122, loader 23, Win32 151, GL 37, key files 23,
     jump-table corrections 5); mutation gate 120 mutants (M2–M4): 119 KILLED, 1 documented EQUIVALENT, 0 survivors; lift byte-identical twice (`416c0514…7688d`),
-    validator HARD PASS; ctest 17/18 under host load (`pacing`, timing-only).
+    validator HARD PASS; ctest 18/18 (`pacing` passes on a quiet host, 3/3; it fails under heavy load).
 - **Verify:** FEASIBILITY §11.
 - **Risks carried to M5:** a menu-scene object lit pale natively vs dark in both oracles
   (unexplained, lighting-related); isotropic vs macOS's anisotropic filtering; Start Game
