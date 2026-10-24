@@ -10,10 +10,11 @@ UNRESOLVED. The full research report with sources is
 | Question | Answer |
 |---|---|
 | Is the input the right release? | **Yes.** WC3 RoC + TFT 1.21b (enGB), patched with the official 1.26a English patch to build 1.26.0.6401. All binaries are x86 Win32 PE, MSVC 2005 (linker 8.0), unpacked (§2). |
-| Recompile toolchain | **x86recomp + 12 reFrozen patches.** All eleven modules (war3.exe, game.dll, Storm.dll, Mss32.dll, msvcr80.dll, ijl15.dll, 5 Miles providers) lift with 0 reachable unimplemented sites, pass the structural audit, are byte-identical across runs and compile for arm64 (§7, §9, §10). |
+| Recompile toolchain | **x86recomp + 13 reFrozen patches.** All eleven modules (war3.exe, game.dll, Storm.dll, Mss32.dll, msvcr80.dll, ijl15.dll, 5 Miles providers) lift with 0 reachable unimplemented sites, pass the structural audit, are byte-identical across runs and compile for arm64 (§7, §9, §10). |
 | Native process (M2) | **Reaches `GameMain`.** One arm64 executable (`build/main/refrozen`) maps all ten modules at their preferred bases, binds all 675 cross-module imports (Storm by ordinal, Miles by name) to the lifted exports, runs the DllMains dependencies-first and calls `game.dll!GameMain`; every Win32 import without a handler is a strict stub (§9). |
 | Runtime initialization (M3) | **Reaches the main menu loop** on the player's native install (CD keys stored as the official installer stores them), with the game's own OpenGL renderer on x86recomp's GL HLE; 3 consecutive launches, no fatal stop; sound is off (no wave device until M5) (§10). |
 | Interactive menus (M4) | **Fully interactive and checked against the official client:** mouse/keyboard navigation through profiles, Single Player, Custom Game (DotA 6.85oz LoD selected), Options, focus, minimize/restore and Quit, 3 consecutive launches; fixed on the way: GL fog, the lifter's PUSH/POP slot size (the Quit crash), 16-bit texel precision; real Win32 painting, GDI drawing a strict stop (§11). |
+| Playable local match (M5) | **A DotA 6.85oz LoD match plays to the score screen** from Start Game, 3 consecutive runs, replay saved, Miles audio through a real waveOut device; on the way: wsock32's local-game functions, overlapped replay file I/O, Miles' mixer table in the lift input; native fullscreen and Retina/HiDPI with mapped pointer input (§12). |
 | DotA target | **DotA 6.85oz LoD** (pure JASS) for the offline milestones; iCCup native-plugin builds (6.83se/6.83s/6.85.308) deferred to M8, iCCup online compatibility, which needs M7 and iCCup's official cooperation (§5). |
 | Miles | **Recompile Mss32.dll 6.1d and its providers** rather than extend x86recomp's Miles HLE (§8). |
 | Reimplementation instead? | **No** for this goal. No open-source engine plays DotA 6.83 or keeps lockstep with real 1.26a clients. |
@@ -692,3 +693,81 @@ scripts/m4_compare.sh game/attempts/m4-accept-1-*/shots game/attempts/oracle-d3d
 - The minimized window keeps its rect (Windows parks it at −32000,−32000); WM_SIZE from host
   resizing is queued rather than sent from a sizing loop; WM_NCPAINT/WM_QUERYOPEN not sent.
 - 315 strict stubs; winsock for local games (above); `pacing` (ctest) fails under host load.
+
+## 12. M5: playable local match, offline (VERIFIED 2026-10-25)
+
+Toolchain: x86recomp `ad1b16b` + `patches/x86recomp/0001`–`0013` (0013: the M5 runtime: wave
+output, overlapped file I/O, wsock32's local-game functions, window sizing, fullscreen/HiDPI).
+Map: DotA v6.85oz LoD (the offline target), from the install's `Maps\Download`.
+
+**Acceptance (`scripts/m5_accept.sh 3 240`, `tests/m5/match_path.txt`):** 3 consecutive launches,
+each from a fresh per-user tree on the APFS install clone of M4. Each walks the M4 menus to the
+map, presses Start Game, waits out the loading screen, types `-ar` (All Random: every slot gets a
+hero) and `whosyourdaddy` (Warcraft III's single-player cheat, to keep the match short), then
+attack-moves its hero on the Scourge base (A + a minimap click). The hero destroys the towers and
+the Frozen Throne and DotA announces "The Sentinel has won!" (shot `won`); F10 > End Game > Quit
+Mission leads to the score screen (DotA does not end a single-player game itself). Pass = every
+shot saved (the last ones are the score screen), no FATAL, no watchdog report,
+`Replay\LastReplay.w3g` written by this run with a Warcraft III replay header, and the wave
+output (dumped with `REFROZEN_AUDIO_DUMP`; background runs use SDL's dummy driver) holding sound
+(16-bit RMS over 100). **Result: 3/3 PASS** (replays 8,620–8,638 bytes, audio RMS 1,473–1,614;
+the random heroes differ per run). The user also heard the menu music and the button clicks in a
+foreground run. The match is shortened by the cheat; long-session stability (60+ minutes, AI
+opponents) is M6's gate.
+
+**Defects found and fixed (each with a deterministic test and mutants):**
+
+| Symptom | Root cause | Fix |
+|---|---|---|
+| Start Game stops at `wsock32.dll!#9` | a local custom game still initialises winsock; upstream registered wsock32's ordinals wrongly (#10 as `ioctlsocket`) | Winsock 1.1 ordinals as Wine's `wsock32.spec`: #8 htonl, #9 htons, #10 inet_addr, #11 inet_ntoa (per-thread buffer), #14 ntohl, #15 ntohs, #111 WSAGetLastError (TEB+0x34); no socket is opened |
+| No sound; the game's "no sound device" dialog | winmm's waveOut was a no-device stub | a real waveOut device on an SDL audio stream (caps, format queries, CALLBACK_FUNCTION/EVENT, prepare/write/reset/close); WOM_OPEN/WOM_CLOSE synchronous, WOM_DONE from a per-device guest thread in queue order, as Wine's winmm |
+| The last queued block never reported done (no WOM_DONE) | SDL's resampler holds back a few frames, so the stream never drained to zero | a block is done when no more than 16 frames of it remain queued |
+| Once the wave device existed, Miles' mixer dispatched to an unlifted routine (211394A6) | lift input missed routines reached only through the routine table inside Miles' executable MSSMIXER section (128 relocated dwords), which the data scan does not cover | all 72 routines of the table in `config/mss32.manifest` |
+| A local game stops on its replay file (`TempReplay.w3g`) | the file is opened with FILE_FLAG_OVERLAPPED and its I/O goes through a completion port, which the runtime did not model | overlapped file I/O: OVERLAPPED offsets (FFFFFFFF:FFFFFFFF appends), ERROR_IO_PENDING plus a packet for associated handles, hEvent's low bit suppresses it, ERROR_HANDLE_EOF, synchronous handles move the file pointer; `CreateIoCompletionPort` associates files |
+| The game window tiny on Retina | the window was sized in pixels on a 2x display | one point per game pixel, scaled down to fit the usable screen |
+
+**Fullscreen and Retina/HiDPI (the user's M5 work item, verified separately):** borderless
+fullscreen on the current Space (`SDL_HINT_VIDEO_MAC_FULLSCREEN_SPACES=0`), Ctrl+Cmd+F or the
+window's control switches to windowed and back (the player's choice overrides the policy); the
+frame is fitted with bars (`gfx::FitRect`, never stretched) and pointer positions map back through
+the same rectangle (`gfx::FramePoint`, clamped over the bars); the game's clipped virtual cursor
+is unchanged; background runs simulate a screen (`REFROZEN_TEST_SCREEN`) and never take over the
+display. Evidence: `scripts/m5_display_check.sh` (1512x982 fullscreen with 101-point bars, two
+toggles, `-window` scaled onto a 640x400 screen, clicks reaching the same screen as the
+reference); `test_win32.py` mode F; `fit_map_test`; mutants M5-F1–F10. The 800x600 test mode is
+unchanged and M4's acceptance still passes 3/3 on the M5 build.
+
+**Tests and mutation gate** (`reference/TEST_COVERAGE.md`): 446 checks (lifter 122, loader 23,
+Win32 219, GL context and presentation geometry 54, key files 23, jump-table corrections 5), all
+passing; ctest 19/19; 150 mutants over M2–M5: 149 KILLED, 1 documented EQUIVALENT (M3-F9), 0
+survivors (four M3 mutants re-expressed for the M5 code; M4-D3/D12 first timed out through a mode F
+loop, fixed).
+
+**Lift:** 11 modules, 94,560 functions, 2,827,564 instructions, 242 files; two lifts byte-identical,
+tree hash (SHA-256 of the generated `*.cpp` concatenated in C-locale name order)
+`ae3e0bdc311aa03ca0dbbc1b59b777fadaa7a677becedd012cd6244604ea599d` (the lift changed with the Miles
+manifest: +71 functions, +4,136 instructions, +1 file; M4's hash method was not recorded, so the two
+values are not compared); `validate_lift.py` HARD PASS on all eleven; 744 unimplemented sites, all in the
+documented-unreachable functions. Import coverage: 678 cross-module, 1,090 handled, 300 strict stubs.
+
+**Verify:**
+```sh
+scripts/setup_tools.sh && scripts/lift.sh && ninja -C build/main refrozen
+for t in test_lifter_patches test_loader test_win32 test_gl_context test_font_keydata \
+         test_jumptable_corrections; do /opt/homebrew/bin/python3 -I tests/$t.py; done
+/opt/homebrew/bin/python3 -I tests/mutate.py
+scripts/m5_accept.sh 3 240
+scripts/m5_display_check.sh
+scripts/m4_accept.sh 3 110          # regression
+```
+
+**Remaining risks (for M6+):**
+- Not checked against the oracle: playing the native `LastReplay.w3g` in the Wine client (replay
+  determinism); the replays only have valid headers and plausible sizes.
+- Heroes are assigned by `-ar` (All Random); picking one in a tavern by mouse is unexercised
+  (Single Draft's `-random` gave no hero in the first attempts, not investigated).
+- The matches are cheat-shortened (invulnerable hero); unit AI over a long game, memory growth and
+  frame pacing over 60+ minutes are M6's.
+- M4's open rendering items stand (the pale-lit ice spike, isotropic filtering, Direct3D 8 absent).
+- 300 strict stubs; macOS's native Spaces fullscreen and exclusive display modes are not exercised
+  by the background checks (a simulated screen stands in).

@@ -28,7 +28,7 @@ their counts were recorded (FEASIBILITY §7); they are not in the registry.
 
 ## Mutants (last full run: all milestones)
 
-120 mutants: 1 EQUIVALENT, 119 KILLED.
+150 mutants: 1 EQUIVALENT, 149 KILLED.
 
 | Id | Area | Fault planted | File | Test | Expected failure | Result |
 |---|---|---|---|---|---|---|
@@ -81,8 +81,8 @@ their counts were recorded (FEASIBILITY §7); they are not in the registry.
 | M3-C2 | synchronization | completion packets dequeued last in, first out | `x86recomp/src/runtime/hle/kernel32_sync.cpp` | test_win32.py | iocp: FIFO bytes | KILLED |
 | M3-C3 | threading | a post does not wake waiting threads | `x86recomp/src/runtime/hle/kernel32_sync.cpp` | test_win32.py | iocp: a post wakes a thread blocked | KILLED |
 | M3-C4 | error handling | CreateIoCompletionPort(INVALID_HANDLE_VALUE, port) makes a new port | `x86recomp/src/runtime/hle/kernel32_sync.cpp` | test_win32.py | iocp: INVALID_HANDLE_VALUE with an existing port fails | KILLED |
-| M3-C5 | error handling | associating a file with a port silently returns a new port | `x86recomp/src/runtime/hle/kernel32_sync.cpp` | test_win32.py | stop 3 | KILLED |
-| M3-W1 | Win32 API | waveOutOpen reports success with no device (a fake handle) | `x86recomp/src/runtime/hle/winmm_wave.cpp` | test_win32.py | wave: mapper finds no driver | KILLED |
+| M3-C5 | error handling | associating a handle that is not a file silently succeeds | `x86recomp/src/runtime/hle/kernel32_file.cpp` | test_win32.py | stop 3 | KILLED |
+| M3-W1 | Win32 API | waveOutOpen accepts a device that does not exist | `x86recomp/src/runtime/hle/winmm_wave.cpp` | test_win32.py | wave: device 1 is out of range | KILLED |
 | M3-D1 | Win32 API | EnumDisplayDevicesA lists adapter 1 too | `x86recomp/src/runtime/hle/user32_window.cpp` | test_win32.py | display: no adapter 1 | KILLED |
 | M3-D2 | Win32 API | the adapter is not flagged primary | `x86recomp/src/runtime/hle/user32_window.cpp` | test_win32.py | display: primary device | KILLED |
 | M3-D3 | error handling | ChangeDisplaySettingsExA accepts any device name | `x86recomp/src/runtime/hle/user32_window.cpp` | test_win32.py | display: unknown device is DISP_CHANGE_BADPARAM | KILLED |
@@ -152,6 +152,36 @@ their counts were recorded (FEASIBILITY §7); they are not in the registry.
 | M4-G3 | rendering | RGB5_A1 keeps 8-bit alpha | `x86recomp/src/runtime/gl/context.cpp` | test_gl_context.py | RGB5_A1 alpha 127 | KILLED |
 | M4-G4 | rendering | glTexSubImage2D forgets the sized format | `x86recomp/src/runtime/gl/context.cpp` | test_gl_context.py | TexSubImage2D on RGB5_A1 | KILLED |
 | M4-G5 | rendering | fixed-point conversion truncates instead of rounding | `x86recomp/src/runtime/gl/context.cpp` | test_gl_context.py | RGBA4 | KILLED |
+| M5-O1 | file I/O | overlapped transfers ignore the OVERLAPPED's offset | `x86recomp/src/runtime/hle/kernel32_file.cpp` | test_win32.py | O: read data: 00 00 00 00 'ABCD' | KILLED |
+| M5-O2 | file I/O | an associated handle's I/O completes synchronously without a packet | `x86recomp/src/runtime/hle/kernel32_file.cpp` | test_win32.py | O: overlapped WriteFile returns FALSE | KILLED |
+| M5-O3 | file I/O | the completion packet loses the association's key | `x86recomp/src/runtime/hle/kernel32_file.cpp` | test_win32.py | O: packet key 55h | KILLED |
+| M5-O4 | file I/O | a handle may be associated twice | `x86recomp/src/runtime/hle/kernel32_file.cpp` | test_win32.py | O: a second association fails | KILLED |
+| M5-O5 | file I/O | offset FFFFFFFFh:FFFFFFFFh does not append | `x86recomp/src/runtime/hle/kernel32_file.cpp` | test_win32.py | O: append wrote at the end | KILLED |
+| M5-O6 | file I/O | a read at the end of the file succeeds with 0 bytes | `x86recomp/src/runtime/hle/kernel32_file.cpp` | test_win32.py | O: ... ERROR_HANDLE_EOF | KILLED |
+| M5-O7 | file I/O | hEvent's low bit does not suppress the packet | `x86recomp/src/runtime/hle/kernel32_file.cpp` | test_win32.py | O: low bit: no packet | KILLED |
+| M5-O8 | file I/O | a synchronous handle's file pointer stays put | `x86recomp/src/runtime/hle/kernel32_file.cpp` | test_win32.py | O: ... file pointer at 5 | KILLED |
+| M5-W1 | Win32 API | htons swaps 32 bits | `x86recomp/src/runtime/hle/shell_net.cpp` | test_win32.py | wsock: htons(1234h) = 3412h | KILLED |
+| M5-W2 | Win32 API | inet_addr fails for every address (the upstream behaviour) | `x86recomp/src/runtime/hle/shell_net.cpp` | test_win32.py | wsock: inet_addr(127.0.0.1) in network order | KILLED |
+| M5-W3 | Win32 API | inet_ntoa prints the address in host order | `x86recomp/src/runtime/hle/shell_net.cpp` | test_win32.py | wsock: inet_ntoa(127.0.0.1) | KILLED |
+| M5-W4 | Win32 API | WSAGetLastError always 0 | `x86recomp/src/runtime/hle/shell_net.cpp` | test_win32.py | wsock: WSAGetLastError is the last error | KILLED |
+| M5-A1 | audio | the resampler's held-back frames keep the last block queued | `x86recomp/src/runtime/hle/winmm_wave.cpp` | test_win32.py | V: both blocks returned in order | KILLED |
+| M5-A2 | audio | no WOM_OPEN | `x86recomp/src/runtime/hle/winmm_wave.cpp` | test_win32.py | V: WOM_OPEN from waveOutOpen | KILLED |
+| M5-A3 | audio | no WOM_CLOSE | `x86recomp/src/runtime/hle/winmm_wave.cpp` | test_win32.py | V: WOM_CLOSE from waveOutClose | KILLED |
+| M5-A4 | audio | an unprepared block is accepted | `x86recomp/src/runtime/hle/winmm_wave.cpp` | test_win32.py | V: unprepared write: WAVERR_UNPREPARED | KILLED |
+| M5-A5 | audio | waveOutReset returns before the blocks are | `x86recomp/src/runtime/hle/winmm_wave.cpp` | test_win32.py | V: waveOutReset returned the block first | KILLED |
+| M5-A6 | audio | non-PCM formats accepted | `x86recomp/src/runtime/hle/winmm_wave.cpp` | test_win32.py | V: non-PCM query: WAVERR_BADFORMAT | KILLED |
+| M5-A7 | audio | a device with queued blocks can be closed | `x86recomp/src/runtime/hle/winmm_wave.cpp` | test_win32.py | V: close while queued: STILLPLAYING | KILLED |
+| M5-A8 | audio | caps report mono | `x86recomp/src/runtime/hle/winmm_wave.cpp` | test_win32.py | V: caps: 2 channels | KILLED |
+| M5-F1 | display | the fitted frame is not centred (no left bar) | `x86recomp/src/runtime/gfx/device.cpp` | test_gl_context.py | 800x600 in 1512x982 | KILLED |
+| M5-F2 | display | the fitted width truncates instead of rounding | `x86recomp/src/runtime/gfx/device.cpp` | test_gl_context.py | 800x600 in 1000x500 | KILLED |
+| M5-F3 | input | pointer x mapped from the frame's top instead of its left | `x86recomp/src/runtime/gfx/device.cpp` | test_gl_context.py | 1512x982: centre | KILLED |
+| M5-F4 | input | a pointer over a bar is not clamped to the frame | `x86recomp/src/runtime/gfx/device.cpp` | test_gl_context.py | 1512x982: left bar | KILLED |
+| M5-F5 | input | pointer positions in a scaled or fullscreen window are not mapped to the client | `x86recomp/src/runtime/hle/user32_window.cpp` | test_win32.py | F: fullscreen: a click inside the frame | KILLED |
+| M5-F6 | display | Ctrl+Cmd+F is swallowed without toggling | `x86recomp/src/runtime/hle/user32_window.cpp` | test_win32.py | F: Ctrl+Cmd+F: windowed, then fullscreen | KILLED |
+| M5-F7 | display | the fullscreen policy ignores the player's windowed choice | `x86recomp/src/runtime/hle/user32_window.cpp` | test_win32.py | F: a maximized popup goes fullscreen on the simulated screen, and again after the toggles | KILLED |
+| M5-F8 | display | background runs never simulate fullscreen (TEST_SCREEN ignored by the policy) | `x86recomp/src/runtime/hle/user32_window.cpp` | test_win32.py | F: a maximized popup goes fullscreen on the simulated screen, and again after the toggles | KILLED |
+| M5-F9 | display | the windowed size is fitted to the real display, not the (simulated) screen | `x86recomp/src/runtime/hle/user32_window.cpp` | test_win32.py | F: windowed (Ctrl+Cmd+F): the scaled window maps to the client | KILLED |
+| M5-F10 | display | simulated fullscreen leaves the window at its windowed size | `x86recomp/src/runtime/hle/user32_window.cpp` | test_win32.py | F: fullscreen: a click inside the frame | KILLED |
 
 ## Survivors, equivalents and fixes found by the gate
 
@@ -179,3 +209,10 @@ their counts were recorded (FEASIBILITY §7); they are not in the registry.
 - **M4-L4 was killed by the wrong check:** with the attach-time exception swallowed, the test EXE
   ended itself with code 4, which "stops the process" accepted. The check now excludes the EXE's
   own exit code, as the stop modes already do.
+- **M3-C3, M3-C4, M3-C5, M3-W1 became INVALID in M5** (completion ports learned file association
+  and posts went through `PostCompletion`; waveOut gained a real device) and were re-expressed for
+  the same faults against the new code; all are killed.
+- **M4-D3 and M4-D12 were killed by the wrong check in M5's first full run:** a runtime that never
+  validates floods the queue with WM_PAINT, and mode F's pump loop (counting only empty-queue
+  rounds) never ended, so the whole test timed out. Mode F now counts every round; both are killed
+  by their own checks.

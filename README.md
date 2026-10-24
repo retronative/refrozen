@@ -19,7 +19,7 @@ Native recompilation of Warcraft III: The Frozen Throne (1.26a) for Apple Silico
 
 ## Status
 
-**M4 complete (pending sign-off):** the recompiled Warcraft III 1.26a runs natively on Apple Silicon from an install made natively from your own installers, and its menus are fully interactive: mouse and keyboard, profiles, Single Player, Custom Game with the DotA map selected, Options, focus, minimize/restore and Quit, rendered by the game's OpenGL path and checked against the official client. Sound is not implemented yet (M5, with a playable local match). Offline target: DotA 6.85oz LoD. Milestones and their gates are in
+**M5 complete (pending sign-off):** the recompiled Warcraft III 1.26a runs natively on Apple Silicon from an install made natively from your own installers, and plays a local DotA match to the end: menus, Start Game, an in-game hero, the enemy base destroyed, the score screen and a saved replay, with Miles audio, in a Retina-aware window or borderless fullscreen (Ctrl+Cmd+F). AI opponents and long sessions are next (M6). Offline target: DotA 6.85oz LoD. Milestones and their gates are in
 [reference/ROADMAP.md](reference/ROADMAP.md); open questions are in
 [reference/FEASIBILITY.md](reference/FEASIBILITY.md).
 

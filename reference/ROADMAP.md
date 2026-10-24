@@ -160,10 +160,31 @@ official cooperation. Nothing network-facing is needed before M7.
   (unexplained, lighting-related); isotropic vs macOS's anisotropic filtering; Start Game
   initialises winsock (first stop `wsock32!htons`); Direct3D 8 absent; 315 strict stubs.
 
-## M5 — Playable local match (offline)
+## M5 — Playable local match (offline) *(Passed 2026-10-25; progression to M6 approved under the user's overnight delegation, final sign-off with the user)*
 - Load a DotA map in single player (custom game), select a hero, play a full match to the end
   screen: terrain/models/UI rendered, Miles audio, mouse and keyboard.
 - **Accept:** a full local match on the chosen DotA build, 3 runs, no fatal stop; replay saved.
+- **Accept → Evidence** (FEASIBILITY §12):
+  - Full local match, 3 runs → `scripts/m5_accept.sh 3 240`: 3/3 PASS (runs
+    `m5-accept-{1,2,3}-20261025-054311/054727/055143`, on the final build). Each: fresh profile,
+    M4's menus to DotA v6.85oz LoD, Start Game, `-ar`, `whosyourdaddy`, attack-move on the Scourge
+    base → "The Sentinel has won!" → F10 > End Game > Quit Mission → score screen. No FATAL, no
+    watchdog report, every shot saved.
+  - Replay saved → `Replay\LastReplay.w3g` written each run with a valid Warcraft III replay
+    header (8,620–8,638 bytes). Audio → wave output dumped, RMS 1,473–1,614; heard by the user.
+  - **Deviations, stated:** the match is shortened with the single-player cheat `whosyourdaddy`
+    (the Accept line names no length; long sessions are M6's gate); the hero is assigned by `-ar`
+    rather than picked in a tavern (the scope's "select a hero" by mouse is unexercised).
+  - Tests and mutation gate → 446 checks (lifter 122, loader 23, Win32 219, GL and geometry 54,
+    key files 23, jump-table corrections 5), all passing; ctest 19/19; mutation gate 150 mutants
+    (M2–M5): 149 KILLED, 1 documented EQUIVALENT, 0 survivors; lift byte-identical twice
+    (`ae3e0bdc…a599d`, SHA-256 of the sorted generated `*.cpp`), validator HARD PASS; patches
+    0001–0013 reapply on `ad1b16b` to an identical tree; import coverage 678 / 1,090 / 300 stubs.
+- **Verify:** FEASIBILITY §12.
+- **Risks carried to M6:** replay determinism unchecked against the oracle (headers only); tavern
+  hero pick by mouse unexercised; cheat-shortened matches (unit AI, memory and pacing over long
+  games untested); M4's rendering items (pale-lit ice spike, isotropic filtering, no Direct3D 8);
+  300 strict stubs.
 - **Work item (the user's request, 2026-10-25): native macOS fullscreen and Retina/HiDPI**, verified
   separately, not a change to M5's gate:
   - fullscreen ↔ windowed switching, borderless fullscreen first (macOS's native Spaces fullscreen
