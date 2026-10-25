@@ -15,6 +15,7 @@ TESTS = {
     "win32": "test_win32.py",
     "jtc": "test_jumptable_corrections.py",
     "gl": "test_gl_context.py",
+    "build": "test_build_flags.py",
 }
 
 K32 = "tools/x86recomp/src/runtime/hle/kernel32.cpp"
@@ -41,6 +42,7 @@ LMAIN = "tools/x86recomp/tools/lifter/main.cpp"
 NI = "scripts/native_install.py"
 JTC = "scripts/jumptable_corrections.py"
 FK = "scripts/font_keydata.py"
+XCM = "tools/x86recomp/CMakeLists.txt"
 
 MUTANTS = [
     # ---- M2: loader (patch 0007) ---------------------------------------------
@@ -772,4 +774,19 @@ MUTANTS = [
          old="    SDL_SetWindowSize(sdl, tw, th);\n    std::fprintf(stderr, \"user32: window %X simulated",
          new="    std::fprintf(stderr, \"user32: window %X simulated",
          expect="F: fullscreen: a click inside the frame"),
+    dict(id="M6-B1", milestone="M6", area="performance", file=XCM, test="build",
+         fault="Dispatch built at -O0 in a Debug build",
+         old='set_source_files_properties(src/runtime/dispatch.cpp TARGET_DIRECTORY recomp_runtime\n  PROPERTIES COMPILE_OPTIONS "-O2")',
+         new="",
+         expect="optimised in a Debug build: dispatch.cpp"),
+    dict(id="M6-B2", milestone="M6", area="performance", file=XCM, test="build",
+         fault="the GPU device built at -O0 in a Debug build",
+         old="set_source_files_properties(src/runtime/gfx/format.cpp src/runtime/gfx/gpu_device.cpp",
+         new="set_source_files_properties(src/runtime/gfx/format.cpp",
+         expect="optimised in a Debug build: gfx/gpu_device.cpp"),
+    dict(id="M6-B3", milestone="M6", area="performance", file=XCM, test="build",
+         fault="the GL context built at -O0 in a Debug build",
+         old='set_source_files_properties(src/runtime/gl/context.cpp TARGET_DIRECTORY recomp_opengl\n  PROPERTIES COMPILE_OPTIONS "-O2")',
+         new="",
+         expect="optimised in a Debug build: gl/context.cpp"),
 ]

@@ -1,0 +1,37 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 362d172..fd66531 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -110,6 +110,11 @@ add_library(recomp_runtime SHARED
+ target_link_libraries(recomp_runtime PUBLIC recomp_image recomp_x87
+                       SDL3::SDL3 Threads::Threads
+                       PRIVATE recomp_gfx)  # presentation (hle/present.cpp)
++# Every indirect call and return of the game goes through Dispatch:
++# optimised in every build type (at -O0 its image lookup was a third of
++# the main thread while a large map loaded).
++set_source_files_properties(src/runtime/dispatch.cpp TARGET_DIRECTORY recomp_runtime
++  PROPERTIES COMPILE_OPTIONS "-O2")
+ # Nothing in a game refers to an HLE module's symbols: keep the linker
+ # from dropping them where it links --as-needed (ld64 keeps every dylib).
+ if(NOT APPLE)
+@@ -228,8 +233,8 @@ foreach(_stage vert frag)
+   target_sources(recomp_gfx PRIVATE "${_out}")
+ endforeach()
+ target_include_directories(recomp_gfx PRIVATE "${_shader_dir}")
+-# Per-pixel host paths: optimised in every build type.
+-set_source_files_properties(src/runtime/gfx/format.cpp
++# Per-pixel, per-vertex and per-draw host paths: optimised in every build type.
++set_source_files_properties(src/runtime/gfx/format.cpp src/runtime/gfx/gpu_device.cpp
+   TARGET_DIRECTORY recomp_gfx PROPERTIES COMPILE_OPTIONS "-O2")
+ if(DXVK_NATIVE_DIR)
+   find_library(RECOMP_DXVK_D3D9 dxvk_d3d9
+@@ -272,6 +277,9 @@ add_library(recomp_opengl SHARED
+   src/runtime/gl/context.cpp
+   src/runtime/hle/opengl32.cpp)
+ target_link_libraries(recomp_opengl PUBLIC recomp_runtime recomp_gfx)
++# Per-vertex host paths (immediate mode, matrices): optimised in every build type.
++set_source_files_properties(src/runtime/gl/context.cpp TARGET_DIRECTORY recomp_opengl
++  PROPERTIES COMPILE_OPTIONS "-O2")
+ 
+ # dbghelp (UnDecorateSymbolName) on LLVM's Microsoft demangler.
+ add_library(recomp_dbghelp SHARED src/runtime/hle/dbghelp.cpp)
