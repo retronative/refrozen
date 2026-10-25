@@ -1048,7 +1048,10 @@ def main():
             # installed (a null object's field). The fatal report must say
             # why it was not handled and show the guest's registers (spilled
             # at the call) and its EBP chain, on stderr and in the crash file.
-            code, out, fatal = run(tmp, binp, "X")
+            # FATAL_DUMP: guest memory named by expressions, dumped in the report.
+            # Expected values from the PE format: "MZ" at the image base, the
+            # PE signature at base + e_lfanew (read through a dereference).
+            code, out, fatal = run(tmp, binp, "X", FATAL_DUMP="0x400000:16,[0x40003C]+0x400000:4,[0x10]+4:8")
             log = run.stderr
             check("X: an unhandled guest fault is fatal", code != 0 and bool(fatal), True)
             check("X: the fault address and the reason", bool(re.search(
@@ -1057,6 +1060,17 @@ def main():
             check("X: the guest registers (as of the call)",
                   bool(re.search(r"ebx=22222222", log)) and bool(re.search(r"esi=55555555 edi=66666666", log)), True)
             check("X: the guest backtrace along the EBP chain", "guest backtrace (ebp chain)" in log, True)
+            def first_value(label):
+                m = re.search(re.escape(f"dump {label} = ") + r"([0-9A-F]{8}) \(\d+ bytes\):\n +[0-9A-F]{8}: ([0-9A-F]{8})", log)
+                return (m.group(1), m.group(2)) if m else None
+            v = first_value("0x400000")
+            check("X: FATAL_DUMP: a plain address is dumped (the DOS header's \"MZ\" in its low word)",
+                  (v[0], v[1][4:]) if v else None, ("00400000", "5A4D"))
+            v = first_value("[0x40003C]+0x400000")
+            check("X: FATAL_DUMP: a dereferenced address (base + e_lfanew) reaches the PE signature",
+                  v[1] if v else None, "00004550")
+            check("X: FATAL_DUMP: an unreadable address is noted, not faulted",
+                  "dump [0x10]+4: unreadable or malformed" in log, True)
             crashes = os.path.join(tmp, "data", "win32test", "crashes")
             reports = [open(os.path.join(crashes, f)).read() for f in sorted(os.listdir(crashes))] \
                 if os.path.isdir(crashes) else []

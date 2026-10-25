@@ -1,0 +1,92 @@
+diff --git a/src/runtime/dispatch.cpp b/src/runtime/dispatch.cpp
+index 35f4ae0..cc1bd30 100644
+--- a/src/runtime/dispatch.cpp
++++ b/src/runtime/dispatch.cpp
+@@ -95,6 +95,79 @@ void DumpGuestState(const Ctx& c) {
+ 
+ namespace {
+ 
++// <ID>_FATAL_DUMP: guest memory to hex-dump in a fatal report, for
++// diagnosing a fault from game state (no game addresses in the runtime):
++// comma-separated "<expr>:<length>" items, where <expr> is a number
++// (0x-prefixed hex or decimal), "[<expr>]" (the 32-bit value at that
++// address) or "<expr>+<number>". E.g. "[[0x6FAB65F4]+0x1C]+0x94:0x100".
++// An unreadable address ends that item with a note, never a fault.
++struct DumpParser {
++  const char* p;
++  bool ok = true;
++  uint32_t Number() {
++    char* end = nullptr;
++    unsigned long v = std::strtoul(p, &end, 0);
++    if (end == p) ok = false;
++    p = end;
++    return uint32_t(v);
++  }
++  uint32_t Expr() {
++    uint32_t v;
++    if (*p == '[') {
++      ++p;
++      uint32_t a = Expr();
++      if (*p != ']') { ok = false; return 0; }
++      ++p;
++      if (!ok || !g_proc->mem.IsCommitted(a) || !g_proc->mem.IsCommitted(a + 3)) { ok = false; return 0; }
++      v = Rd32(a);
++    } else {
++      v = Number();
++    }
++    while (ok && *p == '+') {
++      ++p;
++      v += Number();
++    }
++    return v;
++  }
++};
++
++void DumpRequestedMemory() {
++  const char* spec = Env("FATAL_DUMP");
++  if (!spec || !g_proc) return;
++  std::string all = spec;
++  size_t start = 0;
++  while (start <= all.size()) {
++    size_t end = all.find(',', start);
++    if (end == std::string::npos) end = all.size();
++    std::string item = all.substr(start, end - start);
++    start = end + 1;
++    size_t colon = item.rfind(':');
++    if (item.empty() || colon == std::string::npos) continue;
++    std::string expr = item.substr(0, colon);
++    DumpParser d{expr.c_str()};
++    uint32_t addr = d.Expr();
++    uint32_t len = uint32_t(std::strtoul(item.c_str() + colon + 1, nullptr, 0));
++    if (len > 0x1000) len = 0x1000;
++    if (!d.ok || *d.p) {
++      std::fprintf(stderr, "  dump %s: unreadable or malformed\n", expr.c_str());
++      continue;
++    }
++    std::fprintf(stderr, "  dump %s = %08X (%u bytes):\n", expr.c_str(), addr, len);
++    for (uint32_t off = 0; off < len; off += 16) {
++      std::fprintf(stderr, "    %08X:", addr + off);
++      for (uint32_t i = 0; i < 16 && off + i < len; i += 4) {
++        uint32_t a = addr + off + i;
++        if (!g_proc->mem.IsCommitted(a) || !g_proc->mem.IsCommitted(a + 3)) {
++          std::fprintf(stderr, " ????????");
++        } else {
++          std::fprintf(stderr, " %08X", Rd32(a));
++        }
++      }
++      std::fprintf(stderr, "\n");
++    }
++  }
++}
++
+ // g_fatal_report: FatalF's message with the guest state and backtraces,
+ // to stderr and, so it survives a filtered or closed terminal, to
+ // $XDG_DATA_HOME/<id>/crashes/crash-<time>-<pid>.txt.
+@@ -105,6 +178,7 @@ namespace {
+       std::fprintf(stderr, "  guest thread %04X\n", t->tid);
+       DumpGuestState(t->ctx);
+     }
++    DumpRequestedMemory();
+     std::fprintf(stderr, "  host backtrace:\n");
+     std::fflush(stderr);
+     void* frames[64];
