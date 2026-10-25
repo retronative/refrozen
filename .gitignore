@@ -38,9 +38,23 @@ xcuserdata/
 # Python
 __pycache__/
 *.pyc
+.pytest_cache/
 
 # Local debugging log (AGENTS.md)
 WORKLOG.local.md
 
 # Frames saved by a run without a shot directory (game imagery)
 /*.bmp
+
+# Website (.website/): dependencies, build output, prerender scratch, tool caches
+/.website/node_modules/
+/.website/dist/
+/.website/.ssr/
+/.website/.vite/
+/.website/.vercel/
+*.tsbuildinfo
+
+# Local environment files (may hold secrets); an example file may be committed
+.env
+.env.*
+!.env.example
