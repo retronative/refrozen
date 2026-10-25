@@ -168,7 +168,8 @@ score = [l.split(": ", 1)[1] for l in lines if l.startswith("score: ")]
 # One Unit Score entry per player row (the names column is not reliable:
 # a bot's name can read "...").
 players = [l.split(": ", 1)[1] for l in lines if l.startswith("scoreunits: ") and l.split(": ", 1)[1].strip()]
-elapsed = next((s.split(":", 1)[1].strip() for s in score if s.startswith("Elapsed Time")), "?")
+# Recorded only (not a criterion); OCR may misread the label ("Elapsed Tms").
+elapsed = next((m.group(1) for s in score for m in [re.search(r"Elapsed\s*T\w*\s*:?\s*(\d+:\d{2}:\d{2})", s)] if m), "?")
 if len(players) < 10:
     bad.append(f"score screen lists {len(players)} players")
 # fps reports: t is seconds since the first frame, close to the input clock.
