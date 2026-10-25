@@ -1,0 +1,35 @@
+{
+  "name": "refrozen-website",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "Static website for the reFrozen project.",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc --noEmit && vite build && vite build --ssr src/entry-server.ts --outDir .ssr && node scripts/prerender.mjs",
+    "preview": "vite preview",
+    "check:links": "node scripts/check-links.mjs",
+    "check:dist": "node scripts/check-dist.mjs",
+    "check:status": "node scripts/check-status.mjs",
+    "check:contrast": "node scripts/check-contrast.mjs",
+    "test:routing": "node scripts/test-routing.mjs",
+    "pages-sim": "node scripts/pages-sim.mjs",
+    "og-image": "node scripts/og-image.mjs",
+    "validate": "npm run check:status && npm run build && npm run check:links && npm run check:dist && npm run check:contrast && npm run test:routing"
+  },
+  "dependencies": {
+    "vue": "3.5.44",
+    "vue-router": "5.4.0"
+  },
+  "devDependencies": {
+    "@resvg/resvg-js": "2.6.2",
+    "@tailwindcss/vite": "4.3.3",
+    "@types/node": "26.6.5",
+    "@vitejs/plugin-vue": "6.0.10",
+    "markdown-it": "15.0.3",
+    "tailwindcss": "4.3.3",
+    "typescript": "6.0.3",
+    "vite": "8.3.5",
+    "vue-tsc": "3.3.13"
+  }
+}
