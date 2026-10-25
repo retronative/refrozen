@@ -1,0 +1,297 @@
+diff --git a/src/runtime/hle/user32_window.cpp b/src/runtime/hle/user32_window.cpp
+index 177fb77..f275fac 100644
+--- a/src/runtime/hle/user32_window.cpp
++++ b/src/runtime/hle/user32_window.cpp
+@@ -1059,6 +1059,9 @@ void InjectTestFocus() {
+ //   <t> focus out | in    the window losing / regaining the focus
+ //   <t> chord <mods> <key>   a key with modifiers (ctrl+gui F: fullscreen toggle)
+ // '#' starts a comment.
++// <ID>_TEST_INPUT_FOLLOW=<file>: lines appended to that file while the game
++// runs are queued too (polled every 0.2 s), so a harness can react to what
++// it sees; there "+<s>" as the time means s seconds after the line is read.
+ constexpr Sint32 kTestShot = 1;
+ struct TestEvent {
+   double t;
+@@ -1070,134 +1073,162 @@ void InjectTestInput() {
+   static size_t next = 0;
+   static Uint64 t0 = 0;
+   static bool loaded = false;
++  static std::string follow;      // <ID>_TEST_INPUT_FOLLOW
++  static long follow_at = 0;      // bytes of it already queued
++  static double follow_poll = 0;  // when to read it next (s)
++  auto motion = [](double t, float dx, float dy) {
++    SDL_Event e{};
++    e.type = SDL_EVENT_MOUSE_MOTION;
++    e.motion.xrel = dx;
++    e.motion.yrel = dy;
++    return TestEvent{t, e};
++  };
++  // One script line to events; a "+<s>" time is relative to now.
++  auto parse = [&](char* line, double now) {
++    if (char* h = std::strchr(line, '#')) *h = 0;
++    char* p = line + std::strspn(line, " \t");
++    bool rel = *p == '+';
++    double t;
++    char cmd[32] = {}, a[64] = {}, b[64] = {};
++    int n = std::sscanf(p + rel, "%lf %31s %63s %63s", &t, cmd, a, b);
++    if (n < 2) return;
++    if (rel) t += now;
++    std::string c = cmd;
++    if (c == "goto" && n == 4) {
++      // Home: two big moves (the virtual cursor clamps at the edge and
++      // the game re-centres it every frame), then steps of <= 200 px.
++      q.push_back(motion(t, -4000, -4000));
++      q.push_back(motion(t + 0.1, -4000, -4000));
++      q.push_back(motion(t + 0.2, -4000, -4000));
++      float x = std::atof(a), y = std::atof(b);
++      double tt = t + 0.3;
++      while (x > 0 || y > 0) {
++        float sx = std::min(x, 200.0f), sy = std::min(y, 200.0f);
++        q.push_back(motion(tt, sx, sy));
++        x -= sx;
++        y -= sy;
++        tt += 0.1;
++      }
++    } else if (c == "minimize" || c == "restore" || (c == "focus" && n == 3) ||
++               (c == "resize" && n == 4)) {
++      SDL_Event e{};
++      if (c == "minimize") e.type = SDL_EVENT_WINDOW_MINIMIZED;
++      else if (c == "restore") e.type = SDL_EVENT_WINDOW_RESTORED;
++      else if (c == "resize") {
++        e.type = SDL_EVENT_WINDOW_RESIZED;
++        e.window.data1 = std::atoi(a);
++        e.window.data2 = std::atoi(b);
++      } else if (std::string(a) == "out") e.type = SDL_EVENT_WINDOW_FOCUS_LOST;
++      else e.type = SDL_EVENT_WINDOW_FOCUS_GAINED;
++      q.push_back({t, e});
++    } else if (c == "chord" && n == 4) {
++      // "<t> chord ctrl+gui F": a key with modifiers held (ctrl, gui, alt, shift)
++      SDL_Scancode sc = SDL_GetScancodeFromName(b);
++      if (sc == SDL_SCANCODE_UNKNOWN) {
++        WarnF("TEST_INPUT: unknown key %s\n", b);
++        return;
++      }
++      SDL_Keymod mod = 0;
++      std::string m = a;
++      if (m.find("ctrl") != std::string::npos) mod |= SDL_KMOD_LCTRL;
++      if (m.find("gui") != std::string::npos) mod |= SDL_KMOD_LGUI;
++      if (m.find("alt") != std::string::npos) mod |= SDL_KMOD_LALT;
++      if (m.find("shift") != std::string::npos) mod |= SDL_KMOD_LSHIFT;
++      SDL_Event e{};
++      e.type = SDL_EVENT_KEY_DOWN;
++      e.key.scancode = sc;
++      e.key.mod = mod;
++      e.key.down = true;
++      q.push_back({t, e});
++      e.type = SDL_EVENT_KEY_UP;
++      e.key.down = false;
++      q.push_back({t + 0.08, e});
++    } else if (c == "shot" && n == 3) {
++      SDL_Event e{};
++      e.type = SDL_EVENT_USER;
++      e.user.code = kTestShot;
++      e.user.data1 = new std::string(a);  // freed when injected
++      q.push_back({t, e});
++    } else if (c == "pointer" && n == 4) {
++      SDL_Event e{};
++      e.type = SDL_EVENT_MOUSE_MOTION;
++      e.motion.which = kTestPointer;
++      e.motion.x = std::atof(a);
++      e.motion.y = std::atof(b);
++      q.push_back({t, e});
++    } else if (c == "move" && n == 4) {
++      q.push_back(motion(t, std::atof(a), std::atof(b)));
++    } else if (c == "click" || c == "dblclick") {
++      bool right = n >= 3 && std::string(a) == "right";
++      SDL_Event e{};
++      e.button.button = right ? SDL_BUTTON_RIGHT : SDL_BUTTON_LEFT;
++      for (int k = 0; k < (c == "dblclick" ? 2 : 1); k++) {
++        e.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
++        e.button.down = true;
++        e.button.clicks = uint8_t(k + 1);
++        q.push_back({t + 0.16 * k, e});
++        e.type = SDL_EVENT_MOUSE_BUTTON_UP;
++        e.button.down = false;
++        q.push_back({t + 0.16 * k + 0.08, e});
++      }
++    } else if (c == "key" && n >= 3) {
++      SDL_Scancode sc = SDL_GetScancodeFromName(a);
++      if (sc == SDL_SCANCODE_UNKNOWN) {
++        WarnF("TEST_INPUT: unknown key %s\n", a);
++        return;
++      }
++      SDL_Event e{};
++      e.type = SDL_EVENT_KEY_DOWN;
++      e.key.scancode = sc;
++      e.key.key = SDL_GetKeyFromScancode(sc, SDL_KMOD_NONE, false);
++      e.key.down = true;
++      q.push_back({t, e});
++      e.type = SDL_EVENT_KEY_UP;
++      e.key.down = false;
++      q.push_back({t + (n >= 4 ? std::atof(b) : 0.08), e});
++    } else {
++      WarnF("TEST_INPUT: bad line: %s", line);
++    }
++  };
++  auto by_time = [](const TestEvent& x, const TestEvent& y) { return x.t < y.t; };
+   if (!loaded) {
+     loaded = true;
+     t0 = SDL_GetTicks();
+-    const char* path = Env("TEST_INPUT");
+-    if (!path) return;
+-    FILE* f = std::fopen(path, "r");
+-    if (!f) {
+-      WarnF("TEST_INPUT: cannot open %s\n", path);
+-      return;
+-    }
+-    char line[256];
+-    auto motion = [](double t, float dx, float dy) {
+-      SDL_Event e{};
+-      e.type = SDL_EVENT_MOUSE_MOTION;
+-      e.motion.xrel = dx;
+-      e.motion.yrel = dy;
+-      return TestEvent{t, e};
+-    };
+-    while (std::fgets(line, sizeof line, f)) {
+-      if (char* h = std::strchr(line, '#')) *h = 0;
+-      double t;
+-      char cmd[32] = {}, a[64] = {}, b[64] = {};
+-      int n = std::sscanf(line, "%lf %31s %63s %63s", &t, cmd, a, b);
+-      if (n < 2) continue;
+-      std::string c = cmd;
+-      if (c == "goto" && n == 4) {
+-        // Home: two big moves (the virtual cursor clamps at the edge and
+-        // the game re-centres it every frame), then steps of <= 200 px.
+-        q.push_back(motion(t, -4000, -4000));
+-        q.push_back(motion(t + 0.1, -4000, -4000));
+-        q.push_back(motion(t + 0.2, -4000, -4000));
+-        float x = std::atof(a), y = std::atof(b);
+-        double tt = t + 0.3;
+-        while (x > 0 || y > 0) {
+-          float sx = std::min(x, 200.0f), sy = std::min(y, 200.0f);
+-          q.push_back(motion(tt, sx, sy));
+-          x -= sx;
+-          y -= sy;
+-          tt += 0.1;
+-        }
+-      } else if (c == "minimize" || c == "restore" || (c == "focus" && n == 3) ||
+-                 (c == "resize" && n == 4)) {
+-        SDL_Event e{};
+-        if (c == "minimize") e.type = SDL_EVENT_WINDOW_MINIMIZED;
+-        else if (c == "restore") e.type = SDL_EVENT_WINDOW_RESTORED;
+-        else if (c == "resize") {
+-          e.type = SDL_EVENT_WINDOW_RESIZED;
+-          e.window.data1 = std::atoi(a);
+-          e.window.data2 = std::atoi(b);
+-        } else if (std::string(a) == "out") e.type = SDL_EVENT_WINDOW_FOCUS_LOST;
+-        else e.type = SDL_EVENT_WINDOW_FOCUS_GAINED;
+-        q.push_back({t, e});
+-      } else if (c == "chord" && n == 4) {
+-        // "<t> chord ctrl+gui F": a key with modifiers held (ctrl, gui, alt, shift)
+-        SDL_Scancode sc = SDL_GetScancodeFromName(b);
+-        if (sc == SDL_SCANCODE_UNKNOWN) {
+-          WarnF("TEST_INPUT: unknown key %s\n", b);
+-          continue;
+-        }
+-        SDL_Keymod mod = 0;
+-        std::string m = a;
+-        if (m.find("ctrl") != std::string::npos) mod |= SDL_KMOD_LCTRL;
+-        if (m.find("gui") != std::string::npos) mod |= SDL_KMOD_LGUI;
+-        if (m.find("alt") != std::string::npos) mod |= SDL_KMOD_LALT;
+-        if (m.find("shift") != std::string::npos) mod |= SDL_KMOD_LSHIFT;
+-        SDL_Event e{};
+-        e.type = SDL_EVENT_KEY_DOWN;
+-        e.key.scancode = sc;
+-        e.key.mod = mod;
+-        e.key.down = true;
+-        q.push_back({t, e});
+-        e.type = SDL_EVENT_KEY_UP;
+-        e.key.down = false;
+-        q.push_back({t + 0.08, e});
+-      } else if (c == "shot" && n == 3) {
+-        SDL_Event e{};
+-        e.type = SDL_EVENT_USER;
+-        e.user.code = kTestShot;
+-        e.user.data1 = new std::string(a);  // freed when injected
+-        q.push_back({t, e});
+-      } else if (c == "pointer" && n == 4) {
+-        SDL_Event e{};
+-        e.type = SDL_EVENT_MOUSE_MOTION;
+-        e.motion.which = kTestPointer;
+-        e.motion.x = std::atof(a);
+-        e.motion.y = std::atof(b);
+-        q.push_back({t, e});
+-      } else if (c == "move" && n == 4) {
+-        q.push_back(motion(t, std::atof(a), std::atof(b)));
+-      } else if (c == "click" || c == "dblclick") {
+-        bool right = n >= 3 && std::string(a) == "right";
+-        SDL_Event e{};
+-        e.button.button = right ? SDL_BUTTON_RIGHT : SDL_BUTTON_LEFT;
+-        for (int k = 0; k < (c == "dblclick" ? 2 : 1); k++) {
+-          e.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
+-          e.button.down = true;
+-          e.button.clicks = uint8_t(k + 1);
+-          q.push_back({t + 0.16 * k, e});
+-          e.type = SDL_EVENT_MOUSE_BUTTON_UP;
+-          e.button.down = false;
+-          q.push_back({t + 0.16 * k + 0.08, e});
+-        }
+-      } else if (c == "key" && n >= 3) {
+-        SDL_Scancode sc = SDL_GetScancodeFromName(a);
+-        if (sc == SDL_SCANCODE_UNKNOWN) {
+-          WarnF("TEST_INPUT: unknown key %s\n", a);
+-          continue;
+-        }
+-        SDL_Event e{};
+-        e.type = SDL_EVENT_KEY_DOWN;
+-        e.key.scancode = sc;
+-        e.key.key = SDL_GetKeyFromScancode(sc, SDL_KMOD_NONE, false);
+-        e.key.down = true;
+-        q.push_back({t, e});
+-        e.type = SDL_EVENT_KEY_UP;
+-        e.key.down = false;
+-        q.push_back({t + (n >= 4 ? std::atof(b) : 0.08), e});
++    if (const char* fp = Env("TEST_INPUT_FOLLOW")) follow = fp;
++    if (const char* path = Env("TEST_INPUT")) {
++      if (FILE* f = std::fopen(path, "r")) {
++        char line[256];
++        while (std::fgets(line, sizeof line, f)) parse(line, 0);
++        std::fclose(f);
++        std::stable_sort(q.begin(), q.end(), by_time);
++        WarnF("TEST_INPUT: %zu events from %s\n", q.size(), path);
+       } else {
+-        WarnF("TEST_INPUT: bad line: %s", line);
++        WarnF("TEST_INPUT: cannot open %s\n", path);
+       }
+     }
+-    std::fclose(f);
+-    std::stable_sort(q.begin(), q.end(),
+-                     [](const TestEvent& x, const TestEvent& y) { return x.t < y.t; });
+-    WarnF("TEST_INPUT: %zu events from %s\n", q.size(), path);
+   }
+-  if (next >= q.size()) return;
+   double t = (SDL_GetTicks() - t0) / 1000.0;
++  // Lines appended to the follow file: complete lines only (a partly
++  // written one is read at a later poll), queued among the pending events.
++  if (!follow.empty() && t >= follow_poll) {
++    follow_poll = t + 0.2;
++    if (FILE* f = std::fopen(follow.c_str(), "r")) {
++      std::fseek(f, follow_at, SEEK_SET);
++      char line[256];
++      bool added = false;
++      while (std::fgets(line, sizeof line, f)) {
++        size_t len = std::strlen(line);
++        if (line[len - 1] != '\n') break;
++        follow_at += long(len);
++        WarnF("TEST_INPUT_FOLLOW: at %.2f s: %s", t, line);
++        parse(line, t);
++        added = true;
++      }
++      std::fclose(f);
++      if (added) std::stable_sort(q.begin() + long(next), q.end(), by_time);
++    }
++  }
++  if (next >= q.size()) return;
+   SDL_WindowID id = 0;
+   {
+     std::lock_guard<std::recursive_mutex> l(g_mu);

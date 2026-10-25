@@ -51,6 +51,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import test_loader as tl  # noqa: E402  (PE writer, assembler, paths)
@@ -859,7 +860,7 @@ def build_and_link(tmp):
     return binp, g
 
 
-def run(tmp, binp, mode, **extra):
+def run(tmp, binp, mode, during=None, **extra):
     data = os.path.join(tmp, "data")
     # WIN.INI for GetProfileStringA (the per-user drive C).
     ini = os.path.join(data, "win32test", "drive_c", "WINDOWS")
@@ -868,8 +869,16 @@ def run(tmp, binp, mode, **extra):
         f.write("[fonts]\n[Mss]\n  MSSDebug = \"Yes\"  \n")
     env = dict(os.environ, XDG_DATA_HOME=data, WIN32TEST_BACKGROUND="1",
                **{"WIN32TEST_" + k: v for k, v in extra.items()})
-    r = subprocess.run([binp, os.path.join(tmp, "install"), mode], capture_output=True, text=True, env=env,
-                       timeout=120)
+    if during is None:
+        r = subprocess.run([binp, os.path.join(tmp, "install"), mode], capture_output=True, text=True, env=env,
+                           timeout=120)
+    else:
+        # during(): runs while the program does (e.g. appends to a follow file).
+        proc = subprocess.Popen([binp, os.path.join(tmp, "install"), mode], stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, text=True, env=env)
+        during()
+        stdout, stderr = proc.communicate(timeout=120)
+        r = subprocess.CompletedProcess(proc.args, proc.returncode, stdout, stderr)
     out = re.findall(r"\[guest\] (.*)", r.stderr)
     fatal = re.search(r"FATAL: (.*)", r.stderr)
     run.stderr = r.stderr
@@ -988,6 +997,38 @@ def main():
                       fit_point(W, H, ww, wh, 300, 200))
                 check("F: fullscreen again: past the frame clamps to its last pixel", got[3],
                       fit_point(W, H, 1000, 500, 990, 490))
+
+            # Mode F with TEST_INPUT_FOLLOW: lines appended while it runs are
+            # queued, "+<s>" times relative to when they are read; a partly
+            # written line waits until it is complete.
+            follow = os.path.join(tmp, "f_follow.txt")
+            open(follow, "w").close()
+
+            def feed():
+                time.sleep(2.0)
+                with open(follow, "a") as fh:
+                    fh.write("+0.2 pointer 520 260\n+0.5 click\n+0.8 pointer 20")
+                time.sleep(1.0)
+                with open(follow, "a") as fh:
+                    fh.write(" 100\n+1.1 click\n")
+            code, out, fatal = run(tmp, binp, "F", during=feed, TEST_SCREEN="1000x500", TEST_INPUT_FOLLOW=follow)
+            log = run.stderr
+            check("FF: runs to the end", (code, fatal), (0, None))
+            check("FF: each complete appended line read once",
+                  re.findall(r"TEST_INPUT_FOLLOW: at [0-9.]+ s: (.*)", log),
+                  ["+0.2 pointer 520 260", "+0.5 click", "+0.8 pointer 20 100", "+1.1 click"])
+            reads = [float(x) for x in re.findall(r"TEST_INPUT_FOLLOW: at ([0-9.]+) s", log)]
+            check("FF: the split line read after its second part (>= 0.9 s after the first lines)",
+                  len(reads) == 4 and reads[2] - reads[0] >= 0.9, True)
+            mf = re.match(r"R([0-9A-F]+),([0-9A-F]+) C([0-9A-F]+):([0-9A-F]+),([0-9A-F]+)", out[0] if out else "")
+            check("FF: clicks printed", bool(mf), True)
+            if mf:
+                W, H = int(mf.group(1), 16), int(mf.group(2), 16)
+                pt = lambda lp: (lp & 0xFFFF, lp >> 16)
+                check("FF: two appended clicks reached the window", int(mf.group(3), 16), 2)
+                check("FF: an appended click lands where its pointer line put it",
+                      [pt(int(mf.group(4), 16)), pt(int(mf.group(5), 16))],
+                      [fit_point(W, H, 1000, 500, 520, 260), fit_point(W, H, 1000, 500, 20, 100)])
 
             code, out, fatal = run(tmp, binp, "M")
             check("M: runs to the end", (code, fatal), (0, None))
