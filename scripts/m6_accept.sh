@@ -9,23 +9,28 @@
 # Maps\Download of an install clone holding only that map. Each launch: a
 # fresh profile, M4's menus to the map, the nine other lobby slots set to
 # Computer (Normal) with the slot menus, Start Game, any key, "-ar" (every
-# player gets a random hero). The player's own hero is never ordered (it
-# stays at the fountain): the bots of both teams decide the match, no
-# cheat. After <minutes> in the match: F10 > End Game > Quit Mission, the
+# player gets a random hero). The bots of both teams decide the match, no
+# cheat. The player's own hero stays at the fountain and is never ordered.
+# Observation only, with camera controls: one plain minimap click puts the
+# camera on the map's centre (the mid lane's river), and
+# scripts/m6_observe.py keeps the view (collapses DotA's scoreboard only
+# when it detects it expanded, recentres the camera only if it detects it
+# moved; see there). After <minutes> in the match: F10 > End Game > Quit Mission, the
 # score screen. Frame pacing (REFROZEN_FPS_REPORT=60) and the process's
 # resident memory (ps, every 60 s) are logged for the whole session.
 #
 # Periodic shots (every 15 s in the match) are read with macOS's Vision OCR
-# (scripts/ocr_text.swift) as they are saved, kept as small JPEGs and their
-# BMPs removed (disk); named shots stay BMPs.
-# Evidence: game/attempts/m6-accept-<n>-<time>/{shots,ocr.txt,rss.txt}.
+# (scripts/ocr_text.swift) by scripts/m6_observe.py as they are saved, kept
+# as small JPEGs and their BMPs removed (disk); named shots stay BMPs.
+# Evidence: game/attempts/m6-accept-<n>-<time>/{shots,ocr.txt,rss.txt,observe.log}.
 #
 # A launch passes iff:
 #   - the log has no FATAL and no watchdog report, and every shot was saved;
 #   - a periodic shot shows the victory announcement ("has won"), i.e. the
 #     match ended by a destroyed throne before Quit Mission;
-#   - the score screen's Overview lists all 10 players (rows after the column
-#     headers), and its elapsed time is recorded;
+#   - the score screen's Overview lists all 10 players (rows counted by their
+#     entries in its Unit Score column, read on a cropped, enlarged image), and
+#     its elapsed time is recorded;
 #   - pacing, over the match after its first 5 minutes: every report's median
 #     frame interval at most 20 ms (50 fps), and the median of the last 10
 #     reports at most 15 % above that of minutes 5-15 (no drift);
@@ -75,6 +80,10 @@ for k in ("Return", "-", "A", "R", "Return"):
     print(f"{t:.1f} key {k}")
     t += 0.3
 print(f"{m0} shot match_start")
+# The camera on the map's centre: the cursor homed once to the minimap's
+# centre (m6_observe.CENTRE; the homing's edge scroll is undone by the
+# click), then a plain click there sets the camera.
+print(f"{m0 + 2} goto 80 524\n{m0 + 3.5} click\n{m0 + 6} shot camera")
 for i, s in enumerate(range(m0 + 15, end, 15)):
     print(f"{s} shot m{i:04d}")
 print(f"{end} shot match_end\n{end + 2} key F10\n{end + 5} shot menu\n{end + 6} key E")
@@ -84,43 +93,54 @@ EOF
 
 fail=0
 for ((i = 1; i <= N; i++)); do
-  run="$ROOT/game/attempts/m6-accept-$i-$(date +%Y%m%d-%H%M%S)"
+  run="$ROOT/game/attempts/${REFROZEN_M6_NAME:-m6-accept}-$i-$(date +%Y%m%d-%H%M%S)"
   name="$(basename "$run")"
   mkdir -p "$run/xdg" "$run/shots"
   script > "$run/match.txt"
+  # Development probes only (never an acceptance run): REFROZEN_M6_EXTRA_INPUT
+  # appends timed input lines (TEST_INPUT format) to the match script, and
+  # REFROZEN_M6_NAME names the runs (default m6-accept).
+  [ -n "${REFROZEN_M6_EXTRA_INPUT:-}" ] && cat "$REFROZEN_M6_EXTRA_INPUT" >> "$run/match.txt"
   shots_wanted=$(awk '$2 == "shot" {print $3}' "$run/match.txt")
+  : > "$run/ocr.txt"
+  : > "$run/rss.txt"
+  : > "$run/follow.txt"
   REFROZEN_GAME_DIR="$INSTALL" XDG_DATA_HOME="$run/xdg" REFROZEN_TEST_FOCUS=follow \
-    REFROZEN_TEST_INPUT="$run/match.txt" REFROZEN_SHOT_DIR="$run/shots" REFROZEN_FPS_REPORT=60 \
+    REFROZEN_TEST_INPUT="$run/match.txt" REFROZEN_TEST_INPUT_FOLLOW="$run/follow.txt" \
+    REFROZEN_SHOT_DIR="$run/shots" REFROZEN_FPS_REPORT=60 \
     "$ROOT/scripts/run_attempt.sh" "$name" $((END + 60)) > /dev/null &
   runner=$!
   t0=$SECONDS
-  : > "$run/ocr.txt"
-  : > "$run/rss.txt"
+  pid=""
+  while [ -z "$pid" ] && kill -0 "$runner" 2>/dev/null; do
+    pid=$(pgrep -n -f "$ROOT/build/main/refrozen" || true)
+    sleep 0.5
+  done
+  observer=""
+  if [ -n "$pid" ]; then
+    "$PY" -I "$ROOT/scripts/m6_observe.py" "$run" "$run/follow.txt" "$pid" &
+    observer=$!
+  fi
   next_rss=0
-  # While it runs: memory every 60 s; periodic shots read, compacted.
+  # While it runs: memory every 60 s (the observer reads the shots).
   while kill -0 "$runner" 2>/dev/null; do
     if [ $((SECONDS - t0)) -ge "$next_rss" ]; then
-      pid=$(pgrep -n -f "$ROOT/build/main/refrozen" || true)
       [ -n "$pid" ] && echo "$((SECONDS - t0)) $(ps -o rss= -p "$pid" | tr -d ' ')" >> "$run/rss.txt"
       next_rss=$((next_rss + 60))
     fi
-    for b in "$run"/shots/m[0-9]*.bmp; do
-      [ -e "$b" ] || continue
-      [ $(($(date +%s) - $(stat -f %m "$b"))) -ge 2 ] || continue
-      "$OCR" "$b" | sed "s|^|$(basename "$b" .bmp): |" >> "$run/ocr.txt"
-      sips -s format jpeg -Z 400 "$b" --out "${b%.bmp}.jpg" > /dev/null && rm "$b"
-    done
     sleep 2
   done
   wait "$runner"
-  for b in "$run"/shots/m[0-9]*.bmp; do
-    [ -e "$b" ] || continue
-    "$OCR" "$b" | sed "s|^|$(basename "$b" .bmp): |" >> "$run/ocr.txt"
-    sips -s format jpeg -Z 400 "$b" --out "${b%.bmp}.jpg" > /dev/null && rm "$b"
-  done
+  [ -n "$observer" ] && wait "$observer"
   for s in score score2; do
     [ -f "$run/shots/$s.bmp" ] && "$OCR" "$run/shots/$s.bmp" | sed "s|^|$s: |" >> "$run/ocr.txt"
   done
+  # The Overview's Unit Score column, cropped and enlarged: one entry per
+  # player row (a bot's name can read "..." and is not a reliable row count).
+  if [ -f "$run/shots/score.bmp" ]; then
+    ffmpeg -loglevel error -y -i "$run/shots/score.bmp" -vf "crop=150:340:170:100,scale=450:1020:flags=lanczos" \
+      "$run/score_units.png" && "$OCR" "$run/score_units.png" | sed "s|^|scoreunits: |" >> "$run/ocr.txt"
+  fi
 
   log="$ROOT/game/attempts/$name.log"
   fatal=$(grep -c FATAL "$log")
@@ -145,15 +165,9 @@ if not won:
 first_won = won[0].split(":")[0] if won else "-"
 team = next((t for t in ("Sentinel", "Scourge") for l in won if t in l), "?")
 score = [l.split(": ", 1)[1] for l in lines if l.startswith("score: ")]
-# The Overview lists one row per player after the column headers, then the
-# numbers; only the player's own row names its hero.
-rows = score[score.index("Total Score") + 1:] if "Total Score" in score else []
-players = []
-for s in rows:
-    if re.fullmatch(r"[\d ,.]+", s):
-        break
-    if len(re.findall(r"[A-Za-z]", s)) >= 3:
-        players.append(s)
+# One Unit Score entry per player row (the names column is not reliable:
+# a bot's name can read "...").
+players = [l.split(": ", 1)[1] for l in lines if l.startswith("scoreunits: ") and l.split(": ", 1)[1].strip()]
 elapsed = next((s.split(":", 1)[1].strip() for s in score if s.startswith("Elapsed Time")), "?")
 if len(players) < 10:
     bad.append(f"score screen lists {len(players)} players")
