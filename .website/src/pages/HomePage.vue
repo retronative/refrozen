@@ -4,7 +4,7 @@ const heroBase = `${import.meta.env.BASE_URL}hero/`
 const heroSet = (ext: string) =>
   [640, 960, 1280, 1920, 2560, 2880, 3840].map((w) => `${heroBase}hero-b-${w}.${ext} ${w}w`).join(', ')
 
-import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { RouterLink } from 'vue-router'
 import FrostField from '../components/FrostField.vue'
 import Divider from '../components/Divider.vue'
@@ -14,6 +14,7 @@ import Glyph from '../components/Glyph.vue'
 import LoadingBar from '../components/LoadingBar.vue'
 import { landmarks } from '../data/lanes'
 import { milestone, status } from '../docs'
+import { createIntro, initialIntroState, introSession, type IntroState } from '../intro'
 
 const hot = ref<string | null>(null)
 const chronicle = ref<HTMLElement | null>(null)
@@ -21,30 +22,23 @@ const continueButton = ref<HTMLButtonElement | null>(null)
 const current = status.milestones.find((m) => m.state === 'in-progress')
 const m5 = milestone('M5')
 
-// The loading-screen entrance: plays once per session, is skippable by the Skip control, a
-// click/tap on the hero or a character key, and never captures Space, arrows, Tab or paging
-// keys. Under reduced motion it starts in its final state.
-const INTRO_KEY = 'refrozen:intro-seen'
-const introDone = ref(false)
+// The loading-screen entrance (timeline in ../intro.ts): plays once per page load, is skippable at
+// once by the Skip control, a click/tap on the hero or a character key, and never captures Space,
+// arrows, Tab or paging keys. Under reduced motion, or when the page is revisited within the site,
+// it starts in its final state.
 const NAV_KEYS = new Set(['Tab', 'Shift', 'Control', 'Alt', 'Meta', 'CapsLock', ' ', 'Spacebar', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'PageUp', 'PageDown', 'Home', 'End'])
-
-// The bar shows real loading where there is any: the hero artwork decoding (screens that show it)
-// and the web fonts. It eases towards 90% while they load and reaches 100% only once both are
-// ready (after at least MIN_MS, so it never flashes); MAX_MS caps the wait so a slow or failed
-// image never holds the intro. requestAnimationFrame runs only until it completes.
-const progress = ref(0)
-const MIN_MS = 1200
-const MAX_MS = 3000
-let raf = 0
+const intro = ref<IntroState>(initialIntroState(introSession.played))
+const introDone = computed(() => intro.value.phase !== 'playing')
+let controller: ReturnType<typeof createIntro> | null = null
 
 function finishIntro(moveFocus = false) {
   if (introDone.value) return
-  cancelAnimationFrame(raf)
-  progress.value = 1
-  introDone.value = true
+  controller?.skip()
   if (moveFocus) requestAnimationFrame(() => continueButton.value?.focus())
 }
 
+// Real loading the bar waits on (up to a cap): the hero artwork decoding, on screens that show it,
+// and the web fonts.
 function heroArtReady(): Promise<void> {
   const img = document.querySelector<HTMLImageElement>('.hero__art img')
   if (!img || getComputedStyle(img.closest('picture') ?? img).display === 'none') return Promise.resolve()
@@ -53,29 +47,6 @@ function heroArtReady(): Promise<void> {
     img.addEventListener('load', () => img.decode().catch(() => undefined).then(() => resolve()), { once: true })
     img.addEventListener('error', () => resolve(), { once: true })
   })
-}
-
-function runIntro() {
-  let ready = false
-  Promise.all([heroArtReady(), document.fonts ? document.fonts.ready : Promise.resolve()]).then(() => (ready = true))
-  const start = performance.now()
-  let last = start
-  const step = (now: number) => {
-    if (introDone.value) return
-    const t = now - start
-    const dt = now - last
-    last = now
-    const done = (ready && t >= MIN_MS) || t >= MAX_MS
-    const target = done ? 1 : 0.9 * (1 - Math.exp(-t / 650))
-    progress.value += (target - progress.value) * Math.min(1, dt / (done ? 90 : 140))
-    if (done && progress.value > 0.995) {
-      progress.value = 1
-      finishIntro()
-      return
-    }
-    raf = requestAnimationFrame(step)
-  }
-  raf = requestAnimationFrame(step)
 }
 
 function onKey(event: KeyboardEvent) {
@@ -98,19 +69,18 @@ function descend() {
 }
 
 onMounted(() => {
-  let seen = false
-  try {
-    seen = sessionStorage.getItem(INTRO_KEY) === '1'
-    sessionStorage.setItem(INTRO_KEY, '1')
-  } catch {
-    // Storage unavailable (private mode, blocked): play the intro, it is skippable.
-  }
-  if (seen || window.matchMedia('(prefers-reduced-motion: reduce)').matches) finishIntro()
-  else runIntro()
+  controller = createIntro({
+    reducedMotion: window.matchMedia('(prefers-reduced-motion: reduce)').matches,
+    assetsReady: Promise.all([heroArtReady(), document.fonts ? document.fonts.ready : undefined]),
+    onChange: (state) => (intro.value = state),
+    frame: (callback) => requestAnimationFrame(callback),
+    cancelFrame: (id) => cancelAnimationFrame(id),
+  })
+  controller.start()
   window.addEventListener('keydown', onKey)
 })
 onBeforeUnmount(() => {
-  cancelAnimationFrame(raf)
+  controller?.stop()
   window.removeEventListener('keydown', onKey)
 })
 
@@ -136,7 +106,7 @@ const steps = [
 <template>
   <div>
     <!-- The loading screen: dawn and dusk, divided by the river. -->
-    <section class="hero" :class="{ 'intro-done': introDone }" aria-labelledby="hero-title" @click="onHeroClick">
+    <section class="hero" :class="{ 'intro-done': introDone, 'intro-complete': intro.phase === 'complete' }" aria-labelledby="hero-title" @click="onHeroClick">
       <div class="hero__sky" aria-hidden="true" />
       <div class="hero__river" aria-hidden="true" />
       <FrostField :count="12" />
@@ -172,8 +142,9 @@ const steps = [
 
         <div class="loading-plate mx-auto mt-12 flex max-w-md flex-col items-center gap-3">
           <LoadingBar
-            :progress="progress"
-            :complete="introDone"
+            :progress="intro.progress"
+            :complete="intro.phase === 'complete'"
+            :skipped="intro.phase === 'skipped'"
             label="Recompiling the ancients…"
             complete-label="The ancients are awake"
           />

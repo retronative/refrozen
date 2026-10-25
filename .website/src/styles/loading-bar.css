@@ -118,22 +118,22 @@
   mix-blend-mode: screen;
   opacity: var(--glow);
 }
-/* Completion, as in the reference: the comet goes out and the fill breathes once (full, half,
-   full); then the whole intro fades away. */
+/* Completion: the comet goes out and the fill glows once (brightness only, never dimmer than full,
+   so nothing blinks); then the bar fades away. Skipped: hidden at once, no animation. */
 .lbar--complete .lbar__tail,
 .lbar--complete .lbar__core { opacity: 0; transition: opacity .25s ease; }
-.lbar--complete .lbar__fill,
-.lbar--complete .lbar__wisprail { animation: lbar-breathe 2s ease-in-out 1 both; }
-.lbar--complete .lbar__done { animation: lbar-done .5s ease .2s 1 both; }
-.lbar--complete { animation: lbar-leave .7s ease 2.2s 1 forwards; }
+.lbar--complete .lbar__fill { animation: lbar-glow .8s ease-out 1 both; }
+.lbar--complete .lbar__done { animation: lbar-done .4s ease .15s 1 both; }
+.lbar--complete { animation: lbar-leave .6s ease 1.2s 1 forwards; }
+.lbar--skipped { animation: none; opacity: 0; visibility: hidden; }
 
 @keyframes lbar-enter {
   from { opacity: 0; transform: translateY(5px); }
   to { opacity: 1; transform: none; }
 }
-@keyframes lbar-breathe {
-  0%, 100% { opacity: 1; }
-  50% { opacity: .5; }
+@keyframes lbar-glow {
+  0%, 100% { filter: brightness(1); }
+  35% { filter: brightness(1.45) saturate(1.1); }
 }
 @keyframes lbar-done {
   from { opacity: 0; }
@@ -143,10 +143,8 @@
   from { opacity: 1; }
   to { opacity: 0; visibility: hidden; }
 }
-/* Reduced motion: no entrance, comet or breath; the finished intro is simply not shown. */
+/* Reduced motion: no intro at all; the bar is hidden from the first paint (its space stays reserved)
+   and the page shows its final state. */
 @media (prefers-reduced-motion: reduce) {
-  .lbar { animation: none; }
-  .lbar__tail, .lbar__corerail { display: none; }
-  .lbar--complete { animation: none; opacity: 0; visibility: hidden; }
-  .lbar--complete .lbar__fill, .lbar--complete .lbar__wisprail, .lbar--complete .lbar__done { animation: none; }
+  .lbar { animation: none; visibility: hidden; }
 }

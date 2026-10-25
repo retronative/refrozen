@@ -4,10 +4,11 @@
 // pointed end caps; one continuous fill, violet-blue at its edges and bright cyan through its
 // middle; an additive comet of light (a bright round core at the fill's tip, a tapering tail
 // inside it) that is dark until about 43% and brightens to full by the end; at completion the
-// fill breathes once. The label sits above and the completion message below, over the artwork.
-// It only draws: the owner passes `progress` (0..1) and `complete`; nothing here runs on a timer.
-// The fill, tail and core move by transform, sizes are fixed (no layout shift), and after the
-// completion breath the whole element fades away (its space stays reserved).
+// fill glows once. The label sits above and the completion message below, over the artwork.
+// It only draws: the owner passes `progress` (0..1) and `complete`, or `skipped` to hide it at once;
+// nothing here runs on a timer. The fill, tail and core move by transform, sizes are fixed (no
+// layout shift), and after the completion glow the whole element fades away (its space stays
+// reserved).
 // Styles are styles/loading-bar.css, loaded with the main stylesheet so a prerendered bar is
 // styled from the first paint. Decorative to assistive technology: the owner keeps the meaningful
 // controls (skip, continue) as real buttons outside it.
@@ -15,15 +16,16 @@ const props = withDefaults(
   defineProps<{
     progress: number
     complete?: boolean
+    skipped?: boolean
     label?: string
     completeLabel?: string
   }>(),
-  { complete: false, label: 'Loading…', completeLabel: 'Ready' },
+  { complete: false, skipped: false, label: 'Loading…', completeLabel: 'Ready' },
 )
 </script>
 
 <template>
-  <div class="lbar" :class="{ 'lbar--complete': props.complete }" :style="{ '--p': Math.min(1, Math.max(0, props.progress)) }" aria-hidden="true">
+  <div class="lbar" :class="{ 'lbar--complete': props.complete, 'lbar--skipped': props.skipped }" :style="{ '--p': Math.min(1, Math.max(0, props.progress)) }" aria-hidden="true">
     <p class="lbar__label">{{ props.label }}</p>
     <div class="lbar__frame">
       <span class="lbar__cap lbar__cap--l" />
