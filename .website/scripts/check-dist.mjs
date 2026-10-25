@@ -17,7 +17,7 @@ const SCREENSHOT_MAX_BYTES = 1_500_000
 const HERO_FILE = /^hero\/hero-b-(640|960|1280|1920|2560|2880|3840)\.(avif|webp)$/
 const HERO_MAX_BYTES = 600_000
 // Page banner paintings (see the disclaimer): exactly these responsive files.
-const BANNER_FILE = /^banners\/(forge|library|portal|tavern|battlefield|fog|ranger|scholar)-(640|1280|1920)\.(avif|webp)$/
+const BANNER_FILE = /^banners\/(forge|library|portal|tavern|battlefield|fog|ranger|scholar|candlelit|icegate)-(640|1280|1920)\.(avif|webp)$/
 const BANNER_MAX_BYTES = 400_000
 
 const FORBIDDEN = [

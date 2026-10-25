@@ -13,6 +13,7 @@ const over = (top, alpha, bottom) => top.map((c, i) => c * alpha + bottom[i] * (
 const text = {
   bone: hex('#ece6d8'), ash: hex('#a7afbc'), gold: hex('#d8b868'), goldBright: hex('#f0d996'),
   frost: hex('#9ad8ff'), dusk: hex('#b1a4f4'), verdant: hex('#a3d58c'), chatTime: hex('#7f8896'),
+  ember: hex('#e59a5b'),
 }
 const abyss = hex('#06080c')
 const panel = hex('#10151d')
@@ -41,6 +42,16 @@ const checks = [
   ['chat timestamp on chat log', text.chatTime, over([0, 0, 0], 0.55, abyss), 4.5],
   ['muted text (ash) on warm banner', text.ash, bannerWarm, 4.5],
   ['muted text (ash) on cold banner', text.ash, bannerCold, 4.5],
+  // Installation guide: the tinted callouts at their strongest tint, the disabled download
+  // button's lighter stripe and the gilded Next plate's top edge.
+  ['install: unverified/danger (ember) on ember callout', text.ember, over(hex('#e59a5b'), 0.12, hex('#0d1118')), 4.5],
+  ['install: body (bone) on ember callout', text.bone, over(hex('#e59a5b'), 0.12, hex('#0d1118')), 4.5],
+  ['install: planned (dusk) on preview callout', text.dusk, over([110, 96, 210], 0.12, hex('#0d1118')), 4.5],
+  ['install: muted (ash) on preview callout', text.ash, over([110, 96, 210], 0.12, hex('#0d1118')), 4.5],
+  ['install: disabled button (ash) on stripe', text.ash, hex('#10151d'), 4.5],
+  ['install: Next label (gold) on gilded plate', text.gold, hex('#4a3b22'), 4.5],
+  ['install: Next text (bone) on gilded plate', text.bone, hex('#4a3b22'), 4.5],
+  ['install: current step (gold-bright) on highlight', text.goldBright, over(hex('#d8b868'), 0.12, abyss), 4.5],
 ]
 
 // Home hero and page banners (.hero__sky + .hero__river): the lightest points text can sit on

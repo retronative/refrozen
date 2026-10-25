@@ -6,6 +6,7 @@ import {
   type RouteRecordRaw,
 } from 'vue-router'
 import { docs, findDoc } from './docs'
+import { installPath, installSteps } from './data/release'
 
 export interface PageMeta {
   title: string
@@ -56,6 +57,25 @@ const routes: RouteRecordRaw[] = [
     },
   },
   {
+    path: '/docs/installation/',
+    name: 'install',
+    component: () => import('./pages/InstallAllPage.vue'),
+    meta: {
+      title: `Installation guide (preview) — ${SITE}`,
+      description:
+        'A preview of the planned reFrozen installation, all five steps on one page. There is no release yet; unverified steps are marked.',
+    },
+  },
+  ...installSteps.map(
+    (step, index): RouteRecordRaw => ({
+      path: installPath(step),
+      name: `install-${step.slug}`,
+      component: () => import('./pages/InstallStepPage.vue'),
+      props: { index },
+      meta: { title: `${step.title} — Installation guide (preview) — ${SITE}`, description: step.description },
+    }),
+  ),
+  {
     path: '/docs/:slug/',
     name: 'doc',
     component: () => import('./pages/DocPage.vue'),
@@ -100,6 +120,8 @@ export const staticPaths = [
   '/features/',
   '/screenshots/',
   '/docs/',
+  installPath(),
+  ...installSteps.map((step) => installPath(step)),
   ...docs.filter((doc) => doc.route.startsWith('/docs/')).map((doc) => doc.route),
   '/compatibility/',
   '/faq/',
