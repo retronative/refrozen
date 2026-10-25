@@ -244,6 +244,8 @@ official cooperation. Nothing network-facing is needed before M7.
   - No regression in offline or LAN play (their acceptance tests re-run).
 
 ## Release packaging *(future work item; not a milestone gate, not started)*
+- **v0.1.0 (first public, offline-only release): planned in `reference/RELEASE_PLAN.md`** (scope,
+  prerequisites: M6 passed and human playtesting; gates G1–G8; M7 and M8 are not prerequisites).
 - **Goal (the user's request, 2026-10-25):** a native macOS application players install and launch
   like any other game, compatible with macOS Game Mode. It doesn't interrupt the milestones or
   change their gates.
