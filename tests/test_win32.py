@@ -104,7 +104,7 @@ IMPORTS = [
                       "GetQueuedCompletionStatus", "CreateThread", "Sleep", "WaitForSingleObject",
                       "InitializeCriticalSection", "TryEnterCriticalSection", "LeaveCriticalSection",
                       "CreateFileA", "ReadFile", "WriteFile", "CloseHandle", "SetFilePointer",
-                      "SetLastError", "GetCurrentThreadId"]),
+                      "SetLastError", "GetCurrentThreadId", "GetTickCount"]),
     # Winsock 1.1 by ordinal (Wine's wsock32.spec): htonl, htons, inet_addr,
     # inet_ntoa, ntohl, ntohs, WSAGetLastError.
     ("wsock32.dll", [8, 9, 10, 11, 14, 15, 111]),
@@ -118,7 +118,7 @@ IMPORTS = [
                    "waveOutWrite", "waveOutReset", "waveOutClose", "waveOutGetID"]),
     ("gdi32.dll", ["ChoosePixelFormat", "SetPixelFormat"]),
     ("opengl32.dll", ["wglCreateContext", "wglMakeCurrent", "wglSwapLayerBuffers", "glGetError",
-                      "glTexGeni", "glBegin", "glEnd"]),
+                      "glTexGeni", "glBegin", "glEnd", "glBindTexture", "glTexImage2D"]),
 ]
 # fixed text offsets (function entries)
 WORKER, WNDPROC, TRYCS, PAINTPROC, WAVEPROC, MAIN = 0x10, 0x40, 0xC0, 0x100, 0x1C0, 0x240
@@ -639,6 +639,45 @@ def build_text(g):
     gl_names.append("gl: wglSwapLayerBuffers(main plane) is TRUE")
     gl += g.call("wglSwapLayerBuffers", hdc, 1) + "  cmp eax, 1\n  call flag\n"
     g.gl_names = gl_names
+
+    # mode S: the stall recorder (<ID>_STALL): frames of a known make-up on a
+    # GL context, each ended by a swap (a presented frame). The recorder's
+    # reports on stderr are checked; the program prints nothing.
+    swap = g.call("wglSwapLayerBuffers", hdc, 1)
+    sc = mkclass + win("s", 0x80000000, 0, 0, 64, 64) + f"  mov dword ptr [{v['hwnd']:#x}], eax\n"
+    sc += g.call("GetDC", f"dword ptr [{v['hwnd']:#x}]") + f"  mov dword ptr [{v['hdc']:#x}], eax\n"
+    sc += g.call("ChoosePixelFormat", hdc, g.pfd) + "  push eax\n  pop esi\n"
+    sc += g.call("SetPixelFormat", hdc, "esi", g.pfd)
+    sc += g.call("wglCreateContext", hdc) + "  mov esi, eax\n" + g.call("wglMakeCurrent", hdc, "esi")
+    # frames 1-2: process start to the first frame, the window system's
+    # first events (not checked)
+    sc += swap + g.call("Sleep", 20) + swap
+    sc += g.call("Sleep", 5) + swap               # frame 3: short
+    sc += g.call("Sleep", 160) + swap             # frame 4: no message pumped yet
+    sc += g.call("PeekMessageA", g.msg, 0, 0, 0, 0) + g.call("Sleep", 160) + swap  # frame 5: pumped
+    sc += g.call("Sleep", 160) + swap             # frame 6: not pumped, after pumping
+    # frame 7: three 1 KB reads, a 16x16 RGBA texture upload, then a wait
+    sc += g.call("CreateFileA", g.str("C:\\T\\data.bin"), 0x80000000, 1, 0, 3, 0x80, 0) + "  mov edi, eax\n"
+    for _ in range(3):
+        sc += g.call("ReadFile", "edi", g.out, 1024, g.tmp, 0)
+    sc += g.call("CloseHandle", "edi") + g.call("glBindTexture", 0x0DE1, 1)
+    sc += g.call("glTexImage2D", 0x0DE1, 0, 0x1908, 16, 16, 0, 0x1908, 0x1401, g.out)
+    sc += g.call("Sleep", 130) + swap
+    # frame 8: guest code for at least 150 ms (GetTickCount between batches
+    # of a million loop iterations)
+    # (a multiplicative recurrence the compiler cannot fold away)
+    sc += g.call("GetTickCount") + f"  mov dword ptr [{g.tmp + 8:#x}], eax\ns_busy:\n  mov ecx, 1000000\n"
+    sc += f"  mov eax, dword ptr [{g.tmp + 16:#x}]\ns_spin:\n  imul eax, eax, 1103515245\n  add eax, 12345\n"
+    sc += f"  dec ecx\n  jnz s_spin\n  mov dword ptr [{g.tmp + 16:#x}], eax\n" + g.call("GetTickCount")
+    sc += f"  sub eax, dword ptr [{g.tmp + 8:#x}]\n  cmp eax, 150\n  jb s_busy\n" + swap
+    g.s_code = sc
+    # mode T: two million GetCommandLineA calls (a cheap import the recorder
+    # times), timed by GetTickCount ("T<ms>"): the per-import overhead.
+    tc = g.call("GetTickCount") + f"  mov dword ptr [{g.tmp + 8:#x}], eax\n  mov dword ptr [{g.tmp + 12:#x}], 2000000\n"
+    tc += "t_loop:\n" + g.call("GetCommandLineA") + f"  dec dword ptr [{g.tmp + 12:#x}]\n  jnz t_loop\n"
+    tc += g.call("GetTickCount") + f"  sub eax, dword ptr [{g.tmp + 8:#x}]\n"
+    tc += g.call("wsprintfA", g.out, g.str("T%u"), "eax") + "  add esp, 12\n" + g.call("OutputDebugStringA", g.out)
+    g.t_code = tc
     planes = mkclass + win("q", 0x80000000, 0, 0, 64, 64) + "  mov esi, eax\n" + g.call("GetDC", "esi")
     planes += "  mov esi, eax\n" + g.call("ChoosePixelFormat", "esi", g.pfd) + g.call("SetPixelFormat", "esi", "eax", g.pfd)
     planes += g.call("wglCreateContext", "esi") + g.call("wglMakeCurrent", "esi", "eax")
@@ -774,6 +813,10 @@ main:
   je mode_f
   cmp eax, 0x58
   je mode_x
+  cmp eax, 0x53
+  je mode_s
+  cmp eax, 0x54
+  je mode_t
 {g.stop_modes}{a}{finish}
 mode_d:
 {g.d_code}{finish}
@@ -791,6 +834,10 @@ mode_l:
 {gl}{finish}
 mode_p:
 {planes}
+mode_s:
+{g.s_code}{finish}
+mode_t:
+{g.t_code}{finish}
 mode_x:
   mov ebx, 0x22222222
   mov esi, 0x55555555
@@ -897,6 +944,25 @@ def run(tmp, binp, mode, during=None, **extra):
     fatal = re.search(r"FATAL: (.*)", r.stderr)
     run.stderr = r.stderr
     return r.returncode, out, fatal.group(1) if fatal else None
+
+
+STALL_RE = re.compile(r"stall: frame (\d+) took ([\d.]+) ms at t=([\d.]+) s \[(\w+)[^\]]*\]: ([^|]*)(?:\| imports: ([^|]*))?(?:\| untimed: [^|]*)?(?:\| samples (\d+)(?:, guest fn: ([^,]*))?)?")
+
+
+def stalls(log):
+    """{frame: report} of the recorder's reports: ms, phase, {category: ms},
+    the category text, the imports text, samples and the guest functions."""
+    found = {}
+    for m in STALL_RE.finditer(log):
+        cats = {}
+        for part in m.group(5).split(","):
+            c = re.match(r"\s*([a-z-]+) ([\d.]+)", part)
+            if c:
+                cats[c.group(1)] = float(c.group(2))
+        found[int(m.group(1))] = dict(ms=float(m.group(2)), t=float(m.group(3)), phase=m.group(4), cats=cats,
+                                      text=m.group(5), imports=m.group(6) or "", samples=int(m.group(7) or 0),
+                                      guest=(m.group(8) or "").split(), raw=m.group(0))
+    return found
 
 
 def fit_point(sw, sh, dw, dh, x, y):
@@ -1076,6 +1142,74 @@ def main():
                 if os.path.isdir(crashes) else []
             check("X: the same report in the crash file",
                   any("guest memory fault at guest 0000003C" in r and "ebx=22222222" in r for r in reports), True)
+
+            # Mode S: the stall recorder (patch 0018). The make-up of each frame
+            # comes from the program: Sleep waits at least its argument (MSDN),
+            # the busy loop runs guest code until GetTickCount has advanced 150
+            # ms, the reads and the texture are counted by the program.
+            with open(os.path.join(tmp, "install", "data.bin"), "wb") as f:
+                f.write(bytes(range(256)) * 16)
+            code, out, fatal = run(tmp, binp, "S", STALL="100")
+            log = run.stderr
+            st = stalls(log)
+            check("S: runs to the end", (code, fatal), (0, None))
+            check("S: the recorder says it is on", "stall: recording frames over 100.0 ms" in log, True)
+            check("S: a short frame is not reported", 3 in st, False)
+            check("S: the first frame is timed from the start (t = its length)",
+                  1 in st and abs(st[1]["ms"] - st[1]["t"] * 1000) <= 10 + st[1]["t"] * 5, True)
+            f3, f4, f5, f6, f7 = (st.get(i, dict(ms=0, phase="", cats={}, text="", imports="", samples=0, guest=[],
+                                                 raw=""))
+                                  for i in (4, 5, 6, 7, 8))
+            check("S: Sleep(160) frames are reported", all(f["ms"] >= 160 for f in (f3, f4, f5)), True)
+            check("S: phase before any message is pumped: startup", f3["phase"], "startup")
+            check("S: phase of a frame that pumped messages: interactive", f4["phase"], "interactive")
+            check("S: phase of a frame without pumping, after pumping: loading", f5["phase"], "loading")
+            check("S: the sleep is charged to waits", all(f["cats"].get("wait", 0) >= 155 for f in (f3, f4, f5)), True)
+            check("S: and to the Sleep import, called from guest code",
+                  bool(re.match(r"\s*Sleep (1[5-9]\d|[2-9]\d\d)\.\d x1 \(longest [\d.]+ from 0040[0-9A-F]{4}\)", f3["imports"])), True)
+            check("S: the categories partition the frame",
+                  all(abs(sum(f["cats"].values()) - f["ms"]) <= max(1.0, f["ms"] * 0.01) for f in st.values()), True)
+            check("S: file reads counted (3 ops, 3 KB)", "file" in f6["cats"] and "(3 ops, 3.0 KB)" in f6["text"], True)
+            check("S: the texture upload is texture work", bool(re.search(r"texture [\d.]+ x[1-9]", f6["text"])), True)
+            # (GetTickCount counts whole milliseconds: 150 of them may be 149.x ms.)
+            check("S: the guest loop is charged to guest code", f7["ms"] >= 145 and
+                  f7["cats"].get("guest", 0) >= 0.9 * f7["ms"], True)
+            check("S: pure getters are counted, not timed (GetTickCount in the loop)",
+                  bool(re.search(r"\| untimed: GetTickCount x([3-9]|\d\d+)", f7["raw"])) and
+                  "GetTickCount " not in f7["imports"], True)
+            check("S: the sampler names the guest function waiting in Sleep", f3["guest"][:1], ["00401000"])
+            check("S: the sampler names the guest function looping", f7["guest"][:1], ["00401000"])
+            check("S: samples cover the frame (about one per 2 ms)", f3["samples"] >= 40, True)
+            # A report that takes 150 ms (test aid): the next frame shows it as
+            # recorder time but is a stall only by its own content.
+            code, out, fatal = run(tmp, binp, "S", STALL="100", TEST_STALL_REPORT_MS="150")
+            st = stalls(run.stderr)
+            check("S: the recorder's own time is shown", st.get(5, {}).get("cats", {}).get("recorder", 0) >= 150, True)
+            check("S: and never makes a stall (every report is over 100 ms without it)",
+                  bool(st) and all(f["ms"] - f["cats"].get("recorder", 0) > 100 for f in st.values()), True)
+            code, out, fatal = run(tmp, binp, "S", STALL="100", STALL_MAX="1")
+            log = run.stderr
+            check("S: STALL_MAX=1: one report", len(stalls(log)), 1)
+            check("S: STALL_MAX=1: then counted only",
+                  "stall: 1 reports made; further stalls are counted, not reported" in log, True)
+            code, out, fatal = run(tmp, binp, "S")
+            check("S: without STALL nothing is recorded", (code, "stall:" in run.stderr), (0, False))
+            # Mode T: the recorder's cost per import call (2 million calls;
+            # the fastest of three alternating runs each, against noise).
+            times = {False: [], True: []}
+            for _ in range(3):
+                for recording in (False, True):
+                    code, out, fatal = run(tmp, binp, "T", **({"STALL": "100"} if recording else {}))
+                    m = re.match(r"T(\d+)", out[0]) if out else None
+                    if m:
+                        times[recording].append(int(m.group(1)))
+            t_off = min(times[False]) if len(times[False]) == 3 else None
+            t_on = min(times[True]) if len(times[True]) == 3 else None
+            if t_off is not None and t_on is not None:
+                print(f"note: 2M timed import calls: {t_off} ms off, {t_on} ms recording "
+                      f"({(t_on - t_off) / 2e6 * 1e6:.0f} ns per call)")
+            check("T: recording costs under 1 us per timed import call",
+                  t_off is not None and t_on is not None and (t_on - t_off) / 2e6 < 1e-3, True)
 
             code, out, fatal = run(tmp, binp, "M")
             check("M: runs to the end", (code, fatal), (0, None))

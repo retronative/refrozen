@@ -1,0 +1,1077 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index fd66531..a468c52 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -89,6 +89,7 @@ add_library(recomp_runtime SHARED
+   src/runtime/platform.cpp
+   src/runtime/process.cpp
+   src/runtime/watchdog.cpp
++  src/runtime/stall.cpp
+   src/runtime/guest_alloc.cpp
+   src/runtime/lazy_mem.cpp
+   src/runtime/hle/hle.cpp
+@@ -112,8 +113,9 @@ target_link_libraries(recomp_runtime PUBLIC recomp_image recomp_x87
+                       PRIVATE recomp_gfx)  # presentation (hle/present.cpp)
+ # Every indirect call and return of the game goes through Dispatch:
+ # optimised in every build type (at -O0 its image lookup was a third of
+-# the main thread while a large map loaded).
+-set_source_files_properties(src/runtime/dispatch.cpp TARGET_DIRECTORY recomp_runtime
++# the main thread while a large map loaded). The stall recorder, when on,
++# runs on every import call: optimised too.
++set_source_files_properties(src/runtime/dispatch.cpp src/runtime/stall.cpp TARGET_DIRECTORY recomp_runtime
+   PROPERTIES COMPILE_OPTIONS "-O2")
+ # Nothing in a game refers to an HLE module's symbols: keep the linker
+ # from dropping them where it links --as-needed (ld64 keeps every dylib).
+diff --git a/src/runtime/dispatch.cpp b/src/runtime/dispatch.cpp
+index cc1bd30..fb56b10 100644
+--- a/src/runtime/dispatch.cpp
++++ b/src/runtime/dispatch.cpp
+@@ -201,6 +201,15 @@ const bool kFatalReportSet = (g_fatal_report = FatalReport, true);
+ 
+ }  // namespace
+ 
++bool EvalGuestExpr(const char* expr, uint32_t* out) {
++  if (!g_proc) return false;
++  DumpParser d{expr};
++  uint32_t v = d.Expr();
++  if (!d.ok || *d.p) return false;
++  *out = v;
++  return true;
++}
++
+ 
+ // Host faults (SIGSEGV/SIGBUS) in guest memory are first offered to the
+ // lazy regions (lazy_mem.h), whose pages fault by design, on any thread
+diff --git a/src/runtime/gfx/device.cpp b/src/runtime/gfx/device.cpp
+index 8defe54..2f16af3 100644
+--- a/src/runtime/gfx/device.cpp
++++ b/src/runtime/gfx/device.cpp
+@@ -8,6 +8,9 @@
+ 
+ namespace recomp::gfx {
+ 
++void (*g_work_begin)(Work) = nullptr;
++void (*g_work_end)() = nullptr;
++
+ namespace {
+ std::mutex g_present_mu;
+ Presentation g_present{};
+diff --git a/src/runtime/gfx/device.h b/src/runtime/gfx/device.h
+index 9b91b17..6398293 100644
+--- a/src/runtime/gfx/device.h
++++ b/src/runtime/gfx/device.h
+@@ -29,6 +29,21 @@ struct SDL_Window;
+ 
+ namespace recomp::gfx {
+ 
++// Optional timing hooks for host work inside a device (the runtime's stall
++// recorder sets them; null otherwise). A WorkScope brackets one piece.
++enum class Work : uint8_t { Texture, Shader, GpuWait, Present };
++extern void (*g_work_begin)(Work);
++extern void (*g_work_end)();
++struct WorkScope {
++  bool on;
++  explicit WorkScope(Work w) : on(g_work_begin != nullptr) {
++    if (on) g_work_begin(w);
++  }
++  ~WorkScope() {
++    if (on) g_work_end();
++  }
++};
++
+ enum class Format : uint32_t {
+   Unknown, X8R8G8B8, A8R8G8B8, R8G8B8, R5G6B5, X1R5G5B5, A1R5G5B5, A4R4G4B4,
+   X4R4G4B4, R3G3B2, A8, L8, A8L8, P8,
+diff --git a/src/runtime/gfx/gpu_device.cpp b/src/runtime/gfx/gpu_device.cpp
+index fba6b37..4a88681 100644
+--- a/src/runtime/gfx/gpu_device.cpp
++++ b/src/runtime/gfx/gpu_device.cpp
+@@ -482,6 +482,7 @@ class GpuDevice final : public Device {
+   // ---- resources
+ 
+   TextureId CreateTexture(int w, int h, int levels, Format fmt, bool rt) override {
++    WorkScope work(Work::Texture);
+     std::lock_guard<std::recursive_mutex> l(mu_);
+     if (w <= 0 || h <= 0) return 0;
+     if (levels <= 0) {
+@@ -575,10 +576,12 @@ class GpuDevice final : public Device {
+   }
+   void UpdateTexture(TextureId id, int level, const Rect& r, const void* src,
+                      uint32_t pitch) override {
++    WorkScope work(Work::Texture);
+     Update(id, 0, level, r, src, pitch);
+   }
+ 
+   TextureId CreateCubeTexture(int size, int levels, Format fmt) override {
++    WorkScope work(Work::Texture);
+     std::lock_guard<std::recursive_mutex> l(mu_);
+     if (size <= 0) return 0;
+     if (levels <= 0) {
+@@ -610,6 +613,7 @@ class GpuDevice final : public Device {
+ 
+   void UpdateCubeTexture(TextureId id, int face, int level, const Rect& r, const void* src,
+                          uint32_t pitch) override {
++    WorkScope work(Work::Texture);
+     if (face < 0 || face > 5) return;
+     Update(id, face, level, r, src, pitch);
+   }
+@@ -1123,6 +1127,7 @@ void r_color0(inout vec4 c) {
+   }
+ 
+   ShaderId CreateShader(const hlsl::Program& prog) override {
++    WorkScope work(Work::Shader);
+     std::lock_guard<std::recursive_mutex> l(mu_);
+     Shader sh;
+     sh.stage = prog.stage;
+@@ -1340,6 +1345,7 @@ void r_color0(inout vec4 c) {
+   }
+ 
+   void Present() override {
++    WorkScope work(Work::Present);
+     std::lock_guard<std::recursive_mutex> l(mu_);
+     Flush();
+     SDL_GPUCommandBuffer* cmd = SDL_AcquireGPUCommandBuffer(dev_);
+@@ -1656,6 +1662,7 @@ void r_color0(inout vec4 c) {
+     in_flight_.push_back(f);
+     while (!in_flight_.empty() &&
+            (in_flight_.size() > kMaxInFlight || SDL_QueryGPUFence(dev_, in_flight_.front()))) {
++      WorkScope work(Work::GpuWait);
+       SDL_WaitForGPUFences(dev_, true, &in_flight_.front(), 1);
+       SDL_ReleaseGPUFence(dev_, in_flight_.front());
+       in_flight_.pop_front();
+@@ -1939,7 +1946,10 @@ void r_color0(inout vec4 c) {
+     if (!rd.fence) return;
+     int w = rd.c.right - rd.c.left, h = rd.c.bottom - rd.c.top;
+     if (dst) {
+-      SDL_WaitForGPUFences(dev_, true, &rd.fence, 1);
++      {
++        WorkScope work(Work::GpuWait);
++        SDL_WaitForGPUFences(dev_, true, &rd.fence, 1);
++      }
+       const auto* px = static_cast<const uint32_t*>(SDL_MapGPUTransferBuffer(dev_, rd.tb, false));
+       uint32_t bpp = BitsPerPixel(fmt) / 8;
+       // Rows of the requested rectangle that fell outside the target stay
+@@ -2179,6 +2189,7 @@ void r_color0(inout vec4 c) {
+   // for the colour ones.
+   SDL_GPUGraphicsPipeline* CreatePipeline(const PipelineKey& k, SDL_GPUShader* vs,
+                                           SDL_GPUShader* fs, const uint8_t* alpha) {
++    WorkScope work(Work::Shader);
+     SDL_GPUColorTargetDescription ctds[4]{};
+     for (int i = 0; i < k.targets; i++) {
+       SDL_GPUColorTargetDescription& ctd = ctds[i];
+diff --git a/src/runtime/hle/hle.cpp b/src/runtime/hle/hle.cpp
+index ff512c7..53dbc45 100644
+--- a/src/runtime/hle/hle.cpp
++++ b/src/runtime/hle/hle.cpp
+@@ -12,6 +12,7 @@
+ 
+ #include "runtime/hle/win32.h"
+ #include "runtime/log.h"
++#include "runtime/stall.h"
+ #include "runtime/watchdog.h"
+ 
+ namespace recomp::hle {
+@@ -40,6 +41,7 @@ struct Slot {
+   // its worker thread uploads textures while the main thread renders,
+   // and neither our ddraw state nor the d3d9 device is reentrant.
+   bool graphics;
++  stall::Cat stall_cat;  // the stall recorder's category for it
+ };
+ 
+ std::mutex g_slots_mu;  // serialises AddSlot
+@@ -72,7 +74,7 @@ uint32_t AddSlot(const std::string& dll, const std::string& name) {
+   if (thunk >= kReturnToHost) FatalF("thunk region exhausted");
+   auto it = Registry().find({dll, name});
+   g_slots.push_back({dll, name, it == Registry().end() ? nullptr : &it->second,
+-                     dll == "ddraw.dll"});
++                     dll == "ddraw.dll", stall::ImportCategory(dll.c_str(), name.c_str())});
+   g_slot_table[g_slots.size() - 1].store(&g_slots.back(),
+                                          std::memory_order_release);
+   return thunk;
+@@ -136,11 +138,17 @@ void CallThunk(Ctx& c, uint32_t thunk) {
+   t_wd_hle_name = s->name.c_str();
+   t_wd_hle_ret = Rd32(c.esp);
+   ++t_hle_depth;
+-  static std::recursive_mutex graphics_mu;
+-  std::unique_lock<std::recursive_mutex> gl;
+-  if (s->graphics) gl = std::unique_lock<std::recursive_mutex>(graphics_mu);
+-  uint32_t r = d.fn(c);
+-  if (gl) gl.unlock();
++  uint32_t r;
++  {
++    stall::ImportScope timing(s->name.c_str(), s->stall_cat, t_wd_hle_ret);
++    static std::recursive_mutex graphics_mu;
++    std::unique_lock<std::recursive_mutex> gl;
++    if (s->graphics) {
++      stall::Scope lock(stall::kLock);
++      gl = std::unique_lock<std::recursive_mutex>(graphics_mu);
++    }
++    r = d.fn(c);
++  }
+   --t_hle_depth;
+   t_wd_hle_name = saved_name;
+   t_wd_hle_ret = saved_ret;
+diff --git a/src/runtime/hle/kernel32_file.cpp b/src/runtime/hle/kernel32_file.cpp
+index ed0fdfc..d59f19c 100644
+--- a/src/runtime/hle/kernel32_file.cpp
++++ b/src/runtime/hle/kernel32_file.cpp
+@@ -27,6 +27,7 @@
+ #include "runtime/lazy_mem.h"
+ #include "runtime/platform.h"
+ #include "runtime/log.h"
++#include "runtime/stall.h"
+ 
+ namespace recomp {
+ 
+@@ -399,6 +400,7 @@ uint32_t OverlappedIo(uint32_t h, bool write, uint32_t buf, uint32_t n, uint32_t
+     off = lseek(f->fd, 0, SEEK_END);
+   lazy::Touch(buf, n);
+   ssize_t r = !n ? 0 : write ? pwrite(f->fd, GPtr(buf), n, off) : pread(f->fd, GPtr(buf), n, off);
++  if (r > 0) stall::FileBytes(uint64_t(r));
+   if (r < 0) {
+     SetLastError(ErrnoToWin(errno));
+     return 0;
+@@ -433,6 +435,7 @@ HLE("kernel32.dll", ReadFile, 5) {
+   if (Arg(c, 4)) return OverlappedIo(Arg(c, 0), false, buf, n, out, Arg(c, 4));
+   lazy::Touch(buf, n);  // the kernel does not fault on lazy pages
+   ssize_t r = n ? read(fd, GPtr(buf), n) : 0;
++  if (r > 0) stall::FileBytes(uint64_t(r));
+   if (r < 0) {
+     SetLastError(ErrnoToWin(errno));
+     return 0;
+@@ -451,6 +454,7 @@ HLE("kernel32.dll", WriteFile, 5) {
+   if (Arg(c, 4)) return OverlappedIo(Arg(c, 0), true, buf, n, out, Arg(c, 4));
+   lazy::Touch(buf, n);
+   ssize_t r = n ? write(fd, GPtr(buf), n) : 0;
++  if (r > 0) stall::FileBytes(uint64_t(r));
+   if (r < 0) {
+     SetLastError(ErrnoToWin(errno));
+     return 0;
+diff --git a/src/runtime/hle/present.cpp b/src/runtime/hle/present.cpp
+index 2a91682..683c005 100644
+--- a/src/runtime/hle/present.cpp
++++ b/src/runtime/hle/present.cpp
+@@ -14,6 +14,7 @@
+ #include "runtime/hle/user32_window.h"
+ #include "runtime/log.h"
+ #include "runtime/runtime.h"
++#include "runtime/stall.h"
+ #include "runtime/watchdog.h"
+ 
+ namespace recomp::hle {
+@@ -67,6 +68,7 @@ void PresentFrame(gfx::Device& dev, int w, int h) {
+   // Events are only queued for the game, as Windows would.
+   PumpHostEvents();
+   WatchdogFrame();
++  stall::FrameEnd();
+   // <ID>_HITCH=ms: report frames that took longer than that.
+   static const double hitch_ms = [] {
+     const char* e = Env("HITCH");
+diff --git a/src/runtime/hle/user32_window.cpp b/src/runtime/hle/user32_window.cpp
+index f275fac..d4fcda7 100644
+--- a/src/runtime/hle/user32_window.cpp
++++ b/src/runtime/hle/user32_window.cpp
+@@ -32,6 +32,7 @@
+ #include "runtime/hle/user32_window.h"
+ #include "runtime/hle/win32.h"
+ #include "runtime/log.h"
++#include "runtime/stall.h"
+ #include "runtime/watchdog.h"
+ 
+ namespace recomp {
+@@ -1287,6 +1288,7 @@ void InjectTestStall() {
+ 
+ void PumpHostEvents() {
+   if (!g_sdl_up || !OnMainThread()) return;
++  stall::Scope timing(stall::kPump);
+   InjectTestStall();
+   SDL_Event e;
+   while (SDL_PollEvent(&e)) {
+@@ -2085,6 +2087,7 @@ HLE("user32.dll", BringWindowToTop, 1) {
+ HLE("user32.dll", PeekMessageA, 5) {
+   uint32_t msg_va = Arg(c, 0), hwnd = Arg(c, 1), lo = Arg(c, 2), hi = Arg(c, 3),
+            flags = Arg(c, 4);
++  stall::Pumped();
+   PumpHostEvents();
+   Msg m;
+   if (!TakeMessage(hwnd, lo, hi, flags & 1 /* PM_REMOVE */, &m)) return 0;
+@@ -2095,6 +2098,7 @@ HLE("user32.dll", PeekMessageA, 5) {
+ HLE("user32.dll", GetMessageA, 4) {
+   uint32_t msg_va = Arg(c, 0), hwnd = Arg(c, 1), lo = Arg(c, 2), hi = Arg(c, 3);
+   Msg m;
++  stall::Pumped();
+   for (;;) {
+     PumpHostEvents();
+     if (TakeMessage(hwnd, lo, hi, true, &m)) break;
+diff --git a/src/runtime/process.cpp b/src/runtime/process.cpp
+index b5749e0..0af674c 100644
+--- a/src/runtime/process.cpp
++++ b/src/runtime/process.cpp
+@@ -25,6 +25,7 @@
+ #include "runtime/platform.h"
+ #include "runtime/runtime.h"
+ #include "runtime/sse.h"
++#include "runtime/stall.h"
+ #include "runtime/watchdog.h"
+ 
+ namespace recomp {
+@@ -130,6 +131,7 @@ uint32_t CallGuest(Ctx& c, uint32_t va, std::initializer_list<uint32_t> args) {
+   }
+   c.esp -= 4;
+   Wr32(c.esp, kReturnToHost);
++  stall::Scope timing(stall::kGuest);
+   Dispatch(c, va, kReturnToHost);
+   c.esp = saved;  // stdcall callees popped their args, cdecl didn't
+   return c.eax;
+@@ -292,6 +294,7 @@ static uint32_t RunOnMainThread(Thread* t, uint32_t entry) {
+   if (stack == MAP_FAILED) FatalF("cannot allocate the main guest stack");
+   g_main_thread = t;
+   g_main_entry = entry;
++  stall::Init(stack, static_cast<char*>(stack) + kHostStack);
+   platform::RunOnStack(stack, kHostStack, GuestMainTrampoline);
+   munmap(stack, kHostStack);
+   return g_main_exit;
+diff --git a/src/runtime/runtime.h b/src/runtime/runtime.h
+index d44a63c..ffaa390 100644
+--- a/src/runtime/runtime.h
++++ b/src/runtime/runtime.h
+@@ -162,6 +162,11 @@ void MapModule(Module& m);
+ // Handles both conventions: the stack pointer is restored afterwards.
+ uint32_t CallGuest(Ctx& c, uint32_t va, std::initializer_list<uint32_t> args);
+ 
++// Evaluates a guest-memory expression in <ID>_FATAL_DUMP's syntax (a
++// number, "[<expr>]" for the dword there, "<expr>+<number>"). False if it
++// is malformed or reads memory that is not committed.
++bool EvalGuestExpr(const char* expr, uint32_t* out);
++
+ // Sets up the process (arena, image, PEB, heaps, command line) and runs
+ // the guest entry point on a new guest thread. exe_path is the host file
+ // to load (it need not be in game_dir, e.g. an unpacked copy). Returns the
+diff --git a/src/runtime/stall.cpp b/src/runtime/stall.cpp
+new file mode 100644
+index 0000000..14db8a2
+--- /dev/null
++++ b/src/runtime/stall.cpp
+@@ -0,0 +1,606 @@
++// Stall recorder: see stall.h.
++
++#include "runtime/stall.h"
++
++#include <pthread.h>
++#include <unistd.h>
++
++#include <algorithm>
++#include <cctype>
++#include <atomic>
++#include <cstdio>
++#include <cstdlib>
++#include <cstring>
++#include <string>
++#include <thread>
++#include <unordered_map>
++#include <vector>
++
++#include <dlfcn.h>
++
++#if defined(__APPLE__)
++#include <mach-o/dyld.h>
++#include <mach-o/getsect.h>
++#include <mach/mach.h>
++#include <mach/mach_time.h>
++#endif
++
++#include "runtime/gfx/device.h"
++#include "runtime/log.h"
++#include "runtime/runtime.h"
++
++namespace recomp::stall {
++
++bool g_on = false;
++thread_local bool t_main = false;
++
++namespace {
++
++// ---- clock ------------------------------------------------------------------
++
++#if defined(__APPLE__)
++double g_ns_per_tick = 1.0;
++#if defined(__aarch64__)
++// The virtual counter, read directly (no call, no ISB: a few cycles of
++// reordering do not matter here). Its rate is CNTFRQ_EL0's, which need
++// not be mach_absolute_time's timebase.
++inline uint64_t Now() {
++  uint64_t v;
++  asm volatile("mrs %0, cntvct_el0" : "=r"(v));
++  return v;
++}
++inline double NsPerTick() {
++  uint64_t f;
++  asm volatile("mrs %0, cntfrq_el0" : "=r"(f));
++  return 1e9 / double(f);
++}
++#else
++inline double NsPerTick() {
++  mach_timebase_info_data_t tb;
++  mach_timebase_info(&tb);
++  return double(tb.numer) / double(tb.denom);
++}
++inline uint64_t Now() { return mach_absolute_time(); }
++#endif
++#else
++inline uint64_t Now() {
++  timespec ts;
++  clock_gettime(CLOCK_MONOTONIC, &ts);
++  return uint64_t(ts.tv_sec) * 1000000000u + uint64_t(ts.tv_nsec);
++}
++constexpr double g_ns_per_tick = 1.0;
++#endif
++inline double Ms(uint64_t ticks) { return double(ticks) * g_ns_per_tick / 1e6; }
++
++// ---- configuration ------------------------------------------------------------
++
++uint64_t g_threshold = 0;  // ticks
++unsigned g_max_reports = 200;
++const char* g_tag_expr = nullptr;
++unsigned g_test_report_ms = 0;  // <ID>_TEST_STALL_REPORT_MS: a slow report (tests)
++uint64_t g_t0 = 0;
++
++// ---- per-frame accounting (main thread only) -----------------------------------
++
++struct ImportStat {
++  const char* name;  // stable (the import slot's string); nullptr: free
++  uint64_t ticks;    // while this import was the innermost one
++  uint32_t calls;
++  bool untimed;      // counted only (kUntimed)
++  uint64_t longest;  // longest single call, entry to exit
++  uint32_t longest_ret;
++};
++constexpr int kImportSlots = 1024;
++constexpr int kMoreSlot = kImportSlots - 1;  // a full table's overflow
++ImportStat g_imp[kImportSlots];
++uint16_t g_touched[kImportSlots];
++int g_ntouched = 0;
++
++struct Level {
++  uint8_t cat;
++  int16_t imp;
++  uint64_t start;
++  uint32_t ret;
++};
++constexpr int kMaxDepth = 64;
++Level g_stack[kMaxDepth];
++int g_depth = 0;
++int g_overflow = 0;  // pushes beyond kMaxDepth, ignored symmetrically
++
++uint8_t g_cur = kHost;
++int16_t g_cur_imp = -1;
++uint64_t g_last = 0;
++
++uint64_t g_cat_ticks[kCatCount];
++uint32_t g_cat_entries[kCatCount];
++uint64_t g_file_bytes = 0;
++uint32_t g_file_ops = 0;
++bool g_pumped = false;
++
++uint64_t g_frame_start = 0;
++uint32_t g_frame = 0;
++bool g_interactive_seen = false;
++unsigned g_reports = 0;
++unsigned g_suppressed = 0;
++
++inline void Charge(uint64_t now) {
++  uint64_t d = now - g_last;
++  g_last = now;
++  g_cat_ticks[g_cur] += d;
++  if (g_cur_imp >= 0) g_imp[g_cur_imp].ticks += d;
++}
++
++int16_t SlotOf(const char* name) {
++  uint32_t h = uint32_t(reinterpret_cast<uintptr_t>(name) >> 3) * 2654435761u;
++  for (int probe = 0; probe < kImportSlots - 1; probe++) {
++    int i = int((h + uint32_t(probe)) % uint32_t(kImportSlots - 1));  // never kMoreSlot
++    if (g_imp[i].name == name) return int16_t(i);
++    if (!g_imp[i].name) {
++      if (g_ntouched >= kImportSlots * 3 / 4) break;
++      g_imp[i].name = name;
++      g_touched[g_ntouched++] = uint16_t(i);
++      return int16_t(i);
++    }
++  }
++  if (!g_imp[kMoreSlot].name) g_imp[kMoreSlot].name = "(more imports)";
++  return int16_t(kMoreSlot);
++}
++
++inline void Push(uint8_t cat, int16_t imp, uint64_t now, uint32_t ret) {
++  if (g_depth >= kMaxDepth) {
++    g_overflow++;
++    return;
++  }
++  g_stack[g_depth++] = {g_cur, g_cur_imp, now, ret};
++  g_cur = cat;
++  g_cur_imp = imp;
++}
++
++inline void Pop(uint64_t now) {
++  if (g_overflow) {
++    g_overflow--;
++    return;
++  }
++  if (!g_depth) return;
++  const Level& l = g_stack[--g_depth];
++  if (g_cur_imp >= 0 && g_cur_imp != l.imp) {
++    ImportStat& s = g_imp[g_cur_imp];
++    uint64_t dur = now - l.start;
++    if (dur > s.longest) {
++      s.longest = dur;
++      s.longest_ret = l.ret;
++    }
++  }
++  g_cur = l.cat;
++  g_cur_imp = l.imp;
++}
++
++// ---- sampler (macOS): the main thread's stack every period ----------------------
++
++constexpr int kRing = 4096;
++constexpr int kDepth = 24;
++struct Sample {
++  std::atomic<uint32_t> seq{0};  // odd while being written
++  uint64_t t = 0;
++  uint32_t n = 0;
++  uintptr_t pc[kDepth];
++};
++Sample* g_ring = nullptr;
++std::atomic<uint32_t> g_widx{0};
++uintptr_t g_lo[2], g_hi[2];  // the main thread's host stacks
++uintptr_t g_exe_lo = 0, g_exe_hi = ~uintptr_t(0);  // the executable's code (the lifted functions)
++
++#if defined(__APPLE__) && defined(__aarch64__)
++mach_port_t g_main_port = MACH_PORT_NULL;
++
++inline uintptr_t Strip(uintptr_t a) { return a & 0x00007FFFFFFFFFFFull; }
++
++inline bool FrameOk(uintptr_t fp) {
++  if (fp & 7) return false;
++  for (int i = 0; i < 2; i++)
++    if (fp >= g_lo[i] && fp + 16 <= g_hi[i]) return true;
++  return false;
++}
++
++// While the main thread is suspended: no locks, no allocation.
++void SamplerMain(unsigned period_us) {
++  // dladdr's first use is slow (its symbol tables): pay it here, not in
++  // the first report on the main thread.
++  Dl_info di;
++  dladdr(reinterpret_cast<void*>(&SamplerMain), &di);
++  dladdr(reinterpret_cast<void*>(&usleep), &di);
++  for (;;) {
++    usleep(period_us);
++    if (thread_suspend(g_main_port) != KERN_SUCCESS) continue;
++    arm_thread_state64_t st;
++    mach_msg_type_number_t cnt = ARM_THREAD_STATE64_COUNT;
++    kern_return_t kr =
++        thread_get_state(g_main_port, ARM_THREAD_STATE64, reinterpret_cast<thread_state_t>(&st), &cnt);
++    Sample& s = g_ring[g_widx.fetch_add(1, std::memory_order_relaxed) % kRing];
++    s.seq.fetch_add(1, std::memory_order_acq_rel);
++    s.t = Now();
++    uint32_t n = 0;
++    if (kr == KERN_SUCCESS) {
++      s.pc[n++] = Strip(uintptr_t(arm_thread_state64_get_pc(st)));
++      uintptr_t fp = Strip(uintptr_t(arm_thread_state64_get_fp(st)));
++      while (n < kDepth && FrameOk(fp)) {
++        const uintptr_t* f = reinterpret_cast<const uintptr_t*>(fp);
++        uintptr_t next = Strip(f[0]);
++        s.pc[n++] = Strip(f[1]);
++        if (next <= fp) break;
++        fp = next;
++      }
++    }
++    thread_resume(g_main_port);
++    s.n = n;
++    s.seq.fetch_add(1, std::memory_order_release);
++  }
++}
++#endif
++
++// The innermost lifted function (its guest VA) in a sampled stack, and the
++// innermost host function's name.
++struct Sym {
++  bool lifted;
++  uint32_t va;
++  std::string name;
++};
++std::unordered_map<uintptr_t, Sym> g_syms;  // report time only
++
++const Sym& Symbolise(uintptr_t pc) {
++  auto it = g_syms.find(pc);
++  if (it != g_syms.end()) return it->second;
++  Sym s{false, 0, "?"};
++  Dl_info di;
++  // A return address points after the call: look up the call itself.
++  if (pc && dladdr(reinterpret_cast<void*>(pc - 1), &di)) {
++    if (di.dli_sname) {
++      // Lifted functions: recomp::gen::f_<8 hex digits> (then the
++      // mangled parameters, which may start with a hex letter).
++      const char* g = std::strstr(di.dli_sname, "6recomp3gen");
++      const char* f = g ? std::strstr(g, "f_") : nullptr;
++      if (f) {
++        uint32_t va = 0;
++        int k = 0;
++        for (; k < 8 && std::isxdigit(static_cast<unsigned char>(f[2 + k])); k++)
++          va = va << 4 | uint32_t(std::isdigit(static_cast<unsigned char>(f[2 + k]))
++                                      ? f[2 + k] - '0'
++                                      : (f[2 + k] | 0x20) - 'a' + 10);
++        if (k == 8) {
++          s.lifted = true;
++          s.va = va;
++        }
++      }
++      s.name = di.dli_sname[0] == '_' ? di.dli_sname + 1 : di.dli_sname;
++    } else if (di.dli_fname) {
++      const char* b = std::strrchr(di.dli_fname, '/');
++      s.name = b ? b + 1 : di.dli_fname;
++    }
++  }
++  return g_syms.emplace(pc, std::move(s)).first->second;
++}
++
++template <class K>
++std::vector<std::pair<K, unsigned>> Top(const std::unordered_map<K, unsigned>& m, size_t n) {
++  std::vector<std::pair<K, unsigned>> v(m.begin(), m.end());
++  std::sort(v.begin(), v.end(), [](const auto& a, const auto& b) {
++    return a.second != b.second ? a.second > b.second : a.first < b.first;
++  });
++  if (v.size() > n) v.resize(n);
++  return v;
++}
++
++std::string SampleSummary(uint64_t from, uint64_t to) {
++  if (!g_ring) return "";
++  std::unordered_map<uint32_t, unsigned> guest;
++  std::unordered_map<std::string, unsigned> host;
++  unsigned taken = 0, unlifted = 0;
++  uintptr_t pc[kDepth];
++  for (int i = 0; i < kRing; i++) {
++    Sample& s = g_ring[i];
++    uint32_t q = s.seq.load(std::memory_order_acquire);
++    if (q & 1) continue;
++    uint64_t t = s.t;
++    uint32_t n = std::min<uint32_t>(s.n, kDepth);
++    std::memcpy(pc, s.pc, sizeof(uintptr_t) * n);
++    if (s.seq.load(std::memory_order_acquire) != q || t < from || t > to || !n) continue;
++    taken++;
++    host[Symbolise(pc[0]).name]++;
++    bool found = false;
++    for (uint32_t k = 0; k < n && !found; k++) {
++      if (pc[k] < g_exe_lo || pc[k] >= g_exe_hi) continue;  // no lifted code there
++      const Sym& sy = Symbolise(pc[k]);
++      if (sy.lifted) {
++        guest[sy.va]++;
++        found = true;
++      }
++    }
++    if (!found) unlifted++;
++  }
++  char buf[96];
++  std::snprintf(buf, sizeof buf, " | samples %u", taken);
++  std::string r = buf;
++  if (!taken) return r;
++  r += ", guest fn:";
++  for (auto& [va, k] : Top(guest, 5)) {
++    std::snprintf(buf, sizeof buf, " %08X x%u", va, k);
++    r += buf;
++  }
++  if (unlifted) {
++    std::snprintf(buf, sizeof buf, " (none x%u)", unlifted);
++    r += buf;
++  }
++  r += ", host:";
++  for (auto& [name, k] : Top(host, 3)) {
++    std::snprintf(buf, sizeof buf, " x%u", k);
++    r += " " + name.substr(0, 60) + buf;
++  }
++  return r;
++}
++
++const char* const kCatNames[kCatCount] = {"host",    "guest",    "file",    "wait",    "gfx",
++                                           "audio",   "other",    "texture", "shader",  "gpu-wait",
++                                           "present", "pump",     "lock",    "recorder"};
++
++// One stall's report (recorder time: charged to the next frame).
++void Report(uint64_t from, uint64_t to, const char* phase, const uint64_t* cat, const uint32_t* entries,
++            uint64_t file_bytes, uint32_t file_ops, std::vector<ImportStat>& imps) {
++  char buf[160];
++  std::snprintf(buf, sizeof buf, "stall: frame %u took %.1f ms at t=%.2f s [%s", g_frame, Ms(to - from),
++                Ms(to - g_t0) / 1000.0, phase);
++  std::string line = buf;
++  if (g_tag_expr) {
++    uint32_t v = 0;
++    if (EvalGuestExpr(g_tag_expr, &v)) {
++      std::snprintf(buf, sizeof buf, ", tag %08X", v);
++    } else {
++      std::snprintf(buf, sizeof buf, ", tag ?");
++    }
++    line += buf;
++  }
++  line += "]:";
++  bool first = true;
++  for (int c = 0; c < kCatCount; c++) {
++    const bool counted = c >= kTexture && c <= kLock && entries[c];
++    if (Ms(cat[c]) < 0.05 && !counted) continue;
++    std::snprintf(buf, sizeof buf, "%s %s %.1f", first ? "" : ",", kCatNames[c], Ms(cat[c]));
++    line += buf;
++    if (c == kFile && file_ops) {
++      std::snprintf(buf, sizeof buf, " (%u ops, %.1f KB)", file_ops, double(file_bytes) / 1024.0);
++      line += buf;
++    } else if (counted) {
++      std::snprintf(buf, sizeof buf, " x%u", entries[c]);
++      line += buf;
++    }
++    first = false;
++  }
++  std::sort(imps.begin(), imps.end(),
++            [](const ImportStat& a, const ImportStat& b) { return a.ticks > b.ticks; });
++  line += " | imports:";
++  int shown = 0;
++  for (const ImportStat& s : imps) {
++    if (shown == 5 || Ms(s.ticks) < 0.05) break;
++    if (s.untimed) continue;
++    if (s.longest_ret) {
++      std::snprintf(buf, sizeof buf, " %s %.1f x%u (longest %.1f from %08X)", s.name, Ms(s.ticks), s.calls,
++                    Ms(s.longest), s.longest_ret);
++    } else {
++      std::snprintf(buf, sizeof buf, " %s %.1f x%u", s.name, Ms(s.ticks), s.calls);
++    }
++    line += buf;
++    shown++;
++  }
++  // Untimed imports called most (their time is in guest code).
++  std::sort(imps.begin(), imps.end(),
++            [](const ImportStat& a, const ImportStat& b) { return a.calls > b.calls; });
++  shown = 0;
++  for (const ImportStat& s : imps) {
++    if (shown == 3) break;
++    if (!s.untimed || !s.calls) continue;
++    std::snprintf(buf, sizeof buf, "%s %s x%u", shown ? "," : " | untimed:", s.name, s.calls);
++    line += buf;
++    shown++;
++  }
++  line += SampleSummary(from, to);
++  WarnF("%s\n", line.c_str());
++  if (g_test_report_ms) usleep(g_test_report_ms * 1000);
++}
++
++void FrameEndImpl() {
++  uint64_t now = Now();
++  Charge(now);
++  const uint64_t from = g_frame_start;
++  g_frame++;
++  // Calls still in progress (the present call itself, at least) count up
++  // to now in this frame's longest; the next frame times them from its start.
++  for (int i = 0; i < g_depth; i++) {
++    int16_t imp = i + 1 < g_depth ? g_stack[i + 1].imp : g_cur_imp;
++    if (imp < 0 || imp == g_stack[i].imp) continue;
++    uint64_t dur = now - std::max(g_stack[i].start, from);
++    if (dur > g_imp[imp].longest) {
++      g_imp[imp].longest = dur;
++      g_imp[imp].longest_ret = g_stack[i].ret;
++    }
++  }
++  // The recorder's own time (an earlier report) is shown, never a stall.
++  const bool stalled = now - from - g_cat_ticks[kRecorder] > g_threshold;
++  const char* phase = g_pumped ? "interactive" : g_interactive_seen ? "loading" : "startup";
++  g_interactive_seen |= g_pumped;
++  // The frame ends at `now`; what follows (the report) is the next frame's.
++  uint64_t cat[kCatCount];
++  uint32_t entries[kCatCount];
++  std::memcpy(cat, g_cat_ticks, sizeof cat);
++  std::memcpy(entries, g_cat_entries, sizeof entries);
++  const uint64_t file_bytes = g_file_bytes;
++  const uint32_t file_ops = g_file_ops;
++  std::vector<ImportStat> imps;
++  if (stalled && g_reports < g_max_reports) {
++    imps.reserve(size_t(g_ntouched) + 1);
++    for (int i = 0; i < g_ntouched; i++) imps.push_back(g_imp[g_touched[i]]);
++    if (g_imp[kMoreSlot].name) imps.push_back(g_imp[kMoreSlot]);
++  }
++  std::memset(g_cat_ticks, 0, sizeof g_cat_ticks);
++  std::memset(g_cat_entries, 0, sizeof g_cat_entries);
++  g_file_bytes = 0;
++  g_file_ops = 0;
++  g_pumped = false;
++  // Import slots of calls still in progress keep their names (the stack
++  // refers to them); only their counts restart.
++  for (int i = 0; i < g_ntouched; i++) {
++    ImportStat& s = g_imp[g_touched[i]];
++    s.ticks = 0;
++    s.calls = 0;
++    s.longest = 0;
++    s.longest_ret = 0;
++  }
++  ImportStat& more = g_imp[kMoreSlot];
++  more.ticks = more.calls = 0;
++  more.longest = more.longest_ret = 0;
++  g_frame_start = now;
++  if (!stalled) return;
++  if (g_reports >= g_max_reports) {
++    if (!g_suppressed++)
++      WarnF("stall: %u reports made; further stalls are counted, not reported\n", g_max_reports);
++    return;
++  }
++  g_reports++;
++  EnterSlow(kRecorder);
++  Report(from, now, phase, cat, entries, file_bytes, file_ops, imps);
++  LeaveSlow();
++  const uint64_t after = Now();
++  for (int i = 0; i < g_depth; i++) g_stack[i].start = after;
++}
++
++void GfxBegin(gfx::Work w) {
++  if (!t_main) return;
++  static const Cat map[] = {kTexture, kShader, kGpuWait, kPresent};
++  EnterSlow(map[int(w)]);
++}
++void GfxEnd() {
++  if (t_main) LeaveSlow();
++}
++
++}  // namespace
++
++Cat ImportCategory(const char* dll, const char* name) {
++  auto is = [&](const char* d) { return !std::strcmp(dll, d); };
++  auto any = [&](std::initializer_list<const char*> names) {
++    for (const char* n : names)
++      if (!std::strcmp(name, n)) return true;
++    return false;
++  };
++  if (is("kernel32.dll")) {
++    if (any({"TlsGetValue", "TlsSetValue", "GetLastError", "SetLastError", "GetCurrentThreadId",
++             "GetCurrentThread", "GetCurrentProcessId", "GetCurrentProcess", "GetProcessHeap", "GetTickCount",
++             "QueryPerformanceCounter", "QueryPerformanceFrequency", "InterlockedIncrement",
++             "InterlockedDecrement", "InterlockedExchange", "InterlockedCompareExchange",
++             "InterlockedExchangeAdd", "LeaveCriticalSection"}))
++      return kUntimed;
++    if (any({"CreateFileA", "CreateFileW", "ReadFile", "WriteFile", "SetFilePointer", "SetFilePointerEx",
++             "GetFileSize", "GetFileSizeEx", "FlushFileBuffers", "SetEndOfFile", "DeleteFileA",
++             "FindFirstFileA", "FindNextFileA", "FindClose", "GetFileAttributesA", "GetFileTime",
++             "SetFileTime", "CopyFileA", "MoveFileA", "CreateDirectoryA", "GetFileType"}))
++      return kFile;
++    if (any({"Sleep", "SleepEx", "WaitForSingleObject", "WaitForSingleObjectEx", "WaitForMultipleObjects",
++             "WaitForMultipleObjectsEx", "EnterCriticalSection", "GetQueuedCompletionStatus",
++             "SignalObjectAndWait"}))
++      return kWait;
++    return kOther;
++  }
++  if (is("user32.dll") && any({"MsgWaitForMultipleObjects", "MsgWaitForMultipleObjectsEx", "WaitMessage"}))
++    return kWait;
++  if (is("winmm.dll") && !std::strcmp(name, "timeGetTime")) return kUntimed;
++  if (is("opengl32.dll") || is("ddraw.dll") || is("d3d8.dll") || is("d3d9.dll") || is("gdi32.dll"))
++    return kGfx;
++  if (is("mss32.dll") || is("dsound.dll") || (is("winmm.dll") && !std::strncmp(name, "waveOut", 7)))
++    return kAudio;
++  return kOther;
++}
++
++void Init(const void* stack_lo, const void* stack_hi) {
++  t_main = true;
++  const char* e = Env("STALL");
++  const double ms = e ? std::atof(e) : 0.0;
++  if (ms <= 0) return;
++#if defined(__APPLE__)
++  g_ns_per_tick = NsPerTick();
++#endif
++  g_threshold = uint64_t(ms * 1e6 / g_ns_per_tick);
++  if (const char* m = Env("STALL_MAX")) g_max_reports = unsigned(std::atoi(m));
++  g_tag_expr = Env("STALL_TAG");
++  if (const char* t = Env("TEST_STALL_REPORT_MS")) g_test_report_ms = unsigned(std::atoi(t));
++  g_t0 = g_last = g_frame_start = Now();
++  unsigned period = 2000;
++  if (const char* p = Env("STALL_SAMPLE_US")) period = unsigned(std::atoi(p));
++  const char* sampler = "off";
++#if defined(__APPLE__) && defined(__aarch64__)
++  if (period > 0) {
++    g_ring = new Sample[kRing];
++    g_lo[0] = uintptr_t(stack_lo);
++    g_hi[0] = uintptr_t(stack_hi);
++    pthread_t self = pthread_self();
++    g_hi[1] = uintptr_t(pthread_get_stackaddr_np(self));
++    g_lo[1] = g_hi[1] - pthread_get_stacksize_np(self);
++    g_main_port = mach_thread_self();
++    unsigned long text_size = 0;
++    const auto* exe = reinterpret_cast<const mach_header_64*>(_dyld_get_image_header(0));
++    if (uint8_t* text = exe ? getsegmentdata(exe, "__TEXT", &text_size) : nullptr) {
++      g_exe_lo = uintptr_t(text);
++      g_exe_hi = g_exe_lo + text_size;
++    }
++    std::thread(SamplerMain, period).detach();
++    sampler = "on";
++  }
++#else
++  (void)stack_lo;
++  (void)stack_hi;
++#endif
++  gfx::g_work_begin = GfxBegin;
++  gfx::g_work_end = GfxEnd;
++  g_on = true;
++  WarnF("stall: recording frames over %.1f ms (sampler %s, every %u us)\n", ms, sampler, period);
++}
++
++void CountImportSlow(const char* name) {
++  ImportStat& s = g_imp[SlotOf(name)];
++  s.untimed = true;
++  s.calls++;
++}
++
++void EnterImportSlow(const char* name, Cat cat, uint32_t guest_ret) {
++  uint64_t now = Now();
++  Charge(now);
++  int16_t slot = SlotOf(name);
++  g_imp[slot].calls++;
++  Push(cat, slot, now, guest_ret);
++}
++
++void LeaveImportSlow() {
++  uint64_t now = Now();
++  Charge(now);
++  Pop(now);
++}
++
++void EnterSlow(Cat cat) {
++  uint64_t now = Now();
++  Charge(now);
++  g_cat_entries[cat]++;
++  Push(cat, cat == kGuest ? int16_t(-1) : g_cur_imp, now, 0);
++}
++
++void LeaveSlow() {
++  uint64_t now = Now();
++  Charge(now);
++  Pop(now);
++}
++
++void FileBytesSlow(uint64_t n) {
++  g_file_bytes += n;
++  g_file_ops++;
++}
++
++void PumpedSlow() { g_pumped = true; }
++
++void FrameEndSlow() { FrameEndImpl(); }
++
++}  // namespace recomp::stall
+diff --git a/src/runtime/stall.h b/src/runtime/stall.h
+new file mode 100644
+index 0000000..a8fe061
+--- /dev/null
++++ b/src/runtime/stall.h
+@@ -0,0 +1,110 @@
++#pragma once
++// Stall recorder (<ID>_STALL=ms, opt-in): for every presented frame that
++// took longer than ms (present to present, as <ID>_FPS_REPORT measures),
++// one report line of where the guest main thread's time went.
++//
++// Time is charged exclusively to the innermost thing the main thread is
++// doing: guest code (lifted functions), an import (by its category: file,
++// wait, graphics, audio, other), host work inside an import (texture
++// creation, shader/pipeline compilation, GPU fence waits, presentation,
++// window-system pumping, the graphics lock) or the recorder itself. The
++// categories partition the frame; the per-import list partitions its
++// non-guest time by the innermost import. Only the main thread is
++// measured; other threads show up as the main thread waiting on them.
++//
++// <ID>_STALL_SAMPLE_US=n (default 2000, 0 off; macOS): a sampler thread
++// suspends the main thread every n us and records its stack, so a stall
++// report also names the innermost lifted guest functions and host
++// functions it was seen in. <ID>_STALL_TAG=<expr> (FATAL_DUMP's syntax): a
++// guest value printed with each report, to tell game states apart.
++// <ID>_STALL_MAX=n (default 200): reports after the nth are counted only.
++//
++// Off (no <ID>_STALL), every hook is one predictable branch.
++
++#include <cstdint>
++
++namespace recomp::stall {
++
++enum Cat : uint8_t {
++  kHost,      // runtime code outside imports and guest code
++  kGuest,     // lifted guest code
++  kFile,      // file imports (CreateFile, ReadFile, ...)
++  kWait,      // sleeps, waits, critical sections
++  kGfx,       // graphics imports (opengl32, ddraw, ...), own time
++  kAudio,     // audio imports (mss32, dsound, winmm wave)
++  kOther,     // other imports
++  kTexture,   // texture creation in the graphics device
++  kShader,    // shader translation and pipeline compilation
++  kGpuWait,   // waiting for submitted GPU work
++  kPresent,   // presenting a frame (swapchain acquire, submission)
++  kPump,      // pumping window-system events
++  kLock,      // waiting for the graphics import lock
++  kRecorder,  // the recorder's own reports
++  kCatCount,
++  kUntimed = kCatCount  // pure getters (TlsGetValue, GetLastError, ...): counted, not timed
++};
++
++extern bool g_on;                    // set once, before guest code runs
++extern thread_local bool t_main;     // the guest main thread
++
++// Reads <ID>_STALL*; call once on the guest main thread before it runs
++// guest code. stack_lo/hi: that thread's host stack (for the sampler).
++void Init(const void* stack_lo, const void* stack_hi);
++
++// The category of an import, from its DLL and name (lower-case DLL);
++// kUntimed for pure getters called millions of times a second, whose
++// few nanoseconds stay in the caller's (guest) time: timing each would
++// cost more than the call and inflate exactly those frames.
++Cat ImportCategory(const char* dll, const char* name);
++
++void EnterImportSlow(const char* name, Cat cat, uint32_t guest_ret);
++void CountImportSlow(const char* name);
++void LeaveImportSlow();
++void EnterSlow(Cat cat);
++void LeaveSlow();
++void FileBytesSlow(uint64_t n);
++void PumpedSlow();
++void FrameEndSlow();
++
++// An import call (CallThunk), innermost.
++struct ImportScope {
++  bool on;
++  ImportScope(const char* name, Cat cat, uint32_t guest_ret) : on(g_on && t_main) {
++    if (!on) return;
++    if (cat == kUntimed) {
++      CountImportSlow(name);
++      on = false;
++      return;
++    }
++    EnterImportSlow(name, cat, guest_ret);
++  }
++  ~ImportScope() {
++    if (on) LeaveImportSlow();
++  }
++};
++
++// Guest code called from the host (CallGuest), or host work of category c.
++struct Scope {
++  bool on;
++  explicit Scope(Cat c) : on(g_on && t_main) {
++    if (on) EnterSlow(c);
++  }
++  ~Scope() {
++    if (on) LeaveSlow();
++  }
++};
++
++// Bytes moved by a file read or write on the main thread.
++inline void FileBytes(uint64_t n) {
++  if (g_on && t_main) FileBytesSlow(n);
++}
++// The guest pumped its message queue (PeekMessage/GetMessage).
++inline void Pumped() {
++  if (g_on && t_main) PumpedSlow();
++}
++// A frame was presented (end of PresentFrame).
++inline void FrameEnd() {
++  if (g_on && t_main) FrameEndSlow();
++}
++
++}  // namespace recomp::stall

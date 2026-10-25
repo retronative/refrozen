@@ -28,6 +28,7 @@ X86 = os.environ.get("REFROZEN_X86RECOMP", os.path.join(ROOT, "tools", "x86recom
 # (source under src/runtime, the library target that builds it, why)
 HOT = [
     ("dispatch.cpp", "recomp_runtime", "every indirect call and return"),
+    ("stall.cpp", "recomp_runtime", "every import call while the stall recorder is on"),
     ("gfx/gpu_device.cpp", "recomp_gfx", "every draw, upload and uniform block"),
     ("gfx/format.cpp", "recomp_gfx", "every texel converted"),
     ("gl/context.cpp", "recomp_opengl", "every immediate-mode vertex and matrix"),
