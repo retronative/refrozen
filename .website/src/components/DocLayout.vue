@@ -8,7 +8,7 @@ import type { Doc } from '../docs'
 defineProps<{
   doc: Doc
   eyebrow: string
-  art?: 'forge' | 'library' | 'portal' | 'tavern' | 'battlefield' | 'fog'
+  art?: 'forge' | 'library' | 'portal' | 'tavern' | 'battlefield' | 'fog' | 'ranger' | 'scholar'
   artPosition?: string
 }>()
 </script>

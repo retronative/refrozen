@@ -21,8 +21,8 @@ const plates = [
   <div>
     <PageHero
       eyebrow="The gallery"
-      art="portal"
-      art-position="50% 50%"
+      art="ranger"
+      art-position="50% 22%"
       title="Screenshots"
       lore="The frames are hung. The paintings are still on their way."
     />

@@ -6,7 +6,7 @@ const props = defineProps<{
   eyebrow: string
   title: string
   lore?: string
-  art?: 'forge' | 'library' | 'portal' | 'tavern' | 'battlefield' | 'fog'
+  art?: 'forge' | 'library' | 'portal' | 'tavern' | 'battlefield' | 'fog' | 'ranger' | 'scholar'
   artPosition?: string
 }>()
 const base = `${import.meta.env.BASE_URL}banners/`

@@ -27,7 +27,7 @@ watch(() => route.hash, openFromHash)
 
 <template>
   <div>
-    <PageHero eyebrow="Ask the tavern keeper" title="FAQ" :lore="doc.description" art="portal" art-position="50% 50%" />
+    <PageHero eyebrow="Ask the tavern keeper" title="FAQ" :lore="doc.description" art="scholar" art-position="50% 50%" />
     <section class="mx-auto max-w-3xl px-4 sm:px-8 py-16" aria-label="Questions and answers">
       <Prose v-if="doc.intro.trim()" :html="doc.intro" class="mb-8" />
       <details
