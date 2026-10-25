@@ -772,6 +772,8 @@ main:
   je mode_v
   cmp eax, 0x46
   je mode_f
+  cmp eax, 0x58
+  je mode_x
 {g.stop_modes}{a}{finish}
 mode_d:
 {g.d_code}{finish}
@@ -789,6 +791,18 @@ mode_l:
 {gl}{finish}
 mode_p:
 {planes}
+mode_x:
+  mov ebx, 0x22222222
+  mov esi, 0x55555555
+  mov edi, 0x66666666
+  call fault_3c
+  int3
+fault_3c:
+  push ebp
+  mov ebp, esp
+  mov eax, dword ptr [0x3C]
+  pop ebp
+  ret
 {g.stop_code}
 flag:
   sete al
@@ -1029,6 +1043,25 @@ def main():
                 check("FF: an appended click lands where its pointer line put it",
                       [pt(int(mf.group(4), 16)), pt(int(mf.group(5), 16))],
                       [fit_point(W, H, 1000, 500, 520, 260), fit_point(W, H, 1000, 500, 20, 100)])
+
+            # Mode X: a guest read of address 0x3C with no exception handler
+            # installed (a null object's field). The fatal report must say
+            # why it was not handled and show the guest's registers (spilled
+            # at the call) and its EBP chain, on stderr and in the crash file.
+            code, out, fatal = run(tmp, binp, "X")
+            log = run.stderr
+            check("X: an unhandled guest fault is fatal", code != 0 and bool(fatal), True)
+            check("X: the fault address and the reason", bool(re.search(
+                r"guest memory fault at guest 0000003C \(not handled by the guest's exception handlers\)", log)), True)
+            check("X: the guest thread", bool(re.search(r"guest thread [0-9A-F]{4}", log)), True)
+            check("X: the guest registers (as of the call)",
+                  bool(re.search(r"ebx=22222222", log)) and bool(re.search(r"esi=55555555 edi=66666666", log)), True)
+            check("X: the guest backtrace along the EBP chain", "guest backtrace (ebp chain)" in log, True)
+            crashes = os.path.join(tmp, "data", "win32test", "crashes")
+            reports = [open(os.path.join(crashes, f)).read() for f in sorted(os.listdir(crashes))] \
+                if os.path.isdir(crashes) else []
+            check("X: the same report in the crash file",
+                  any("guest memory fault at guest 0000003C" in r and "ebx=22222222" in r for r in reports), True)
 
             code, out, fatal = run(tmp, binp, "M")
             check("M: runs to the end", (code, fatal), (0, None))

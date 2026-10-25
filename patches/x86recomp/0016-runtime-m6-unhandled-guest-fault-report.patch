@@ -1,0 +1,55 @@
+diff --git a/src/runtime/dispatch.cpp b/src/runtime/dispatch.cpp
+index c2cb152..35f4ae0 100644
+--- a/src/runtime/dispatch.cpp
++++ b/src/runtime/dispatch.cpp
+@@ -5,6 +5,7 @@
+ // for thunk addresses. Anything else is fatal: there is no interpreter
+ // fallback (CLAUDE.md).
+ 
++#include <dlfcn.h>
+ #include <execinfo.h>
+ #include <pthread.h>
+ #include <sys/mman.h>
+@@ -165,8 +166,11 @@ void FaultHandler(int sig, siginfo_t* si, void* uc) {
+   if (a - base < (1ull << 32) && lazy::HandleFault(uint32_t(a - base)))
+     return;  // filled: retry the faulting instruction
+   platform::FaultContext fc = platform::ReadFaultContext(uc);
+-  if (a - base < (1ull << 32) && CurrentThread() &&
+-      t_fault_depth < kMaxFaultDepth && hle::t_hle_depth == 0) {
++  const char* why = !CurrentThread()          ? "on a thread that runs no guest code"
++                    : t_fault_depth >= kMaxFaultDepth ? "a fault while delivering faults"
++                    : hle::t_hle_depth != 0   ? "inside a runtime (HLE) call, not delivered to the guest"
++                                              : nullptr;
++  if (a - base < (1ull << 32) && !why) {
+     ++t_fault_depth;
+     bool cont;
+     if constexpr (platform::kThrowThroughSignalFrames) {
+@@ -188,14 +192,22 @@ void FaultHandler(int sig, siginfo_t* si, void* uc) {
+     }
+     --t_fault_depth;
+     if (cont) return;  // retry the faulting instruction
++    why = "not handled by the guest's exception handlers";
+   }
+   int n;
+-  if (a - base < (1ull << 32))
+-    n = std::snprintf(buf, sizeof buf,
+-                      "FATAL: %s: guest memory fault at guest %08lX\n",
+-                      sig == SIGSEGV ? "SIGSEGV" : "SIGBUS",
+-                      static_cast<unsigned long>(a - base));
+-  else
++  if (a - base < (1ull << 32)) {
++    // A guest access violation nobody handled: the guest's registers (as
++    // of the last spill) and its EBP chain locate it in the guest code,
++    // in the crash report too (FatalReport).
++    Dl_info di{};
++    const char* caller = fc.caller && dladdr(reinterpret_cast<void*>(fc.caller), &di) && di.dli_sname
++                             ? di.dli_sname : "?";
++    std::snprintf(buf, sizeof buf,
++                  "%s: guest memory fault at guest %08lX (%s); host pc %p, caller %s",
++                  sig == SIGSEGV ? "SIGSEGV" : "SIGBUS", static_cast<unsigned long>(a - base), why,
++                  reinterpret_cast<void*>(fc.pc), caller);
++    FatalReport(buf);
++  } else
+     n = std::snprintf(buf, sizeof buf,
+                       "FATAL: %s: host fault at %p (runtime bug)\n",
+                       sig == SIGSEGV ? "SIGSEGV" : "SIGBUS", si->si_addr);
