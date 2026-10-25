@@ -3,11 +3,12 @@ import { ref, watch } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 import BrandMark from './BrandMark.vue'
 import GameClock from './GameClock.vue'
+import { SHOW_SCREENSHOTS } from '../data/flags'
 
 const links = [
   { to: '/', label: 'Home' },
   { to: '/features/', label: 'Features' },
-  { to: '/screenshots/', label: 'Screenshots' },
+  ...(SHOW_SCREENSHOTS ? [{ to: '/screenshots/', label: 'Screenshots' }] : []),
   { to: '/docs/', label: 'Docs' },
   { to: '/compatibility/', label: 'Compatibility' },
   { to: '/faq/', label: 'FAQ' },

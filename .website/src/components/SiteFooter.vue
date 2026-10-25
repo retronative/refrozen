@@ -2,6 +2,7 @@
 import { RouterLink } from 'vue-router'
 import BrandMark from './BrandMark.vue'
 import Divider from './Divider.vue'
+import { SHOW_SCREENSHOTS } from '../data/flags'
 </script>
 
 <template>
@@ -23,7 +24,7 @@ import Divider from './Divider.vue'
           <p class="eyebrow mb-3">The map</p>
           <ul class="list-none m-0 p-0 space-y-1.5 text-[.95rem]">
             <li><RouterLink to="/features/">Features</RouterLink></li>
-            <li><RouterLink to="/screenshots/">Screenshots</RouterLink></li>
+            <li v-if="SHOW_SCREENSHOTS"><RouterLink to="/screenshots/">Screenshots</RouterLink></li>
             <li><RouterLink to="/docs/">Documentation</RouterLink></li>
             <li><RouterLink to="/compatibility/">Compatibility</RouterLink></li>
             <li><RouterLink to="/faq/">FAQ</RouterLink></li>

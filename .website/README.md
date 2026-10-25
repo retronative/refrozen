@@ -222,7 +222,9 @@ environment variables.
   gameplay screenshots chosen by the maintainer go there, with files in `public/screenshots/`.
   The build fails if an entry is incomplete or a file is missing. While the manifest is empty the
   page shows original placeholder plates. Images are lazy-loaded with width/height and optional
-  `srcset`; each links to the full-size file (no lightbox).
+  `srcset`; each links to the full-size file (no lightbox). The page is currently hidden by
+  `SHOW_SCREENSHOTS = false` in `src/data/flags.ts`: unlinked, `noindex` and out of the sitemap,
+  but still prerendered at `/screenshots/`. Set it to `true` to restore it everywhere.
 - **No private material**: only public summaries written for `docs/` and `src/data/`; nothing from
   the internal `reference/` notes, tools or build output is published.
 

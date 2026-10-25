@@ -8,7 +8,7 @@ import { base, siteUrl, cname } from './site-config.mjs'
 const root = resolve(import.meta.dirname, '..')
 const dist = join(root, 'dist')
 const ssrDir = join(root, '.ssr')
-const { render, staticPaths, aliasPaths, screenshots } = await import(pathToFileURL(join(ssrDir, 'entry-server.js')).href)
+const { render, staticPaths, aliasPaths, screenshots, hiddenPaths } = await import(pathToFileURL(join(ssrDir, 'entry-server.js')).href)
 
 const template = readFileSync(join(dist, 'index.html'), 'utf8')
 
@@ -38,7 +38,8 @@ function page({ html, meta, notFound }) {
   const description = escapeAttr(meta.description)
   const extraHead = notFound
     ? '<meta name="robots" content="noindex" />'
-    : `<link rel="canonical" href="${absolute(meta.canonical)}" />\n    <meta property="og:url" content="${absolute(meta.canonical)}" />`
+    : `<link rel="canonical" href="${absolute(meta.canonical)}" />\n    <meta property="og:url" content="${absolute(meta.canonical)}" />` +
+      (hiddenPaths.includes(meta.canonical) ? '\n    <meta name="robots" content="noindex" />' : '')
   return template
     .replace(/<title>.*?<\/title>/, `<title>${title}</title>`)
     .replace(/(<meta (?:name|property)="(?:description|og:description|twitter:description)" content=")[^"]*"/g, `$1${description}"`)
@@ -66,7 +67,7 @@ const today = new Date().toISOString().slice(0, 10)
 write(
   join(dist, 'sitemap.xml'),
   `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n` +
-    staticPaths.map((p) => `  <url><loc>${absolute(p)}</loc><lastmod>${today}</lastmod></url>`).join('\n') +
+    staticPaths.filter((p) => !hiddenPaths.includes(p)).map((p) => `  <url><loc>${absolute(p)}</loc><lastmod>${today}</lastmod></url>`).join('\n') +
     '\n</urlset>\n',
 )
 write(join(dist, 'robots.txt'), `User-agent: *\nAllow: /\n\nSitemap: ${absolute('/sitemap.xml')}\n`)

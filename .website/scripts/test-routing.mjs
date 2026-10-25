@@ -6,6 +6,7 @@ import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { join, relative, resolve } from 'node:path'
 import { createPagesServer } from './pages-sim.mjs'
 import { base, siteUrl } from './site-config.mjs'
+import { SHOW_SCREENSHOTS, hiddenPaths } from '../src/data/flags.ts'
 
 const dist = resolve(import.meta.dirname, '../dist')
 const server = createPagesServer(dist, base)
@@ -69,6 +70,8 @@ const routes = walk(dist)
   .map((f) => relative(dist, f).replace(/index\.html$/, ''))
   .sort()
 
+const hiddenUrls = hiddenPaths.map((p) => siteUrl + base + p.slice(1))
+
 const rows = []
 for (const route of routes) {
   const slash = base + route
@@ -80,7 +83,7 @@ for (const route of routes) {
     if (url.pathname !== slash) fail(`${label}: ended at ${url.pathname}, expected ${slash}`)
     const canonical = canonicalOf(body)
     if (!canonical) fail(`${label}: no canonical tag`)
-    else if (!sitemap.includes(canonical)) fail(`${label}: canonical ${canonical} is not a sitemap URL`)
+    else if (!sitemap.includes(canonical) && !hiddenUrls.includes(canonical)) fail(`${label}: canonical ${canonical} is not a sitemap URL`)
     else if (!canonical.endsWith('/')) fail(`${label}: canonical without trailing slash`)
     const assets = await checkAssets(body, url, label)
     const again = await get(url.pathname)
@@ -116,6 +119,25 @@ else {
   if (res.status !== 200 || res.headers.get('content-type') !== 'image/png') fail(`og:image ${og} → ${res.status}`)
   else rows.push(`200 ${og.slice(siteUrl.length)}  og:image (image/png)`)
 }
+
+// Hidden pages (src/data/flags.ts): still prerendered and served (checked above), but noindex, out of
+// the sitemap and linked from no other page. With SHOW_SCREENSHOTS on, the page must be linked and indexable.
+const isNoindex = (html) => /<meta name="robots" content="noindex/.test(html)
+const pages = routes.map((route) => [`/${route}`, readFileSync(join(dist, route, 'index.html'), 'utf8')])
+for (const [path, html] of pages) {
+  if (isNoindex(html) !== hiddenPaths.includes(path)) fail(`${path}: noindex ${hiddenPaths.includes(path) ? 'missing' : 'unexpected'}`)
+}
+for (const [path, html] of [...pages, ['/404.html', readFileSync(join(dist, '404.html'), 'utf8')]]) {
+  for (const hidden of hiddenPaths) {
+    if (hidden !== path && html.includes(`href="${base}${hidden.slice(1)}"`)) fail(`${path}: links to hidden page ${hidden}`)
+  }
+}
+for (const url of hiddenUrls) if (sitemap.includes(url)) fail(`sitemap lists hidden page ${url}`)
+if (SHOW_SCREENSHOTS) {
+  if (!sitemap.includes(`${siteUrl}${base}screenshots/`)) fail('SHOW_SCREENSHOTS is on but the sitemap lacks /screenshots/')
+  if (!pages.find(([p]) => p === '/')[1].includes(`href="${base}screenshots/"`)) fail('SHOW_SCREENSHOTS is on but the home page does not link /screenshots/')
+}
+rows.push(`hidden pages: ${hiddenPaths.join(', ') || 'none'} (noindex, not in sitemap, unlinked)`)
 
 server.close()
 console.log(`Pages simulation at ${base} — ${routes.length} routes × 2 URL forms, ${assetCache.size} distinct assets:`)
