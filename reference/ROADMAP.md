@@ -212,6 +212,25 @@ official cooperation. Nothing network-facing is needed before M7.
 ## M6 — AI bots
 - A DotA AI map (e.g. an "AI" build, or the map's own computer players) playing a full match
   with computer opponents and allies; frame pacing and long-session stability (60+ minutes).
+- **Accept (revised 2026-10-26 by the user's decision; replaces the script's default of three
+  65-minute launches, every pass condition unchanged).** In this order, all on the same build:
+  1. **The intermittent `GetAttacker()` crash fixed:** root cause VERIFIED and recorded in
+     FEASIBILITY; the fix committed with targeted regression test(s) and mutants in the registry,
+     all KILLED (AGENTS.md, mutation gate).
+  2. **3–5 AI stress runs of 25–30 minutes each, all clean, after the fix**
+     (`scripts/m6_accept.sh <n> 30`): in every launch no FATAL, no watchdog report and every
+     scheduled shot saved, and every pacing report's median frame interval at most 20 ms. The
+     victory, score-screen and 15-minute memory conditions cannot apply to a 30-minute run and are
+     judged in step 3 only. Any crash returns to step 1.
+  3. **One clean 65-minute acceptance run** (`scripts/m6_accept.sh 1 65`) meeting every existing
+     pass condition of `scripts/m6_accept.sh`: no FATAL and no watchdog report, every shot saved; the
+     victory announcement seen; the score screen lists all 10 players and its elapsed time; pacing
+     after the first 5 minutes with every report's median at most 20 ms and the last 10 reports'
+     median at most 15 % above minutes 5–15; the largest RSS of the last 15 minutes at most 20 %
+     above minute 15; `Replay\LastReplay.w3g` written with a replay header.
+  For the v0.1.0 release (RELEASE_PLAN R3) steps 2 and 3 are made on the release-candidate build.
+  Only the number of 65-minute launches changed; the script, its default and its conditions did
+  not.
 
 ## M7 — LAN and private multiplayer
 - LAN (UDP 6112, W3GS) between two reFrozen instances, then against a Windows 1.26a client
