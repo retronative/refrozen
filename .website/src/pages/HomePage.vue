@@ -1,4 +1,9 @@
 <script setup lang="ts">
+// The hero artwork's responsive files (public/hero/), under the site's base path.
+const heroBase = `${import.meta.env.BASE_URL}hero/`
+const heroSet = (ext: string) =>
+  [640, 960, 1280, 1920, 2560, 2880, 3840].map((w) => `${heroBase}hero-b-${w}.${ext} ${w}w`).join(', ')
+
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { RouterLink } from 'vue-router'
 import FrostField from '../components/FrostField.vue'
@@ -86,9 +91,19 @@ const steps = [
       <div class="hero__sky" aria-hidden="true" />
       <div class="hero__river" aria-hidden="true" />
       <FrostField :count="12" />
+      <!-- The broken bridge (AI-generated artwork, see the disclaimer). Screens from 768px; phones keep the
+           backdrop above (an empty source, so nothing is downloaded) until a portrait composition exists. -->
+      <picture class="hero__art">
+        <source media="(max-width: 767px)" srcset="data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==" />
+        <source media="(min-width: 768px)" type="image/avif" :srcset="heroSet('avif')" sizes="100vw" />
+        <source media="(min-width: 768px)" type="image/webp" :srcset="heroSet('webp')" sizes="100vw" />
+        <img :src="`${heroBase}hero-b-1280.webp`" width="3840" height="2162" fetchpriority="high" decoding="async"
+          alt="An ancient stone bridge broken in the middle over a river at dusk: a sunlit forest with ruins on the left, a blighted wasteland and a gothic citadel on the right" />
+      </picture>
+      <div class="hero__scrim" aria-hidden="true" />
       <div class="hero__vignette" aria-hidden="true" />
 
-      <div class="relative z-10 mx-auto w-full max-w-5xl px-4 sm:px-8 py-20 text-center">
+      <div class="hero__content relative z-10 mx-auto w-full max-w-5xl px-4 sm:px-8 py-20 text-center">
         <p class="eyebrow rise">An unofficial fan project &middot; Native arm64 macOS</p>
         <h1 id="hero-title" class="hero__title frost-text rise rise-1 mt-6">
           <span class="re">re</span>Frozen

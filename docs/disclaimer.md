@@ -43,5 +43,8 @@ reFrozen's own licence has not been decided yet; until it is, no licence is gran
   Project Authors) and **Inter** (The Inter Project Authors), under the SIL Open Font License 1.1.
   The site serves its own latin subsets of these fonts, with their licence texts alongside, and
   makes no requests to font services.
-- All artwork, ornaments, textures and the map motif are original, drawn in CSS and SVG for this
-  site. No game imagery, logos, fonts or sounds from Blizzard Entertainment, DotA or iCCup are used.
+- The home page's broken-bridge artwork is AI-generated (OpenAI's image model, via ChatGPT) from
+  the project's own art direction, then upscaled; its origin is recorded in the original image's content
+  credentials. All other ornaments, textures and the map motif are original, drawn in CSS and SVG
+  for this site. No game imagery, logos, fonts or sounds from Blizzard Entertainment, DotA or
+  iCCup are used.
