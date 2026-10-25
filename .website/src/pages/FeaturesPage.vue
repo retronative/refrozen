@@ -32,6 +32,8 @@ const pillClass = (state: string) => (state === 'in-progress' ? 'text-frost' : s
   <div>
     <PageHero
       eyebrow="The tavern board"
+      art="tavern"
+      art-position="30% 55%"
       title="Features"
       lore="Choose a scroll from the board. Each states what already answers the call on Apple Silicon, and which milestone proved it."
     />

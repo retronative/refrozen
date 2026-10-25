@@ -393,57 +393,25 @@ a:hover { color: #d4efff; }
   margin-right: .02em;
 }
 
-/* Loading bar, then the prompt. */
-.loading {
-  width: min(28rem, 100%);
-}
+/* Loading plate (the bar is components/LoadingBar.vue), then the prompt. */
 /* The loading bar sits on its own dark, gilt-edged plate, like a classic loading screen. */
+/* No panel: the bar floats over the artwork; this only spaces the bar and the prompt. */
 .loading-plate {
-  padding: .9rem 1.2rem 1rem;
-  background: linear-gradient(180deg, rgba(10, 12, 17, .9), rgba(6, 8, 12, .92));
-  border: 1px solid rgba(216, 184, 104, .3);
-  box-shadow: var(--bevel), 0 18px 40px -18px #000;
+  background: none;
+  border: 0;
+  box-shadow: none;
+  padding: 0;
 }
-.loading__track {
-  position: relative;
-  height: 10px;
-  border: 1px solid rgba(216, 184, 104, .55);
-  background: #07090d;
-  box-shadow: inset 0 1px 3px #000, 0 0 0 3px rgba(0, 0, 0, .6);
-  overflow: hidden;
-}
-.loading__fill {
-  position: absolute;
-  inset: 1px;
-  transform-origin: left;
-  background: linear-gradient(90deg, #2c5f8f, var(--color-frost) 80%, #e8f7ff);
-  box-shadow: 0 0 12px rgba(154, 216, 255, .6);
-  animation: load-fill 3.2s cubic-bezier(.4, .1, .3, 1) .4s both;
-}
-.loading__fill::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background: repeating-linear-gradient(90deg, transparent 0 14px, rgba(0, 0, 0, .35) 14px 15px);
-}
-@keyframes load-fill {
-  0% { transform: scaleX(0); }
-  35% { transform: scaleX(.42); }
-  60% { transform: scaleX(.58); }
-  100% { transform: scaleX(1); }
-}
-.loading__label { transition: opacity .3s; }
+/* The prompt appears when the intro completes (or is skipped), not on a timer; one line under the bar. */
 .press-key {
   opacity: 0;
   visibility: hidden;
-  animation: fade-in .8s ease 3.7s forwards;
+  font-size: .68rem !important;
+  letter-spacing: .16em !important;
+  white-space: nowrap;
 }
 .intro-skip { transition: opacity .3s; }
 /* Intro finished or skipped: show the final state at once. */
-.intro-done .loading__fill { animation: none; transform: scaleX(1); }
-.intro-done .loading__label--busy { opacity: 0; }
-.intro-done .loading__label--ready { opacity: 1; }
-.loading__label--ready { opacity: 0; }
 .intro-done .press-key { animation: fade-in .35s ease forwards; }
 .intro-done .intro-skip { opacity: 0; visibility: hidden; }
 @keyframes fade-in { to { opacity: 1; visibility: visible; } }
@@ -805,6 +773,22 @@ a:hover { color: #d4efff; }
   .hero__content { padding-top: clamp(1.25rem, 4.5vh, 3rem); padding-bottom: 0; }
   .hero__title { font-size: clamp(3.4rem, 7.5vw, 6.5rem); }
   .hero__content .mt-9 { margin-top: 1.25rem; }
-  .hero__content .loading-plate { margin-top: .9rem; padding: .35rem .9rem; max-width: 20rem; gap: .35rem; }
+  .hero__content .loading-plate { margin-top: 1.4rem; max-width: 28rem; gap: .2rem; }
   .hero__content .loading-plate .h-11 { height: 2.25rem; }
+}
+
+/* Page banners with a painting (components/PageHero.vue): the art under a scrim dark enough for
+   the title and lore, strongest where the text sits. */
+.page-hero__art { position: absolute; inset: 0; z-index: -1; }
+.page-hero__art img { width: 100%; height: 100%; object-fit: cover; }
+.page-hero__scrim {
+  position: absolute; inset: 0; z-index: -1; pointer-events: none;
+  background:
+    radial-gradient(60% 75% at 50% 50%, rgba(6, 8, 12, .62), rgba(6, 8, 12, .38) 70%, rgba(6, 8, 12, .55) 100%),
+    linear-gradient(0deg, rgba(6, 8, 12, .7), rgba(6, 8, 12, 0) 35%);
+}
+.page-hero--art .hero__sky { opacity: 0; }
+.page-hero--art .eyebrow,
+.page-hero--art .lore {
+  text-shadow: 0 1px 2px rgba(0, 0, 0, .95), 0 0 12px rgba(0, 0, 0, .8);
 }

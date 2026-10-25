@@ -6,5 +6,5 @@ const doc = requireDoc('compatibility')
 </script>
 
 <template>
-  <DocLayout :doc="doc" eyebrow="Know your battlefield" />
+  <DocLayout :doc="doc" eyebrow="Know your battlefield" art="battlefield" art-position="50% 62%" />
 </template>

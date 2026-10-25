@@ -15,7 +15,7 @@ const outro = releasesSection?.html.split(/<\/ul>\n?/).pop() ?? ''
 
 <template>
   <div>
-    <PageHero eyebrow="The armory" title="Releases" lore="The gates are not yet open." />
+    <PageHero eyebrow="The armory" title="Releases" lore="The gates are not yet open." art="forge" art-position="55% 55%" />
 
     <section class="mx-auto max-w-4xl px-4 sm:px-8 py-20" aria-labelledby="releases">
       <div class="panel panel--carved relative overflow-hidden p-8 sm:p-12 text-center">

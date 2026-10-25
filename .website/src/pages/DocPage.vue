@@ -9,5 +9,5 @@ const doc = computed(() => requireDoc(String(route.params.slug)))
 </script>
 
 <template>
-  <DocLayout :key="doc.slug" :doc="doc" eyebrow="Documentation" />
+  <DocLayout :key="doc.slug" :doc="doc" eyebrow="Documentation" art="library" art-position="50% 45%" />
 </template>

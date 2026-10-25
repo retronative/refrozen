@@ -1,0 +1,152 @@
+/* components/LoadingBar.vue: the classic loading bar's behaviour in original CSS (see there). */
+.lbar {
+  /* The comet's strength follows the reference: none until 43% of progress, full by the end. */
+  --glow: clamp(0, calc((var(--p) - .43) / .56), 1);
+  width: min(26rem, 88%);
+  margin-inline: auto;
+  text-align: center;
+  animation: lbar-enter .6s cubic-bezier(.2, .7, .2, 1) both;
+}
+/* Text directly over the art: small caps with a soft dark halo for legibility. */
+.lbar__label,
+.lbar__done {
+  margin: 0;
+  height: 1.1rem;
+  font-family: var(--font-display);
+  font-size: .68rem;
+  letter-spacing: .3em;
+  text-transform: uppercase;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, .9), 0 0 10px rgba(0, 0, 0, .75);
+}
+.lbar__label { color: #d6dbe4; margin-bottom: .5rem; }
+.lbar__done { color: var(--color-gold-bright, #f0d996); margin-top: .5rem; opacity: 0; }
+
+/* The frame: dark, worn iron with a bevel: a lit upper edge, a shadowed lower one, a dark rim
+   around the window, a little weight below. */
+.lbar__frame {
+  position: relative;
+  padding: 5px 6px;
+  border-radius: 3px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, .09), rgba(255, 255, 255, 0) 40%),
+    linear-gradient(180deg, #605e5b 0%, #34332f 16%, #191a1b 46%, #0e0f10 62%, #262626 86%, #403e3b 100%);
+  box-shadow:
+    inset 0 0 0 1px rgba(0, 0, 0, .9),
+    inset 0 2px 1px -1px rgba(255, 255, 255, .22),
+    inset 0 -2px 2px -1px rgba(0, 0, 0, .75),
+    0 0 0 1px rgba(0, 0, 0, .55),
+    0 2px 0 rgba(0, 0, 0, .85),
+    0 6px 16px rgba(0, 0, 0, .6);
+}
+/* End caps: forged claw terminals (a spike outward, two hooked barbs curling back). */
+.lbar__cap {
+  position: absolute;
+  top: 50%;
+  width: 24px;
+  height: 27px;
+  translate: 0 -50%;
+  background: linear-gradient(180deg, #6a6865, #2a2a2b 45%, #0e0f10 70%, #2e2d2c);
+  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, .85));
+}
+.lbar__cap--l {
+  left: -20px;
+  clip-path: polygon(0 50%, 38% 38%, 52% 8%, 66% 30%, 100% 24%, 100% 76%, 66% 70%, 52% 92%, 38% 62%);
+}
+.lbar__cap--r {
+  right: -20px;
+  clip-path: polygon(100% 50%, 62% 38%, 48% 8%, 34% 30%, 0 24%, 0 76%, 34% 70%, 48% 92%, 62% 62%);
+}
+.lbar__track {
+  position: relative;
+  height: 10px;
+  overflow: hidden;
+  background: linear-gradient(180deg, #040507, #0b0e14);
+  box-shadow: inset 0 1px 3px #000, inset 0 0 0 1px rgba(0, 0, 0, .8);
+}
+/* One continuous fill: violet-blue at its edges, bright cyan through its middle. */
+.lbar__fill {
+  position: absolute;
+  inset: 0;
+  transform-origin: left center;
+  transform: scaleX(var(--p));
+  background: linear-gradient(180deg, #121c4e 0%, #1d3a86 22%, #2f6ac4 44%, #4a8fe0 52%, #2f6ac4 62%, #1d3a86 80%, #121c4e 100%);
+}
+/* A faint, static wispy texture in the fill (inline SVG turbulence: no request). It rides a
+   full-width rail ending at the tip, so it covers exactly the filled part, by transform only. */
+.lbar__wisprail {
+  position: absolute;
+  inset: 0;
+  transform: translateX(calc((var(--p) - 1) * 100%));
+  pointer-events: none;
+}
+.lbar__wisps {
+  position: absolute;
+  inset: 0;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='12'%3E%3Cfilter id='w' x='0' y='0' width='100%25' height='100%25'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.011 0.32' numOctaves='2' seed='7' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 1.6 0 -0.55'/%3E%3C/filter%3E%3Crect width='240' height='12' filter='url%28%23w%29'/%3E%3C/svg%3E") 0 50% / 240px 100% repeat-x;
+  opacity: .12;
+  mix-blend-mode: screen;
+}
+/* The comet's tail: a tapering light inside the fill, stretched with it, brightest at the tip. */
+.lbar__tail {
+  position: absolute;
+  inset: 0;
+  transform-origin: left center;
+  transform: scaleX(var(--p));
+  background:
+    radial-gradient(40% 70% at 100% 50%, rgba(110, 175, 255, .7), rgba(70, 140, 255, 0) 100%),
+    linear-gradient(90deg, rgba(60, 130, 255, 0) 30%, rgba(70, 145, 255, .35) 85%, rgba(120, 185, 255, .7) 100%);
+  mix-blend-mode: screen;
+  opacity: var(--glow);
+}
+/* The comet's core: a bright round light at the tip, washing over the frame's edges. It rides a
+   full-width rail that slides by its own width, so it moves by transform only. */
+.lbar__corerail {
+  position: absolute;
+  inset: 3px;
+  transform: translateX(calc((var(--p) - 1) * 100%));
+  pointer-events: none;
+}
+.lbar__core {
+  position: absolute;
+  top: 50%;
+  right: 0;
+  width: 46px;
+  height: 30px;
+  translate: 40% -50%;
+  border-radius: 50%;
+  background: radial-gradient(closest-side, rgba(225, 240, 255, .95) 0%, rgba(120, 185, 255, .8) 22%, rgba(60, 130, 255, .45) 52%, rgba(40, 100, 255, 0) 100%);
+  mix-blend-mode: screen;
+  opacity: var(--glow);
+}
+/* Completion, as in the reference: the comet goes out and the fill breathes once (full, half,
+   full); then the whole intro fades away. */
+.lbar--complete .lbar__tail,
+.lbar--complete .lbar__core { opacity: 0; transition: opacity .25s ease; }
+.lbar--complete .lbar__fill,
+.lbar--complete .lbar__wisprail { animation: lbar-breathe 2s ease-in-out 1 both; }
+.lbar--complete .lbar__done { animation: lbar-done .5s ease .2s 1 both; }
+.lbar--complete { animation: lbar-leave .7s ease 2.2s 1 forwards; }
+
+@keyframes lbar-enter {
+  from { opacity: 0; transform: translateY(5px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes lbar-breathe {
+  0%, 100% { opacity: 1; }
+  50% { opacity: .5; }
+}
+@keyframes lbar-done {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes lbar-leave {
+  from { opacity: 1; }
+  to { opacity: 0; visibility: hidden; }
+}
+/* Reduced motion: no entrance, comet or breath; the finished intro is simply not shown. */
+@media (prefers-reduced-motion: reduce) {
+  .lbar { animation: none; }
+  .lbar__tail, .lbar__corerail { display: none; }
+  .lbar--complete { animation: none; opacity: 0; visibility: hidden; }
+  .lbar--complete .lbar__fill, .lbar--complete .lbar__wisprail, .lbar--complete .lbar__done { animation: none; }
+}

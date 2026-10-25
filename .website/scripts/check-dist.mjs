@@ -16,6 +16,9 @@ const SCREENSHOT_MAX_BYTES = 1_500_000
 // The home hero's artwork (AI-generated, rights-reviewed; see the disclaimer): exactly these responsive files.
 const HERO_FILE = /^hero\/hero-b-(640|960|1280|1920|2560|2880|3840)\.(avif|webp)$/
 const HERO_MAX_BYTES = 600_000
+// Page banner paintings (see the disclaimer): exactly these responsive files.
+const BANNER_FILE = /^banners\/(forge|library|portal|tavern|battlefield|fog)-(640|1280|1920)\.(avif|webp)$/
+const BANNER_MAX_BYTES = 400_000
 
 const FORBIDDEN = [
   [/(?<![\w./-])reference\//, 'internal reference/ path'],
@@ -59,6 +62,8 @@ for (const file of files) {
   if (ext === '.map') errors.push(`${rel}: source map (not published)`)
   else if (rel === OG_IMAGE) {
     if (size > OG_MAX_BYTES) errors.push(`${rel}: ${size} bytes exceeds ${OG_MAX_BYTES}`)
+  } else if (BANNER_FILE.test(rel.split('\\').join('/'))) {
+    if (size > BANNER_MAX_BYTES) errors.push(`${rel}: ${size} bytes exceeds ${BANNER_MAX_BYTES}`)
   } else if (HERO_FILE.test(rel.split('\\').join('/'))) {
     if (size > HERO_MAX_BYTES) errors.push(`${rel}: ${size} bytes exceeds ${HERO_MAX_BYTES}`)
   } else if (inScreenshots && SCREENSHOT_EXT.has(ext)) {

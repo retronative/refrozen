@@ -5,12 +5,17 @@ import PageHero from './PageHero.vue'
 import Prose from './Prose.vue'
 import type { Doc } from '../docs'
 
-defineProps<{ doc: Doc; eyebrow: string }>()
+defineProps<{
+  doc: Doc
+  eyebrow: string
+  art?: 'forge' | 'library' | 'portal' | 'tavern' | 'battlefield' | 'fog'
+  artPosition?: string
+}>()
 </script>
 
 <template>
   <div>
-    <PageHero :eyebrow="eyebrow" :title="doc.title" :lore="doc.description" />
+    <PageHero :eyebrow="eyebrow" :title="doc.title" :lore="doc.description" :art="art" :art-position="artPosition" />
     <div class="mx-auto grid max-w-6xl gap-12 px-4 sm:px-8 py-16 lg:grid-cols-[15rem_1fr]">
       <aside v-if="doc.sections.length > 1" class="lg:sticky lg:top-[calc(var(--header-h)+2rem)] self-start">
         <nav :aria-label="`On this page: ${doc.title}`">

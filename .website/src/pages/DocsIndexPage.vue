@@ -8,7 +8,7 @@ const numerals = ['I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X']
 
 <template>
   <div>
-    <PageHero eyebrow="The library" title="Documentation" lore="Read before you march." />
+    <PageHero eyebrow="The library" title="Documentation" lore="Read before you march." art="library" art-position="50% 45%" />
     <section class="mx-auto max-w-4xl px-4 sm:px-8 py-20" aria-labelledby="docs-list-title">
       <h2 id="docs-list-title" class="sr-only">All documents</h2>
       <ol class="slab slab--rim list-none m-0 p-0">

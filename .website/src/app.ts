@@ -2,6 +2,7 @@ import { createSSRApp } from 'vue'
 import App from './App.vue'
 import { createAppRouter } from './router'
 import './styles/main.css'
+import './styles/loading-bar.css'
 
 export function createApp() {
   const app = createSSRApp(App)
