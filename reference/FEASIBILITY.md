@@ -771,3 +771,70 @@ scripts/m4_accept.sh 3 110          # regression
 - M4's open rendering items stand (the pale-lit ice spike, isotropic filtering, Direct3D 8 absent).
 - 300 strict stubs; macOS's native Spaces fullscreen and exclusive display modes are not exercised
   by the background checks (a simulated screen stands in).
+
+## 13. M6: AI bots (IN PROGRESS 2026-10-25)
+
+**Map used** (not yet the user's choice of record): "DotA v6.83dAI PMV 1.42 EN.w3x" (SHA-256
+`7b526d6f…940de113`, outside the repository), AI 1.4e on 6.83d, pure JASS; pjass vs 1.26a reports 5
+errors, which the game accepts (the native load and play are unaffected). Its `war3map.w3i` makes all 10
+slots user slots, so the lobby's slot menus set the nine others to Computer (Normal) (the menu's
+"Computer (Normal)" item is 70 points below each slot); `-ar` gives every player a hero.
+
+**VERIFIED: hot host paths optimised in every build type** (x86recomp patch 0014). With the
+documented Debug configure, the AI map's load held the main thread 5.0 s and 7.1 s (a watchdog
+report). A `sample` profile of the main thread in that window: 33 % lifted code, about 29 % in
+`Dispatch`'s image lookup at -O0, about 27 % in the GPU device's and GL context's per-draw buffers at
+-O0. `dispatch.cpp`, `gfx/gpu_device.cpp` and `gl/context.cpp` now build at -O2 in every build type (as
+the x87 model, the mixer and the pixel formats already did): the hitches became 1.1 s and 3.1 s (twice),
+the same as a RelWithDebInfo runtime, and in-match frame rate rose from about 56 to 150-190 fps. Test:
+`tests/test_build_flags.py` (8 checks: each hot file's last optimisation flag in a Debug configure);
+mutants M6-B1–B3 KILLED; M4 3/3 and M5 3/3 re-run pass.
+
+**Acceptance run 1 (`m6-accept-1-20261025-123841`, 65 minutes in the match): FAIL**, recorded under
+the original criteria. No FATAL, no watchdog report, the score screen lists all 10 players (elapsed
+1:05:09), replay written (512,501 bytes), resident memory fell (x0.63). Failed: no victory
+announcement in the periodic shots, and pacing drift x1.31. One cause for both: from about 31.5
+minutes in the match DotA's "DotA Scores" multiboard was shown expanded over the screen's centre,
+where the "has won" text appears (its Winner row reads "The Sentinel" from about 56.5 minutes); the
+median frame interval stepped from 5.3 to 6.4 ms exactly when it appeared, stayed 6.4-7.1 ms while it
+was shown and fell back to 5.2 ms after the match: a rendering-workload step (drawing the board), not
+degradation; memory fell over the run. Runs 2 and 3 were stopped by request (run 2's 12 minutes kept,
+`STOPPED.txt`). Why the board was expanded at that moment is UNRESOLVED: the map creates it minimized
+when the mode is chosen and re-displays it every second; its refresh routine (save
+`IsMultiboardMinimized`, minimize, refresh, restore) also runs from the chat commands `-aiboard` and
+`-aishowde*`; multiboard state is game code (not HLE), and M5's stock LoD shows its scores board
+expanded too. The Wine oracle cannot script this lobby (the 1.26a client ignores posted mouse messages
+under Wine), so stock behaviour is not compared.
+
+**VERIFIED: the observation path** (`scripts/m6_observe.py`, `scripts/m6_accept.sh`). Observation
+only, with camera controls; the player's hero stays at the fountain and is never ordered:
+- One plain click on the minimap's centre (80, 524: the map area spans x 10-150, y 454-593 of the
+  800x600 HUD) puts the camera on the map's centre, the mid lane's river.
+- In a match the game's cursor follows relative motion only (TEST_INPUT's absolute `pointer` does not
+  move it), and `goto` homes it through the top-left corner, which scrolls the camera. The match
+  script homes it once (its edge scroll is undone by the centring click); the observer then tracks
+  the cursor and moves it in relative steps of at most 200 points that never reach a screen edge.
+- The observer reads each periodic shot with Vision OCR and acts only on what it detects, through a
+  test-only follow file (x86recomp patch 0015, `<ID>_TEST_INPUT_FOLLOW`: appended lines, `+<s>`
+  relative times, complete lines only): an expanded multiboard (the scores board's row labels, or the
+  AI board's two team rows) gets one click on its toggle (787, 35) and a verification shot; one
+  retry, then no clicks until a frame shows it collapsed (never a blind toggle); a camera box (the
+  box-sized 8-connected white component of the minimap) that moved more than 6 points gets one
+  recentring click and a verification shot.
+- Probe `m6-probe-cam-1-20261025-150237` (8 minutes, test fixtures: the board expanded at 1:00 and
+  3:00, the camera scrolled with the Left key at 2:00): board detected and collapsed (verified), camera
+  recentred (verified), reopening counted and collapsed (verified); no other action. An earlier probe
+  showed a periodic white mark near the fountain merged into the camera box's bounding box (four false
+  recentres); the component rule removed them (none in the next two probes).
+- The score screen's player rows are counted from its Unit Score column (cropped, enlarged OCR): a
+  bot's name can read "…", which made a name count read 9; the column reads 10 on all six score
+  screens recorded so far. The criterion ("lists all 10 players") is unchanged.
+- Victory-announcement visibility with the board collapsed is checked only in a full match (the
+  acceptance runs).
+
+**Enemy-hero rendering report: NOT REPRODUCED - POSSIBLE INTENDED INVISIBILITY.** Probe
+`m6-probe-render-1-20261025-145032` (evidence and `INVESTIGATION.txt` kept): 27 full-resolution frames
+of mid-lane fights, each paired with one showing enemy health bars (`]` held): every health bar is
+over a drawn unit; no `gl:` unsupported-state or error warning in any M6 log. Unlike reCarbon's
+see-through road (an unimplemented shader opcode, silently skipped draws), no skipped-draw path was
+found. No graphics code was changed.
