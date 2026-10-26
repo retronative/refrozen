@@ -71,6 +71,55 @@ stay as the game has them and are not supported or tested.
 | Prerequisite "M6 passed" (three 65-minute runs, the script's default) | R3 under the revised M6 acceptance |
 | — | R1 (new) |
 
+### Proposed revisions, pending the user's final approval (2026-10-26)
+
+Neither revision is in force. Until the user approves them explicitly, R1, R3 and M6 read as in
+the table above and in ROADMAP, and M6 stays NOT PASSED.
+
+**1. R1: the intermittent `GetAttacker()` crash as a known alpha limitation.**
+
+*Evidence.*
+- Development Mac (Apple M5, 24 GB): 6 crashes in 12 AI runs, about 14–30 minutes into the
+  match, the same fault in every recorded case: a null object reached through the game's
+  attacker lookup in its trigger code. Three other projects were running on that Mac at the
+  same time. Whether the contention contributed is not established.
+- Dedicated test Mac (Apple M1, 8 GB, nothing else running): 3 consecutive 30-minute AI runs with
+  the crash diagnostics armed, no crash. Shorter runs there (map loading checks, under 5 minutes)
+  are not counted.
+- Not established: the root cause; whether the crash is a port divergence or happens in the
+  original game too; whether it depends on timing or load. It is not fixed and its cause is not
+  verified.
+
+*Proposed R1.* The crash is accepted as a known limitation of the v0.1.0 alpha, recorded in the
+release notes and `docs/status.md`. That text says it was seen on one machine under heavy
+concurrent load and not reproduced on a dedicated machine. It says the cause is unknown and asks
+players to report it. The diagnostics stay in the runtime, opt-in: the fault report with guest
+state, configurable guest-memory dumps and the stall recorder. The private records of the
+investigation are kept. R1 reopens as a mandatory blocker, with its original conditions
+(root cause VERIFIED, fix, regression tests and mutants), if any of these happens:
+- the crash reproduces on the dedicated test machine;
+- the crash occurs in human playtesting (R6 or later);
+- a reproducible fault or a confirmed runtime divergence is identified on this path.
+
+*Consequences for M6 and R3 (proposed).* ROADMAP M6 step 1 would read "the crash fixed, or
+accepted under revised R1". Steps 2 and 3 stay unchanged, with every pass condition. A crash
+during them meets the first reopening trigger and returns M6 to step 1.
+
+**2. M6: a watchdog policy for map loading.**
+
+*Evidence.* The DotA AI map's load includes one frame of game code (the C runtime's allocator,
+about 22 million calls into the runtime) that does not pump window events. With diagnostics off,
+it took 5.7 s on the M1 and about 3.4 s on the M5. With the import path optimised (patch 0020),
+the M1 took 4.67–4.92 s in five runs. That is under the 5-second watchdog, but by only 0.08 s
+at worst, so it is not reliable. Every other condition passed in those runs.
+
+*Proposed policy.* The runtime's watchdog stays at 5 s everywhere: hang detection in menus and
+gameplay is unchanged. `scripts/m6_accept.sh` counts a watchdog report as a failure, as now,
+except during the map load: from Start Game to the first frame of the match. A report there is
+recorded and passes only if the load's longest frame (the game's own frame-interval report) is
+at most 10 s. 10 s is twice the M1's measured time, so a load that hangs still fails.
+Menus and the match keep the 5-second rule with no exception.
+
 ## reCarbon release workflow: what is reused
 
 reCarbon's v0.1.0 release (`../reCarbon`, read-only; tag v0.1.0, a GitHub pre-release) is the
@@ -212,7 +261,7 @@ time, "Open Anyway" (if R7a applies) and uninstall. The site deploys with the ap
 
 | # | Item | Kind |
 |---|---|---|
-| 1 | `GetAttacker()` crash (5 of 10 AI runs, 14–23 minutes in; root cause unknown, diagnosis in progress) | Blocker (R1) |
+| 1 | `GetAttacker()` crash (6 of 12 AI runs on the development Mac, about 14–30 minutes in; none in 3 runs on the dedicated test Mac; root cause unknown) | Blocker (R1); revision proposed above |
 | 2 | The game module built with Apple's Command Line Tools, or a bundled toolchain | Blocker (proof-of-concept) |
 | 3 | The lifted code built and loaded as a separate local module (today linked into one executable) | Blocker (implementation) |
 | 4 | reFrozen's licence | Blocker (user decision) |
