@@ -7,10 +7,12 @@ set(CMAKE_LINK_DEPENDS_NO_SHARED ON)  # no relink when only a runtime library ch
 enable_testing()
 add_subdirectory("${X86RECOMP_DIR}" x86recomp)
 
-# REFROZEN_DYNAMIC_MODULE (first-run builder proof of concept): refrozen is
-# only the launcher and loads the game module, built on the player's Mac by
-# scripts/poc/build_module.sh, at run time. Both carry REFROZEN_MODULE_STAMP.
-option(REFROZEN_DYNAMIC_MODULE "load the game module at run time" OFF)
+# REFROZEN_DYNAMIC_MODULE (experimental, the first-run builder's proof of
+# concept; no release step uses it until first-run setup and packaging
+# exist): refrozen is only the launcher and loads the game module, built on
+# the player's Mac by scripts/poc/build_module.sh, at run time. Both carry
+# REFROZEN_MODULE_STAMP.
+option(REFROZEN_DYNAMIC_MODULE "experimental: load the game module at run time" OFF)
 
 if(REFROZEN_DYNAMIC_MODULE)
   execute_process(COMMAND git -C "${CMAKE_CURRENT_SOURCE_DIR}" rev-parse --short=12 HEAD

@@ -18,6 +18,7 @@ TESTS = {
     "build": "test_build_flags.py",
     "observe": "test_m6_observe.py",
     "watchdog": "test_m6_watchdog.py",
+    "builder": "test_builder_poc.py",
 }
 
 K32 = "tools/x86recomp/src/runtime/hle/kernel32.cpp"
@@ -51,6 +52,8 @@ XCM = "tools/x86recomp/CMakeLists.txt"
 OBS = "scripts/m6_observe.py"
 M6S = "scripts/m6_accept.sh"
 M6W = "scripts/m6_watchdog.py"
+POCB = "scripts/poc/build_module.sh"
+MAIN = "src/main.cpp"
 
 MUTANTS = [
     # ---- M2: loader (patch 0007) ---------------------------------------------
@@ -861,6 +864,40 @@ MUTANTS = [
          fault="acceptance counts every watchdog report again (the rule not applied)",
          old='[ "${wd%%|*}" != ok ]', new='[ "$watchdog" != 0 ]',
          expect="acceptance: the watchdog verdict comes from m6_watchdog.py"),
+    dict(id="R-B1", milestone="R", area="builder", file=POCB, test="builder",
+         fault="no check for the Command Line Tools before building",
+         old='if [ -z "$DEV" ] || ! /usr/bin/xcrun --find clang++ >/dev/null 2>&1; then',
+         new="if false; then",
+         expect="no Command Line Tools: stops before writing"),
+    dict(id="R-B2", milestone="R", area="builder", file=POCB, test="builder",
+         fault="installed files not checked before the lift",
+         old='  [ -f "$INSTALL/${m%%:*}" ] || fail 11', new='  true || fail 11',
+         expect="an installed file missing: named"),
+    dict(id="R-B3", milestone="R", area="builder", file=POCB, test="builder",
+         fault="free disk not checked",
+         old='[ "$FREE_MB" -ge "$NEED_MB" ] || fail 12', new='true || fail 12',
+         expect="not enough free disk"),
+    dict(id="R-B4", milestone="R", area="builder", file=POCB, test="builder",
+         fault="a compile failure not detected (the build goes on to link)",
+         old='wait "$WORKERS" || { WORKERS=""; fail 14 "a file did not compile"; }', new='wait "$WORKERS"',
+         expect="a file does not compile: stops"),
+    dict(id="R-B5", milestone="R", area="builder", file=POCB, test="builder",
+         fault="cancelling leaves the compile workers running",
+         old='    pkill -TERM -f "$TMP/" 2>/dev/null\n',
+         new="",
+         expect="cancelled while compiling: workers stopped"),
+    dict(id="R-B6", milestone="R", area="builder", file=POCB, test="builder",
+         fault="a failed build leaves its temporary folder",
+         old='else rm -rf "$TMP"; fi', new="else :; fi",
+         expect="a file does not compile: stops, nothing installed"),
+    dict(id="R-L1", milestone="R", area="builder", file=MAIN, test="builder",
+         fault="the launcher does not check the module's stamp file before loading it",
+         old="  if (stamp != REFROZEN_MODULE_STAMP) {", new="  if (false) {",
+         expect="launcher: a module from another build is refused before it is loaded"),
+    dict(id="R-L2", milestone="R", area="builder", file=MAIN, test="builder",
+         fault="the launcher does not check the loaded library's stamp",
+         old="  if (!symbol || std::string(*symbol) != REFROZEN_MODULE_STAMP) {", new="  if (false) {",
+         expect="launcher: a library that does not match its stamp file is refused"),
     dict(id="M6-O1", milestone="M6", area="observation", file=OBS, test="observe",
          fault="one row label taken as an expanded scoreboard",
          old='    if sum(1 for line in lines if BOARD_ROWS.search(line)) >= 2:',

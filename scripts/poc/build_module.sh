@@ -1,5 +1,6 @@
 #!/bin/bash
-# First-run builder, proof of concept: lifts the player's own installed game
+# First-run builder, proof of concept (experimental: no release step uses it
+# until first-run setup and packaging exist): lifts the player's own installed game
 # and compiles it into the game module on this Mac, with Apple's Command
 # Line Tools only (no Homebrew, no CMake). Nothing it makes is distributed.
 #
@@ -48,7 +49,12 @@ FREE_MB=$(( $(df -Pk "$DATA" | awk 'NR==2 {print $4}') / 1024 ))
 TMP="$DATA/build/.tmp-$STAMP-$$"
 OK=0 WORKERS=""
 cleanup() {
-  [ -n "$WORKERS" ] && { pkill -TERM -P "$WORKERS" 2>/dev/null; kill "$WORKERS" 2>/dev/null; }
+  # Every worker: xargs, the compile wrappers and their compilers (all name
+  # the temporary folder); killing only xargs' children orphans the compilers.
+  if [ -n "$WORKERS" ]; then
+    pkill -TERM -f "$TMP/" 2>/dev/null
+    for _ in $(seq 50); do pgrep -f "$TMP/" >/dev/null || break; sleep 0.1; done
+  fi
   [ -n "${SAMPLER:-}" ] && kill "$SAMPLER" 2>/dev/null
   if [ "$OK" = 1 ] && [ -n "$KEEP" ]; then mv "$TMP" "$KEEP"; else rm -rf "$TMP"; fi
   [ "$OK" = 1 ] || echo "nothing installed; the previous module (if any) is unchanged"
