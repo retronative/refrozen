@@ -63,7 +63,7 @@ import { ISSUES_URL, ORG, REPO_URL } from '../data/links'
         </p>
         <p class="mt-3 mb-0">
           No game files are included or distributed. You need your own legally obtained copy of Warcraft III: Reign of Chaos and
-          The Frozen Throne. All artwork on this site is original.
+          The Frozen Throne. Original artwork, including AI-generated illustrations.
         </p>
       </div>
     </div>
