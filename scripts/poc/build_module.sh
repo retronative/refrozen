@@ -98,7 +98,8 @@ chmod +x "$TMP/cc.sh"
 SAMPLER=$!
 # Progress for the first-run setup: "compiling <n> files", then one "compiled <file>" line each.
 echo "compiling $(ls "$TMP"/generated/*.cpp "$KIT/src/lifted_table.cpp" | wc -l | tr -d ' ') files"
-ls "$TMP"/generated/*.cpp "$KIT/src/lifted_table.cpp" | xargs -P "$JOBS" -n 1 "$TMP/cc.sh" &
+# NUL-separated: the default data folder, Application Support, has a space.
+printf '%s\0' "$TMP"/generated/*.cpp "$KIT/src/lifted_table.cpp" | xargs -0 -P "$JOBS" -n 1 "$TMP/cc.sh" &
 WORKERS=$!
 wait "$WORKERS" || { WORKERS=""; fail 14 "a file did not compile"; }
 WORKERS=""

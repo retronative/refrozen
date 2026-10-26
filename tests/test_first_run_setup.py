@@ -93,7 +93,7 @@ def main():
         if cc.returncode:
             print("FAIL the setup compiles\n" + cc.stderr[-3000:])
             return 1
-        data = os.path.join(tmp, "data")
+        data = os.path.join(tmp, "Application Support")  # a space, as in the real default data folder
         setup = Setup(binary, data)
 
         # CD keys (stdin) and the owner's name.
