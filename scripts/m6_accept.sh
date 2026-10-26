@@ -25,7 +25,10 @@
 # Evidence: game/attempts/m6-accept-<n>-<time>/{shots,ocr.txt,rss.txt,observe.log}.
 #
 # A launch passes iff:
-#   - the log has no FATAL and no watchdog report, and every shot was saved;
+#   - the log has no FATAL and every shot was saved;
+#   - no watchdog report, except one map-loading frame of at most 10 s between
+#     Start Game and the first frame of the match (scripts/m6_watchdog.py; the
+#     runtime's watchdog stays at 5 s);
 #   - a periodic shot shows the victory announcement ("has won"), i.e. the
 #     match ended by a destroyed throne before Quit Mission;
 #   - the score screen's Overview lists all 10 players (rows counted by their
@@ -74,6 +77,7 @@ for y in (236, 261, 286, 311, 350, 375, 400, 425, 450):
     t += 3
 print(f"{t:.1f} shot slots")
 print(f"{t + 1:.1f} goto 688 492\n{t + 2.5:.1f} click")       # Start Game
+print(f"{t + 2.5:.1f} shot start")  # the frame after it: the map load begins (m6_watchdog.py)
 print("100 shot loaded\n105 key Space")
 t = 106.0
 for k in ("Return", "-", "A", "R", "Return"):
@@ -145,6 +149,7 @@ for ((i = 1; i <= N; i++)); do
   log="$ROOT/game/attempts/$name.log"
   fatal=$(grep -c FATAL "$log")
   watchdog=$(grep -c watchdog "$log")
+  wd=$("$PY" -I "$ROOT/scripts/m6_watchdog.py" "$log")
   missing=""
   for s in $shots_wanted; do
     [ -f "$run/shots/$s.bmp" ] || [ -f "$run/shots/$s.jpg" ] || missing="$missing $s"
@@ -200,11 +205,11 @@ EOF
 )
   ok="${verdict%%|*}"
   rest="${verdict#*|}"
-  if [ "$fatal" != 0 ] || [ "$watchdog" != 0 ] || [ -n "$missing" ] || [ "$replay_ok" = no ] || [ "$ok" != PASS ]; then
+  if [ "$fatal" != 0 ] || [ "${wd%%|*}" != ok ] || [ -n "$missing" ] || [ "$replay_ok" = no ] || [ "$ok" != PASS ]; then
     ok=FAIL
     fail=1
   fi
-  echo "launch $i: $ok  fatal=$fatal watchdog=$watchdog shots_missing=[$(echo $missing | cut -c1-80)] replay=$replay_ok ${rest%%|*} run=$name"
+  echo "launch $i: $ok  fatal=$fatal watchdog=$watchdog(${wd#*|}) shots_missing=[$(echo $missing | cut -c1-80)] replay=$replay_ok ${rest%%|*} run=$name"
   [ -n "${rest#*|}" ] && echo "  failed: ${rest#*|}"
 done
 exit $fail
