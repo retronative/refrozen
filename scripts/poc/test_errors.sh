@@ -16,7 +16,7 @@ ENV=(env -i HOME="$HOME" PATH=/usr/bin:/bin:/usr/sbin:/sbin)
 BUILD=("${ENV[@]}" /bin/bash "$HERE/build_module.sh")
 SCRATCH=$(mktemp -d)
 trap 'rm -rf "$SCRATCH"' EXIT
-DATA="$SCRATCH/data"
+DATA="$SCRATCH/Application Support"  # a space, as in the real default data folder
 cp -cR "$3" "$DATA" || { echo "cannot clone $3"; exit 2; }
 fails=0
 module_hash() { shasum -a 256 "$DATA/build/current/war3.dylib" 2>/dev/null | cut -c1-16; }
@@ -55,6 +55,13 @@ sleep 20
 kill -TERM $pid  # the builder itself (env execs bash), as a Cancel button would
 wait $pid; rc=$?  # checked at once: the builder reports a cancel only once its workers are gone
 check "cancelled while compiling: workers stopped, nothing installed, previous module kept" 130 $rc "cancelled" "$SCRATCH/o"
+
+"${BUILD[@]}" "$KIT" "$INSTALL" "$DATA" > "$SCRATCH/o" 2>&1 &
+pid=$!
+until grep -q "^compiled \|build failed" "$SCRATCH/o" || ! kill -0 $pid 2>/dev/null; do sleep 1; done
+kill -TERM $pid 2>/dev/null
+wait $pid; rc=$?
+check "a data folder with a space in its path: files compile (then cancelled)" 130 $rc "^compiled " "$SCRATCH/o"
 
 # The launcher: a module from another build, a missing one, a swapped library.
 LAUNCH=(env -i HOME="$HOME" PATH=/usr/bin:/bin XDG_DATA_HOME="$SCRATCH/xdg" REFROZEN_BACKGROUND=1

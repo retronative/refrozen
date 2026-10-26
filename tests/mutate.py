@@ -54,7 +54,8 @@ def sync():
     for src, dst, excl in ((SRC_X86 + "/", "x86recomp/", ["out/", ".git/"]),
                            (os.path.join(ROOT, "scripts") + "/", "scripts/", ["__pycache__/"]),
                            (os.path.join(ROOT, "tests") + "/", "tests/", ["__pycache__/"]),
-                           (os.path.join(ROOT, "src") + "/", "src/", [])):
+                           (os.path.join(ROOT, "src") + "/", "src/", []),
+                           (os.path.join(ROOT, "app") + "/", "app/", [])):
         cmd = ["rsync", "-a", "--delete", "--checksum"] + [f"--exclude={e}" for e in excl]
         subprocess.run(cmd + [src, os.path.join(SCRATCH, dst)], check=True)
 

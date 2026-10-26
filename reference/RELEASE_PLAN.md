@@ -199,6 +199,36 @@ more licences), deferred unless needed.
 
 ## Packaging and installation flow (target design, subject to the proof-of-concept)
 
+**First-run setup implemented (2026-10-27, experimental, not yet packaged):** `app/setup` is a
+native SwiftUI app. Its window walks through five steps, and the same core has a command-line mode
+for tests (`reFrozen --setup …`):
+1. Prerequisites: Apple silicon, macOS 14, free disk, and the Command Line Tools (with Apple's
+   installer offered).
+2. The player's installers and the 1.26a patch, each checked by SHA-256. Swapped or wrong files
+   are refused with the reason.
+3. CD keys and the owner's name, validated as the installer validates them. The keys go to the
+   installer on standard input only; they never appear in an argument, the output or the logs.
+4. Install into a temporary folder, then rename it into place. Then build the game module with
+   progress and Cancel.
+5. Add a map, then play.
+
+Once setup is complete, later launches go straight to the game (the setup process replaces itself
+with the launcher).
+
+The installer step no longer needs Homebrew. The kit carries `native_install.py`, which runs on
+Apple's Python 3.9, plus `bnupdate_patch` and StormLib (Homebrew's copy until the release
+dependencies are built from pinned sources). An install by the setup is byte-identical to the
+reference install: 209 files, 10 s on the M1. A full build through the setup took 5 min 16 s on
+the M1.
+
+`scripts/poc/make_setup_app.sh` makes a development `reFrozen.app` (ad hoc signed, no dmg). It is
+not the release packaging (R4).
+
+Accepted inputs: only the English (UK) 1.21b installers and the English 1.26a patch, the versions
+reFrozen is verified with.
+
+Tests: `tests/test_first_run_setup.py`, mutants R-S1–R-S10.
+
 ```
 reFrozen.app/Contents/
   Info.plist           bundle id, version 0.1.0, commit, minimum macOS,
