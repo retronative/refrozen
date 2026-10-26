@@ -15,6 +15,12 @@
 
 #include "runtime/runtime.h"
 
+#ifdef REFROZEN_DYNAMIC_MODULE
+#include <dlfcn.h>
+
+#include <fstream>
+#endif
+
 namespace {
 
 constexpr const char* kGuestDir = "C:\\Program Files\\Warcraft III";
@@ -53,18 +59,65 @@ recomp::GameConfig Config() {
   return g;
 }
 
+#ifdef REFROZEN_DYNAMIC_MODULE
+// The game module: the player's own game code, lifted and compiled on this
+// Mac by the first-run builder (scripts/poc/build_module.sh). Its function
+// table registers itself when it is loaded. It must come from the same
+// reFrozen build as this launcher: its stamp file is checked before any of
+// its code runs, and its stamp symbol after loading.
+bool LoadGameModule(const std::string& path) {
+  const std::filesystem::path dir = std::filesystem::path(path).parent_path();
+  std::string stamp;
+  std::ifstream(dir / "stamp.txt") >> stamp;
+  if (stamp != REFROZEN_MODULE_STAMP) {
+    std::fprintf(stderr, "refrozen: the game module %s is %s, this reFrozen needs %s: "
+                         "rebuild it\n", path.c_str(), stamp.empty() ? "missing or unstamped"
+                         : ("from build " + stamp).c_str(), REFROZEN_MODULE_STAMP);
+    return false;
+  }
+  void* module = dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL);
+  if (!module) {
+    std::fprintf(stderr, "refrozen: cannot load the game module: %s\n", dlerror());
+    return false;
+  }
+  const auto* symbol = static_cast<const char* const*>(dlsym(module, "refrozen_module_stamp"));
+  if (!symbol || std::string(*symbol) != REFROZEN_MODULE_STAMP) {
+    std::fprintf(stderr, "refrozen: the game module %s does not match its stamp file: "
+                         "rebuild it\n", path.c_str());
+    return false;
+  }
+  return true;
+}
+
+std::string DefaultModule() {
+  const char* home = std::getenv("HOME");
+  return std::string(home ? home : "") +
+         "/Library/Application Support/reFrozen/build/current/war3.dylib";
+}
+#endif
+
 }  // namespace
 
 int main(int argc, char** argv) {
   const char* env = std::getenv("REFROZEN_GAME_DIR");
   std::string game_dir = env ? env : REFROZEN_DEFAULT_GAME_DIR;
   std::string args;
+#ifdef REFROZEN_DYNAMIC_MODULE
+  const char* module_env = std::getenv("REFROZEN_MODULE");
+  std::string module = module_env ? module_env : DefaultModule();
+#endif
   for (int i = 1; i < argc; i++) {
     std::string a = argv[i];
     if (a == "--game" && i + 1 < argc) {
       game_dir = argv[++i];
       continue;
     }
+#ifdef REFROZEN_DYNAMIC_MODULE
+    if (a == "--module" && i + 1 < argc) {
+      module = argv[++i];
+      continue;
+    }
+#endif
     args += (args.empty() ? "" : " ") + a;
   }
   const std::filesystem::path exe = std::filesystem::path(game_dir) / "war3.exe";
@@ -73,5 +126,8 @@ int main(int argc, char** argv) {
                          "or pass --game <install dir>)\n", exe.c_str());
     return 2;
   }
+#ifdef REFROZEN_DYNAMIC_MODULE
+  if (!LoadGameModule(module)) return 3;
+#endif
   return recomp::RunProcess(Config(), exe.string(), game_dir, args);
 }
