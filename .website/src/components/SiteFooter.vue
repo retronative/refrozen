@@ -13,7 +13,7 @@ import { ISSUES_URL, ORG, REPO_URL } from '../data/links'
       <div class="grid gap-10 md:grid-cols-[1.3fr_1fr_1fr]">
         <div>
           <div class="flex items-center gap-3">
-            <BrandMark :size="30" />
+            <BrandMark :size="36" />
             <span class="display text-lg"><span class="lore text-frost">re</span>Frozen</span>
           </div>
           <p class="mt-4 text-ash text-[.95rem] max-w-md">

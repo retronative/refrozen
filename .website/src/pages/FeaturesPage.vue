@@ -72,7 +72,7 @@ const pillClass = (state: string) => (state === 'in-progress' ? 'text-frost' : s
             </button>
           </div>
 
-          <div class="relative min-w-0 bg-[radial-gradient(90%_70%_at_20%_0%,rgba(216,184,104,.07),transparent_70%)]">
+          <div class="relative min-w-0 bg-[radial-gradient(90%_70%_at_20%_0%,rgba(212,174,122,.07),transparent_70%)]">
             <article
               v-for="(f, i) in items"
               :id="`panel-${f.id}`"

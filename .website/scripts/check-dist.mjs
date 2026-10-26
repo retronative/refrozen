@@ -19,6 +19,10 @@ const HERO_MAX_BYTES = 600_000
 // Page banner paintings (see the disclaimer): exactly these responsive files.
 const BANNER_FILE = /^banners\/(forge|library|portal|tavern|battlefield|fog|ranger|scholar|candlelit|icegate)-(640|1280|1920)\.(avif|webp)$/
 const BANNER_MAX_BYTES = 400_000
+// Icons made from the app icon by scripts/make_icons.sh: exactly these files. The 512 px manifest
+// icon is fetched only when the site is installed; the others are small.
+const ICON_FILE = /^(?:favicon-32|icon-192|icon-512|apple-touch-icon|brand\/mark-(?:96|144))\.png$/
+const ICON_MAX_BYTES = 600_000
 
 const FORBIDDEN = [
   [/(?<![\w./-])reference\//, 'internal reference/ path'],
@@ -66,6 +70,8 @@ for (const file of files) {
     if (size > BANNER_MAX_BYTES) errors.push(`${rel}: ${size} bytes exceeds ${BANNER_MAX_BYTES}`)
   } else if (HERO_FILE.test(rel.split('\\').join('/'))) {
     if (size > HERO_MAX_BYTES) errors.push(`${rel}: ${size} bytes exceeds ${HERO_MAX_BYTES}`)
+  } else if (ICON_FILE.test(rel.split('\\').join('/'))) {
+    if (size > ICON_MAX_BYTES) errors.push(`${rel}: ${size} bytes exceeds ${ICON_MAX_BYTES}`)
   } else if (inScreenshots && SCREENSHOT_EXT.has(ext)) {
     if (size > SCREENSHOT_MAX_BYTES) errors.push(`${rel}: ${size} bytes exceeds ${SCREENSHOT_MAX_BYTES}`)
   } else if (inScreenshots && name === '.gitkeep') {

@@ -11,19 +11,25 @@ const ratio = (a, b) => {
 const over = (top, alpha, bottom) => top.map((c, i) => c * alpha + bottom[i] * (1 - alpha))
 
 const text = {
-  bone: hex('#ece6d8'), ash: hex('#a7afbc'), gold: hex('#d8b868'), goldBright: hex('#f0d996'),
-  frost: hex('#9ad8ff'), dusk: hex('#b1a4f4'), verdant: hex('#a3d58c'), chatTime: hex('#7f8896'),
+  bone: hex('#ece6d8'), ash: hex('#a7afbc'), gold: hex('#d4ae7a'), goldBright: hex('#eed2a7'),
+  frost: hex('#88d3f9'), dusk: hex('#b1a4f4'), verdant: hex('#a3d58c'), chatTime: hex('#7f8896'),
   ember: hex('#e59a5b'),
 }
-const abyss = hex('#06080c')
-const panel = hex('#10151d')
+// Non-text UI colours (WCAG 1.4.11: 3:1 against the adjacent surface).
+const ui = { goldDeep: hex('#ab7f52'), ice: hex('#6bc4f4') }
+const abyss = hex('#05080e')
+const slab = hex('#0b121b')
 // Brightest point of a stone panel: warm highlight + upper-left radial over the base.
-const panelLit = over([255, 236, 200], 0.045, hex('#18202b'))
+const panelLit = over([255, 236, 200], 0.045, hex('#152030'))
 const wood = over([255, 220, 160], 0.1, hex('#3b2a19'))
-const list = hex('#0b0e13')
+const list = hex('#09101a')
 const bannerWarm = over([214, 168, 92], 0.2, hex('#10140e'))
 const bannerCold = over([110, 96, 210], 0.22, hex('#08091a'))
-const tabSelected = over(hex('#d8b868'), 0.14, list)
+const tabSelected = over(hex('#d4ae7a'), 0.14, list)
+// Status pills: an 8% tint of their own colour over lit stone.
+const pill = (c) => over(c, 0.08, panelLit)
+// Frost button face (top of its gradient, hover state).
+const frostButton = hex('#183150')
 
 const checks = [
   ['body text (bone) on page', text.bone, abyss, 4.5],
@@ -44,14 +50,25 @@ const checks = [
   ['muted text (ash) on cold banner', text.ash, bannerCold, 4.5],
   // Installation guide: the tinted callouts at their strongest tint, the disabled download
   // button's lighter stripe and the gilded Next plate's top edge.
-  ['install: unverified/danger (ember) on ember callout', text.ember, over(hex('#e59a5b'), 0.12, hex('#0d1118')), 4.5],
-  ['install: body (bone) on ember callout', text.bone, over(hex('#e59a5b'), 0.12, hex('#0d1118')), 4.5],
-  ['install: planned (dusk) on preview callout', text.dusk, over([110, 96, 210], 0.12, hex('#0d1118')), 4.5],
-  ['install: muted (ash) on preview callout', text.ash, over([110, 96, 210], 0.12, hex('#0d1118')), 4.5],
-  ['install: disabled button (ash) on stripe', text.ash, hex('#10151d'), 4.5],
-  ['install: Next label (gold) on gilded plate', text.gold, hex('#4a3b22'), 4.5],
-  ['install: Next text (bone) on gilded plate', text.bone, hex('#4a3b22'), 4.5],
-  ['install: current step (gold-bright) on highlight', text.goldBright, over(hex('#d8b868'), 0.12, abyss), 4.5],
+  ['install: unverified/danger (ember) on ember callout', text.ember, over(hex('#e59a5b'), 0.12, slab), 4.5],
+  ['install: body (bone) on ember callout', text.bone, over(hex('#e59a5b'), 0.12, slab), 4.5],
+  ['install: planned (dusk) on preview callout', text.dusk, over([110, 96, 210], 0.12, slab), 4.5],
+  ['install: muted (ash) on preview callout', text.ash, over([110, 96, 210], 0.12, slab), 4.5],
+  ['install: disabled button (ash) on stripe', text.ash, hex('#0d151f'), 4.5],
+  ['install: Next label (gold) on gilded plate', text.gold, hex('#563b25'), 4.5],
+  ['install: Next text (bone) on gilded plate', text.bone, hex('#563b25'), 4.5],
+  ['install: current step (gold-bright) on highlight', text.goldBright, over(hex('#d4ae7a'), 0.12, abyss), 4.5],
+  // Icon-language states: tinted status pills, buttons, the focus ring and ornaments.
+  ['status pill (verdant) on its tint', text.verdant, pill(text.verdant), 4.5],
+  ['status pill (frost) on its tint', text.frost, pill(text.frost), 4.5],
+  ['status pill (dusk) on its tint', text.dusk, pill(text.dusk), 4.5],
+  ['frost button label (bone) on hover face', text.bone, frostButton, 4.5],
+  ['button label (bone) on stone button hover', text.bone, hex('#1e2d42'), 4.5],
+  ['UI: focus ring (frost) on page', text.frost, abyss, 3],
+  ['UI: focus ring (frost) on frost button', text.frost, frostButton, 3],
+  ['UI: ornament gold (gold-deep) on page', ui.goldDeep, abyss, 3],
+  ['UI: ornament gold (gold-deep) on lit stone', ui.goldDeep, panelLit, 3],
+  ['UI: ice ornament on page', ui.ice, abyss, 3],
 ]
 
 // Home hero and page banners (.hero__sky + .hero__river): the lightest points text can sit on

@@ -1,5 +1,6 @@
 <script setup lang="ts">
-// Gilded, carved frame with original corner ornaments (one SVG, mirrored per corner).
+// Gilded, carved frame with original corner ornaments after the app icon's frame: a curved spike
+// and a four-point stud (one SVG, mirrored per corner); mid-edge studs come from the CSS.
 const corners = ['tl', 'tr', 'bl', 'br'] as const
 </script>
 
@@ -13,10 +14,9 @@ const corners = ['tl', 'tr', 'bl', 'br'] as const
       aria-hidden="true"
       focusable="false"
     >
-      <path d="M1 1h20l-4 4H5v12l-4 4z" fill="currentColor" />
-      <path d="M8 8h8l-8 8z" fill="#0d0a06" stroke="currentColor" stroke-width="1" />
-      <circle cx="26" cy="3" r="2" fill="currentColor" />
-      <circle cx="3" cy="26" r="2" fill="currentColor" />
+      <path d="M1 1h24c-8 1.5-13.5 4-16.5 7.5S2.5 17 1 25z" fill="currentColor" />
+      <path d="M1 1h24c-8 1.5-13.5 4-16.5 7.5S2.5 17 1 25z" fill="none" stroke="#0d0905" stroke-opacity=".6" stroke-width=".8" />
+      <path d="M8 2.5l1.5 4L13.5 8l-4 1.5L8 13.5l-1.5-4L2.5 8l4-1.5z" fill="#eed2a7" stroke="#0d0905" stroke-width=".8" />
     </svg>
     <div class="frame__inner">
       <slot />

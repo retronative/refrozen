@@ -21,7 +21,7 @@ const trees = Array.from({ length: 70 }, (_, i) => {
 })
 
 const color = (side: string) =>
-  side === 'sentinel' ? '#a3d58c' : side === 'scourge' ? '#b1a4f4' : '#9ad8ff'
+  side === 'sentinel' ? '#a3d58c' : side === 'scourge' ? '#b1a4f4' : '#88d3f9'
 </script>
 
 <template>
@@ -41,10 +41,10 @@ const color = (side: string) =>
       </linearGradient>
       <linearGradient id="mm-river" x1="0" y1="0" x2="1" y2="1">
         <stop offset="0" stop-color="#2d6ea8" stop-opacity=".2" />
-        <stop offset=".5" stop-color="#9ad8ff" stop-opacity=".75" />
+        <stop offset=".5" stop-color="#88d3f9" stop-opacity=".75" />
         <stop offset="1" stop-color="#2d6ea8" stop-opacity=".2" />
       </linearGradient>
-      <radialGradient id="mm-glow-dawn"><stop offset="0" stop-color="#d8b868" stop-opacity=".55" /><stop offset="1" stop-color="#d8b868" stop-opacity="0" /></radialGradient>
+      <radialGradient id="mm-glow-dawn"><stop offset="0" stop-color="#d4ae7a" stop-opacity=".55" /><stop offset="1" stop-color="#d4ae7a" stop-opacity="0" /></radialGradient>
       <radialGradient id="mm-glow-dusk"><stop offset="0" stop-color="#8a7be0" stop-opacity=".55" /><stop offset="1" stop-color="#8a7be0" stop-opacity="0" /></radialGradient>
     </defs>
 
@@ -75,7 +75,7 @@ const color = (side: string) =>
 
     <!-- Ancients: an original verdant spire and a frost crown -->
     <g transform="translate(28 172)">
-      <path d="M0 -14 L7 0 L0 9 L-7 0 Z" fill="#a3d58c" stroke="#f0d996" stroke-width="1.2" />
+      <path d="M0 -14 L7 0 L0 9 L-7 0 Z" fill="#a3d58c" stroke="#eed2a7" stroke-width="1.2" />
       <path d="M0 -14 V9 M-7 0 H7" stroke="#1d2b17" stroke-width=".8" />
     </g>
     <g transform="translate(172 28)">
@@ -83,7 +83,7 @@ const color = (side: string) =>
     </g>
 
     <!-- Towers along the lanes -->
-    <g fill="#d8b868" stroke="#000" stroke-width=".6">
+    <g fill="#d4ae7a" stroke="#000" stroke-width=".6">
       <rect v-for="(p, i) in [[24,120],[24,72],[60,22],[110,24],[78,174],[128,176],[178,80],[176,128],[58,142],[86,114],[114,86],[142,58]]" :key="i" :x="p[0] - 2.2" :y="p[1] - 2.2" width="4.4" height="4.4" transform-origin="center" />
     </g>
 

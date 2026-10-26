@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="2 2 60 60">
+  <!-- Small-size (16 and 32 px) source of the reFrozen app icon, drawn after the master
+       (refrozen-app-icon-master.png): same frame, stone and trident; no cracks, icicles or studs;
+       heavier frame and blade. The frame fills the view box edge to edge; scripts/make_icons.sh
+       adds the macOS grid margin. Strokes and gradients only (no filters), so CoreSVG (sips)
+       and browsers draw it alike. -->
+  <defs>
+    <linearGradient id="gold" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#eed2a7"/>
+      <stop offset=".5" stop-color="#ab7f52"/>
+      <stop offset="1" stop-color="#5f4227"/>
+    </linearGradient>
+    <radialGradient id="stone" cx=".5" cy=".46" r=".62">
+      <stop offset="0" stop-color="#0c3f7e"/>
+      <stop offset=".45" stop-color="#082f59"/>
+      <stop offset="1" stop-color="#03080e"/>
+    </radialGradient>
+    <linearGradient id="ice" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#eef6fc"/>
+      <stop offset=".55" stop-color="#9fdcfa"/>
+      <stop offset="1" stop-color="#4fb2eb"/>
+    </linearGradient>
+    <g id="trident">
+      <path d="M32 9.5l3.6 7.5-3.6 3.4-3.6-3.4z"/>
+      <path d="M29.6 21.5h4.8l-.9 25.5L32 55.5l-1.5-8.5z"/>
+      <path d="M15.5 28.5l13-6.2h7l13 6.2-5.6.2-7.4-1.6h-7l-7.4 1.6z"/>
+      <path d="M22.5 30l3.4 3.8-1.9 1.6-1.5 13-1.5-13-1.9-1.6z"/>
+      <path d="M41.5 30l3.4 3.8-1.9 1.6-1.5 13-1.5-13-1.9-1.6z"/>
+    </g>
+  </defs>
+  <rect x="2" y="2" width="60" height="60" rx="13" fill="url(#gold)"/>
+  <rect x="7" y="7" width="50" height="50" rx="8.5" fill="url(#stone)" stroke="#2a1c10" stroke-width="1"/>
+  <use href="#trident" fill="none" stroke="#4fb2eb" stroke-opacity=".45" stroke-width="3" stroke-linejoin="round"/>
+  <use href="#trident" fill="url(#ice)"/>
+  <path d="M32 23.2l2 2.4-2 2.4-2-2.4z" fill="#06101c"/>
+</svg>

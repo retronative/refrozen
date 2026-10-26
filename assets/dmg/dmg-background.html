@@ -1,0 +1,176 @@
+<!doctype html>
+<!--
+  reFrozen DMG background (design mock-up; see assets/dmg/dmg-design.md).
+  One source, rendered by headless Chrome at 660x400 (1x) and 1320x800 (2x).
+  Query: ?art=painted|vector (background), &mock=1 (adds the icons and labels that Finder draws
+  itself; never ship that render as the background), &appearance=light (mock labels in black, as
+  Finder draws them in Light appearance; white otherwise).
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>reFrozen DMG background</title>
+<style>
+  @font-face { font-family: "Cinzel"; font-weight: 400 900; src: url("../../.website/public/fonts/cinzel-latin-wght-normal.woff2") format("woff2"); }
+  @font-face { font-family: "Cormorant Garamond"; font-style: italic; font-weight: 300 700; src: url("../../.website/public/fonts/cormorant-garamond-latin-wght-italic.woff2") format("woff2"); }
+  :root {
+    --abyss: #05080e; --stone: #0b121b; --ice: #6bc4f4; --ice-core: #dfedfa; --frost: #88d3f9; --glow: #4fb2eb;
+    --gold: #d4ae7a; --gold-bright: #eed2a7; --gold-deep: #ab7f52; --gold-shadow: #47301c; --bone: #ece6d8;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; width: 660px; height: 400px; overflow: hidden; background: var(--abyss); }
+  .stage { position: relative; width: 660px; height: 400px; overflow: hidden; isolation: isolate; }
+
+  /* Painted variant: the site's approved "icegate" banner, darkened at the top for the wordmark and
+     at the icon row so Finder's labels stay legible. */
+  .art { position: absolute; inset: 0; z-index: -3; background: url("../../.website/public/banners/icegate-1920.webp") 50% 30% / 115% auto no-repeat; }
+  .vector .art { display: none; }
+  .vector .scrim { opacity: .55; }
+
+  /* Vector variant: the same composition in gradients and SVG only. */
+  .vec { position: absolute; inset: 0; z-index: -3; display: none; }
+  .vector .vec { display: block; }
+
+  .scrim {
+    position: absolute; inset: 0; z-index: -2;
+    background:
+      linear-gradient(180deg, rgba(5, 8, 14, .78) 0%, rgba(5, 8, 14, .35) 32%, rgba(5, 8, 14, .2) 50%, rgba(5, 8, 14, .45) 78%, rgba(5, 8, 14, .85) 100%),
+      radial-gradient(60% 50% at 50% 62%, rgba(5, 8, 14, 0), rgba(5, 8, 14, .45) 100%);
+  }
+  /* Warm candlelight at the edges, cold light in the gate: the icon's gold-against-ice. */
+  .light {
+    position: absolute; inset: 0; z-index: -1; pointer-events: none;
+    background:
+      radial-gradient(18% 30% at 4% 86%, rgba(229, 168, 92, .28), transparent 70%),
+      radial-gradient(18% 30% at 96% 86%, rgba(229, 168, 92, .28), transparent 70%),
+      radial-gradient(30% 40% at 50% 58%, rgba(79, 178, 235, .16), transparent 70%);
+  }
+  /* Gilded frame inset from the window edge, with the icon's four-point studs. */
+  .frame { position: absolute; inset: 10px; border: 1px solid rgba(171, 127, 82, .55); box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .6), 0 0 0 1px rgba(0, 0, 0, .5); pointer-events: none; }
+  .frame::before { content: ""; position: absolute; inset: 3px; border: 1px solid rgba(238, 210, 167, .14); }
+  .stud { position: absolute; width: 14px; height: 14px; background: linear-gradient(135deg, #eed2a7, #ab7f52 50%, #47301c); clip-path: polygon(50% 0, 61% 39%, 100% 50%, 61% 61%, 50% 100%, 39% 61%, 0 50%, 39% 39%); filter: drop-shadow(0 1px 0 #000); }
+  .stud.t { top: -7px; left: calc(50% - 7px); } .stud.b { bottom: -7px; left: calc(50% - 7px); }
+  .stud.l { left: -7px; top: calc(50% - 7px); } .stud.r { right: -7px; top: calc(50% - 7px); }
+  .corner { position: absolute; width: 26px; height: 26px; color: #ab7f52; }
+  .corner.tl { top: -2px; left: -2px; } .corner.tr { top: -2px; right: -2px; transform: scaleX(-1); }
+  .corner.bl { bottom: -2px; left: -2px; transform: scaleY(-1); } .corner.br { bottom: -2px; right: -2px; transform: scale(-1, -1); }
+
+  .title { position: absolute; top: 34px; left: 0; right: 0; text-align: center; }
+  .word { margin: 0; font-family: "Cinzel", serif; font-weight: 700; font-size: 46px; line-height: 1; letter-spacing: .02em;
+    background: linear-gradient(180deg, #fbefd9 0%, #eed2a7 35%, #d4ae7a 62%, #976e45 100%); -webkit-background-clip: text; background-clip: text; color: transparent;
+    filter: drop-shadow(0 2px 0 rgba(0, 0, 0, .85)) drop-shadow(0 0 14px rgba(0, 0, 0, .7)); }
+  .word .re { font-family: "Cormorant Garamond", serif; font-style: italic; font-weight: 600; letter-spacing: 0;
+    background: linear-gradient(180deg, #f4fbff, #c8e7f6 45%, #6bb8e8); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .tag { margin: 12px 0 0; font-family: "Cinzel", serif; font-weight: 600; font-size: 10.5px; letter-spacing: .42em; text-transform: uppercase; color: var(--bone); text-shadow: 0 1px 2px #000, 0 0 10px rgba(0, 0, 0, .9); }
+  .rule { display: block; margin: 9px auto 0; }
+
+  /* Drag cue between the icon wells (Finder centres: app 185,250; Applications 475,250). */
+  .arrow { position: absolute; left: 0; top: 0; }
+
+  /* Label plates: Finder draws icon labels in white (Dark appearance) or black (Light), so each
+     label sits on a flat frosted-steel plate of relative luminance 0.180, which gives both at
+     least 4.5:1 (white 4.56, black 4.60). Flat on purpose: any gradient or texture would push one
+     of the two below AA. render.mjs measures the rendered plates. */
+  .plate { position: absolute; top: 315px; width: 136px; height: 24px; translate: -50% 0; border-radius: 5px; background: #697789;
+    box-shadow: 0 0 0 1px rgba(171, 127, 82, .75), 0 0 0 2px rgba(5, 8, 14, .7), 0 4px 10px rgba(0, 0, 0, .55); }
+
+  /* Mock-only layer: what Finder draws on top (icons and labels). */
+  .mock { display: none; }
+  .is-mock .mock { display: block; }
+  .icon { position: absolute; width: 128px; height: 128px; translate: -50% -50%; }
+  /* The .icns puts the frame on Apple's grid (an 824/1024 body): 103 pt of the 128 pt well. */
+  .icon img { width: 116px; height: 116px; margin: 6px; display: block; filter: drop-shadow(0 6px 10px rgba(0, 0, 0, .55)); }
+  .folder { position: absolute; inset: 14px 6px 18px; border-radius: 10px; background: linear-gradient(#7cc0f7, #3f8fe0); box-shadow: 0 6px 10px rgba(0, 0, 0, .5); }
+  .folder::before { content: ""; position: absolute; left: 0; top: -9px; width: 46px; height: 14px; border-radius: 6px 6px 0 0; background: #66aef0; }
+  .folder::after { content: "A"; position: absolute; inset: 0; display: grid; place-items: center; font: 600 46px/1 -apple-system, sans-serif; color: rgba(20, 70, 140, .45); }
+  .label { position: absolute; translate: -50% 0; padding: 1px 7px; border-radius: 4px; font: 500 13px/1.35 -apple-system, "SF Pro Text", sans-serif; color: #fff; white-space: nowrap; }
+  .is-light .label { color: #000; }
+</style>
+</head>
+<body>
+<div class="stage" id="stage">
+  <div class="art"></div>
+  <svg class="vec" viewBox="0 0 660 400" preserveAspectRatio="none" aria-hidden="true">
+    <defs>
+      <radialGradient id="gate" cx=".5" cy=".55" r=".55">
+        <stop offset="0" stop-color="#6fc6f2"/><stop offset=".35" stop-color="#1f78c4"/><stop offset=".75" stop-color="#0a2f5a"/><stop offset="1" stop-color="#061427"/>
+      </radialGradient>
+      <linearGradient id="hall" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#05080e"/><stop offset=".6" stop-color="#0a1626"/><stop offset="1" stop-color="#05080e"/></linearGradient>
+      <linearGradient id="floor" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#0d2a4a"/><stop offset="1" stop-color="#05080e"/></linearGradient>
+      <filter id="soft"><feGaussianBlur stdDeviation="14"/></filter>
+      <filter id="crack"><feTurbulence type="fractalNoise" baseFrequency=".035 .06" numOctaves="3" seed="4"/><feColorMatrix values="0 0 0 0 .85  0 0 0 0 .95  0 0 0 0 1  0 0 0 1.6 -.95"/></filter>
+    </defs>
+    <rect width="660" height="400" fill="url(#hall)"/>
+    <!-- The frozen gate: a pointed arch filled with ice light. -->
+    <path d="M220 330V170Q220 70 330 40Q440 70 440 170V330Z" fill="url(#gate)"/>
+    <path d="M220 330V170Q220 70 330 40Q440 70 440 170V330Z" fill="#fff" filter="url(#crack)" opacity=".55"/>
+    <path d="M232 330V172Q232 84 330 56Q428 84 428 172V330" fill="none" stroke="#9fdcfa" stroke-opacity=".25"/>
+    <ellipse cx="330" cy="250" rx="120" ry="90" fill="#4fb2eb" opacity=".18" filter="url(#soft)"/>
+    <!-- Arch masonry and pillars. -->
+    <path d="M200 340V168Q200 52 330 18Q460 52 460 168V340H440V170Q440 70 330 40Q220 70 220 170V340Z" fill="#0c1420" stroke="#1b2a3d"/>
+    <g fill="#0a111b" stroke="#18263a">
+      <rect x="40" y="40" width="58" height="300"/><rect x="128" y="70" width="44" height="270"/>
+      <rect x="562" y="40" width="58" height="300"/><rect x="488" y="70" width="44" height="270"/>
+    </g>
+    <g stroke="#1e3047" stroke-width="1" opacity=".8">
+      <path d="M40 100h58M40 170h58M40 240h58M562 100h58M562 170h58M562 240h58M128 130h44M128 200h44M128 270h44M488 130h44M488 200h44M488 270h44"/>
+    </g>
+    <rect y="330" width="660" height="70" fill="url(#floor)"/>
+    <path d="M220 330h220l60 70H160z" fill="#4fb2eb" opacity=".08"/>
+  </svg>
+  <div class="scrim"></div>
+  <div class="light"></div>
+
+  <div class="frame">
+    <svg class="corner tl" viewBox="0 0 34 34" aria-hidden="true"><path d="M1 1h24c-8 1.5-13.5 4-16.5 7.5S2.5 17 1 25z" fill="currentColor"/><path d="M8 2.5l1.5 4L13.5 8l-4 1.5L8 13.5l-1.5-4L2.5 8l4-1.5z" fill="#eed2a7" stroke="#0d0905" stroke-width=".8"/></svg>
+    <svg class="corner tr" viewBox="0 0 34 34" aria-hidden="true"><path d="M1 1h24c-8 1.5-13.5 4-16.5 7.5S2.5 17 1 25z" fill="currentColor"/><path d="M8 2.5l1.5 4L13.5 8l-4 1.5L8 13.5l-1.5-4L2.5 8l4-1.5z" fill="#eed2a7" stroke="#0d0905" stroke-width=".8"/></svg>
+    <svg class="corner bl" viewBox="0 0 34 34" aria-hidden="true"><path d="M1 1h24c-8 1.5-13.5 4-16.5 7.5S2.5 17 1 25z" fill="currentColor"/><path d="M8 2.5l1.5 4L13.5 8l-4 1.5L8 13.5l-1.5-4L2.5 8l4-1.5z" fill="#eed2a7" stroke="#0d0905" stroke-width=".8"/></svg>
+    <svg class="corner br" viewBox="0 0 34 34" aria-hidden="true"><path d="M1 1h24c-8 1.5-13.5 4-16.5 7.5S2.5 17 1 25z" fill="currentColor"/><path d="M8 2.5l1.5 4L13.5 8l-4 1.5L8 13.5l-1.5-4L2.5 8l4-1.5z" fill="#eed2a7" stroke="#0d0905" stroke-width=".8"/></svg>
+    <span class="stud t"></span><span class="stud b"></span><span class="stud l"></span><span class="stud r"></span>
+  </div>
+
+  <div class="title">
+    <p class="word"><span class="re">re</span>Frozen</p>
+    <p class="tag">Native on Apple Silicon</p>
+    <svg class="rule" width="220" height="14" viewBox="0 0 220 14" aria-hidden="true">
+      <defs><linearGradient id="ruleL" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="96" y2="0"><stop offset="0" stop-color="#ab7f52" stop-opacity="0"/><stop offset="1" stop-color="#d4ae7a"/></linearGradient>
+      <linearGradient id="ruleR" gradientUnits="userSpaceOnUse" x1="220" y1="0" x2="124" y2="0"><stop offset="0" stop-color="#ab7f52" stop-opacity="0"/><stop offset="1" stop-color="#d4ae7a"/></linearGradient></defs>
+      <path d="M0 7h96" stroke="url(#ruleL)"/><path d="M124 7h96" stroke="url(#ruleR)"/>
+      <path d="M110 0l2 5 5 2-5 2-2 5-2-5-5-2 5-2z" fill="#d4ae7a" stroke="#47301c" stroke-width=".6"/>
+      <path d="M110 4.6l1 2.4-1 2.4-1-2.4z" fill="#88d3f9"/>
+    </svg>
+  </div>
+
+  <!-- Drag cue: an ice shaft with a diamond at its midpoint, glowing, ending in a barbed head. -->
+  <svg class="arrow" width="660" height="400" viewBox="0 0 660 400" aria-hidden="true">
+    <defs>
+      <linearGradient id="shaft" gradientUnits="userSpaceOnUse" x1="268" y1="0" x2="384" y2="0"><stop offset="0" stop-color="#4fb2eb" stop-opacity="0"/><stop offset=".35" stop-color="#88d3f9"/><stop offset="1" stop-color="#dfedfa"/></linearGradient>
+      <filter id="glow" x="-20%" y="-200%" width="140%" height="500%"><feGaussianBlur stdDeviation="3.2"/></filter>
+    </defs>
+    <g id="cue">
+      <path d="M268 250H384" stroke="url(#shaft)" stroke-width="2.4" stroke-linecap="round"/>
+      <path d="M394 250l-16-9 4 9-4 9z" fill="#dfedfa"/>
+      <path d="M326 250l6-6 6 6-6 6z" fill="#05080e" stroke="#88d3f9" stroke-width="1.6"/>
+      <path d="M332 247l3 3-3 3-3-3z" fill="#dfedfa"/>
+    </g>
+    <use href="#cue" filter="url(#glow)" opacity=".9" style="mix-blend-mode: screen"/>
+  </svg>
+
+  <span class="plate" style="left:185px"></span>
+  <span class="plate" style="left:475px"></span>
+
+  <div class="mock">
+    <div class="icon" style="left:185px; top:250px"><img src="../icon/refrozen-app-icon-master.png" alt=""></div>
+    <div class="icon" style="left:475px; top:250px"><span class="folder"></span></div>
+    <span class="label" style="left:185px; top:317px">reFrozen.app</span>
+    <span class="label" style="left:475px; top:317px">Applications</span>
+  </div>
+</div>
+<script>
+  const q = new URLSearchParams(location.search)
+  if (q.get('art') === 'vector') document.getElementById('stage').classList.add('vector')
+  if (q.get('mock') === '1') document.getElementById('stage').classList.add('is-mock')
+  if (q.get('appearance') === 'light') document.getElementById('stage').classList.add('is-light')
+</script>
+</body>
+</html>

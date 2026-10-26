@@ -23,7 +23,9 @@ plain HTML at build time. No server, no runtime data, no tracking.
 │   ├── test-routing.mjs    Requests every route (with/without trailing slash) through pages-sim
 │   └── og-image.mjs        Retired renderer of the old provisional OG image (never writes into public/)
 ├── public/
-│   ├── favicon.svg         Original mark
+│   ├── favicon.ico, favicon-32.png, apple-touch-icon.png, icon-{192,512}.png, site.webmanifest
+│   │                       Icons made from the app icon by ../scripts/make_icons.sh
+│   ├── brand/              The app icon as the header/footer mark (2x, 3x), same script
 │   ├── og.jpg              Open Graph image, 1200×630 (the owner's artwork)
 │   ├── fonts/              Self-hosted OFL fonts (latin woff2 subsets) and their licence texts
 │   └── screenshots/        Rights-reviewed screenshots only (empty until the maintainer chooses)
@@ -35,7 +37,7 @@ plain HTML at build time. No server, no runtime data, no tracking.
     ├── data/               Site-only content: features, minimap landmarks, screenshot manifest
     ├── components/         Header, footer, minimap, chat log, glyphs, prose renderer, …
     ├── pages/              One lazy-loaded component per route
-    └── styles/main.css     Design tokens, textures and all custom styling
+    └── styles/main.css     Design tokens (from the app icon; see ../assets/design-tokens.md), textures and all custom styling
 ```
 
 Routes: `/`, `/features/`, `/screenshots/`, `/docs/`, `/docs/<slug>/`, `/compatibility/`,
@@ -101,7 +103,8 @@ SSR build, the prerender (which also validates the screenshot manifest), `check:
   relative links between `docs/*.md`. External links are listed, never fetched.
 - **check:dist** is the artifact hygiene gate: only allowlisted file types (html, css, js, svg,
   woff2, txt, xml, json, ico, webmanifest, `CNAME`, `.nojekyll`); raster images only as `og.jpg`
-  (≤ 500 kB) and PNG/WebP directly in `screenshots/` (≤ 1.5 MB each); no source maps; no other
+  (≤ 500 kB), the hero and banner files, the icon files made by `scripts/make_icons.sh` (≤ 600 kB
+  each) and PNG/WebP directly in `screenshots/` (≤ 1.5 MB each); no source maps; no other
   file over 1 MB; no content that looks private (`reference/` or `game/` paths, work logs,
   internal planning file names, game file names such as `.w3x`/`.mpq`/`.exe`/`.dll`, absolute
   `/Users/` paths, CD-key-like strings); and no third-party runtime requests (external scripts,
@@ -205,8 +208,10 @@ environment variables.
 ## Asset and trademark policy
 
 - **Everything visual is original**: the textures (SVG noise and turbulence), ornaments, rune-like
-  glyphs, the minimap motif, the brand mark and the screenshot placeholder plates are drawn in CSS
-  and SVG for this site.
+  glyphs, the minimap motif and the screenshot placeholder plates are drawn in CSS and SVG for this
+  site. The brand mark and favicons are the project's app icon (`assets/icon/`), resized by
+  `scripts/make_icons.sh` (16 and 32 px favicons from its simplified drawing); rerun it after
+  changing either source. `tests/test_brand_assets.py` fails if the committed files are stale.
 - **No game material**: no Warcraft, DotA, Blizzard or iCCup artwork, logos, icons, fonts,
   screenshots, sounds or game files, and nothing from the repository's `game/` folder. Real
   screenshots are added only after the maintainer approves which images may be published.

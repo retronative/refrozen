@@ -55,7 +55,7 @@ const plates = [
       </ul>
 
       <template v-else>
-      <div class="mx-auto mb-14 max-w-3xl border border-frost/30 bg-[linear-gradient(90deg,rgba(61,134,198,.14),rgba(61,134,198,.03))] p-5 text-[.98rem]" role="note">
+      <div class="mx-auto mb-14 max-w-3xl border border-frost/30 bg-[linear-gradient(90deg,rgba(21,110,197,.14),rgba(21,110,197,.03))] p-5 text-[.98rem]" role="note">
         <strong class="text-bone">Screenshot coming soon.</strong>
         <span class="text-ash">
           Only rights-reviewed screenshots of reFrozen itself will appear here, chosen by the project maintainer. Until then,
@@ -74,7 +74,7 @@ const plates = [
                       <linearGradient id="pl-dawn" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#3a2a12" /><stop offset=".5" stop-color="#8a6a2c" /><stop offset="1" stop-color="#16200f" /></linearGradient>
                     </defs>
                     <rect width="400" height="300" fill="url(#pl-dawn)" />
-                    <circle cx="300" cy="120" r="46" fill="#f0d996" opacity=".55" />
+                    <circle cx="300" cy="120" r="46" fill="#eed2a7" opacity=".55" />
                     <path d="M0 200 Q90 150 180 190 T400 170 V300 H0Z" fill="#2c3d1c" />
                     <path d="M0 235 Q120 190 230 230 T400 215 V300 H0Z" fill="#1a2812" />
                     <path d="M0 270 Q140 240 260 268 T400 260 V300 H0Z" fill="#0e160a" />
@@ -82,7 +82,7 @@ const plates = [
                   <template v-else-if="p.id === 'river'">
                     <rect width="400" height="300" fill="#070b16" />
                     <g fill="#dff3ff"><circle cx="40" cy="30" r="1" /><circle cx="120" cy="60" r="1.3" /><circle cx="210" cy="24" r=".9" /><circle cx="330" cy="50" r="1.2" /><circle cx="370" cy="110" r=".8" /><circle cx="80" cy="120" r=".8" /></g>
-                    <path d="M-20 60 C 120 110, 200 150, 420 290" stroke="#9ad8ff" stroke-opacity=".25" stroke-width="40" fill="none" />
+                    <path d="M-20 60 C 120 110, 200 150, 420 290" stroke="#88d3f9" stroke-opacity=".25" stroke-width="40" fill="none" />
                     <path d="M-20 60 C 120 110, 200 150, 420 290" stroke="#dff3ff" stroke-opacity=".7" stroke-width="3" fill="none" />
                     <path d="M0 300 L0 210 L60 190 L110 230 L150 300Z" fill="#10180e" />
                     <path d="M400 0 L400 140 L340 120 L300 60 L310 0Z" fill="#141228" />
@@ -102,11 +102,11 @@ const plates = [
                   <template v-else>
                     <rect width="400" height="300" fill="#0b0805" />
                     <g>
-                      <circle cx="110" cy="130" r="70" fill="#e59a5b" opacity=".18" /><circle cx="110" cy="130" r="10" fill="#f0d996" opacity=".85" />
-                      <circle cx="290" cy="110" r="60" fill="#e59a5b" opacity=".15" /><circle cx="290" cy="110" r="8" fill="#f0d996" opacity=".8" />
+                      <circle cx="110" cy="130" r="70" fill="#e59a5b" opacity=".18" /><circle cx="110" cy="130" r="10" fill="#eed2a7" opacity=".85" />
+                      <circle cx="290" cy="110" r="60" fill="#e59a5b" opacity=".15" /><circle cx="290" cy="110" r="8" fill="#eed2a7" opacity=".8" />
                     </g>
                     <path d="M0 220 H400 V300 H0Z" fill="#1a120a" />
-                    <path d="M0 220 H400" stroke="#d8b868" stroke-opacity=".35" />
+                    <path d="M0 220 H400" stroke="#d4ae7a" stroke-opacity=".35" />
                   </template>
                 </svg>
                 <p class="plate__seal m-0" aria-hidden="true">Screenshot coming soon</p>
