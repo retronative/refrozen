@@ -8,7 +8,7 @@ import { base, siteUrl, cname } from './site-config.mjs'
 const root = resolve(import.meta.dirname, '..')
 const dist = join(root, 'dist')
 const ssrDir = join(root, '.ssr')
-const { render, staticPaths, aliasPaths, screenshots, hiddenPaths } = await import(pathToFileURL(join(ssrDir, 'entry-server.js')).href)
+const { render, staticPaths, aliasPaths, screenshots, hiddenPaths, ORG, REPO_URL } = await import(pathToFileURL(join(ssrDir, 'entry-server.js')).href)
 
 const template = readFileSync(join(dist, 'index.html'), 'utf8')
 
@@ -33,19 +33,46 @@ function absolute(path) {
   return siteUrl + base + path.replace(/^\//, '')
 }
 
+// JSON-LD with facts stated on the site only: the publisher, WebSite, the application and its
+// source repository on the home page, BreadcrumbList on docs pages. No versions, offers or
+// ratings (nothing is released).
+function structuredData(meta) {
+  const url = absolute(meta.canonical)
+  const graph = []
+  if (meta.canonical === '/') {
+    const publisher = { '@id': `${ORG.url}#organization` }
+    const app = { '@id': `${url}#application` }
+    graph.push(
+      { '@type': 'Organization', ...publisher, name: ORG.name, url: ORG.url },
+      { '@type': 'WebSite', name: 'reFrozen', url, inLanguage: 'en', publisher },
+      { '@type': 'SoftwareApplication', ...app, name: 'reFrozen', description: meta.description, url, applicationCategory: 'GameApplication', operatingSystem: 'macOS (Apple Silicon)', publisher, sameAs: [REPO_URL] },
+      { '@type': 'SoftwareSourceCode', name: 'reFrozen', codeRepository: REPO_URL, license: 'https://spdx.org/licenses/GPL-3.0-or-later.html', targetProduct: app, publisher },
+    )
+  }
+  if (meta.breadcrumbs) {
+    graph.push({
+      '@type': 'BreadcrumbList',
+      itemListElement: meta.breadcrumbs.map((crumb, i) => ({ '@type': 'ListItem', position: i + 1, name: crumb.name, item: absolute(crumb.path) })),
+    })
+  }
+  if (!graph.length) return ''
+  const json = JSON.stringify({ '@context': 'https://schema.org', '@graph': graph }).replace(/</g, '\\u003c')
+  return `\n    <script type="application/ld+json">${json}</script>`
+}
+
 function page({ html, meta, notFound }) {
   const title = escapeAttr(meta.title)
   const description = escapeAttr(meta.description)
   const extraHead = notFound
     ? '<meta name="robots" content="noindex" />'
     : `<link rel="canonical" href="${absolute(meta.canonical)}" />\n    <meta property="og:url" content="${absolute(meta.canonical)}" />` +
-      (hiddenPaths.includes(meta.canonical) ? '\n    <meta name="robots" content="noindex" />' : '')
+      (hiddenPaths.includes(meta.canonical) ? '\n    <meta name="robots" content="noindex" />' : structuredData(meta))
   return template
     .replace(/<title>.*?<\/title>/, `<title>${title}</title>`)
     .replace(/(<meta (?:name|property)="(?:description|og:description|twitter:description)" content=")[^"]*"/g, `$1${description}"`)
     .replace(/(<meta (?:property|name)="(?:og:title|twitter:title)" content=")[^"]*"/g, `$1${title}"`)
-    .replace(/(<meta (?:property|name)="(?:og:image|twitter:image)" content=")[^"]*"/g, `$1${absolute('/og.png')}"`)
-    .replace('<!--head-->', extraHead)
+    .replace(/(<meta (?:property|name)="(?:og:image|twitter:image)" content=")[^"]*"/g, `$1${absolute('/og.jpg')}"`)
+    .replace('<!--head-->', () => extraHead)
     .replace('<!--app-html-->', html)
 }
 
@@ -63,11 +90,10 @@ for (const path of [...staticPaths, ...aliasPaths]) {
 
 write(join(dist, '404.html'), page(await render('/404/')))
 
-const today = new Date().toISOString().slice(0, 10)
 write(
   join(dist, 'sitemap.xml'),
   `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n` +
-    staticPaths.filter((p) => !hiddenPaths.includes(p)).map((p) => `  <url><loc>${absolute(p)}</loc><lastmod>${today}</lastmod></url>`).join('\n') +
+    staticPaths.filter((p) => !hiddenPaths.includes(p)).map((p) => `  <url><loc>${absolute(p)}</loc></url>`).join('\n') +
     '\n</urlset>\n',
 )
 write(join(dist, 'robots.txt'), `User-agent: *\nAllow: /\n\nSitemap: ${absolute('/sitemap.xml')}\n`)

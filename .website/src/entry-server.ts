@@ -5,6 +5,7 @@ import { aliasPaths, metaFor, staticPaths } from './router'
 export { aliasPaths, staticPaths }
 export { screenshots } from './data/screenshots'
 export { hiddenPaths } from './data/flags'
+export { ORG, REPO_URL } from './data/links'
 
 export async function render(url: string) {
   const { app, router } = createApp()

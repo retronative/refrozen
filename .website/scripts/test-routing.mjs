@@ -7,6 +7,7 @@ import { join, relative, resolve } from 'node:path'
 import { createPagesServer } from './pages-sim.mjs'
 import { base, siteUrl } from './site-config.mjs'
 import { SHOW_SCREENSHOTS, hiddenPaths } from '../src/data/flags.ts'
+import { ISSUES_URL, ORG, REPO_URL } from '../src/data/links.ts'
 
 const dist = resolve(import.meta.dirname, '../dist')
 const server = createPagesServer(dist, base)
@@ -110,14 +111,32 @@ for (const path of [`${base}no-such-page`, `${base}no-such-page/`, `${base}FAQ/`
   rows.push(`${chain.join(' → ')}  404 page, ${assets} assets`)
 }
 
-// Open Graph image: absolute URL on the canonical origin, served from dist.
+// Open Graph image: absolute URL on the canonical origin, served from dist with the declared type
+// and pixel size.
 const home = await get(base)
-const og = /<meta property="og:image" content="([^"]+)"/.exec(home.body)?.[1] ?? ''
+const metaContent = (html, key) => new RegExp(`<meta (?:name|property)="${key}" content="([^"]*)"`).exec(html)?.[1]
+const og = metaContent(home.body, 'og:image') ?? ''
+const ogType = metaContent(home.body, 'og:image:type')
+const ogSize = [metaContent(home.body, 'og:image:width'), metaContent(home.body, 'og:image:height')].map(Number)
+function imageSize(buf) {
+  if (buf.readUInt32BE(0) === 0x89504e47) return [buf.readUInt32BE(16), buf.readUInt32BE(20)]
+  if (buf.readUInt16BE(0) === 0xffd8) {
+    for (let i = 2; i + 9 < buf.length; i += 2 + buf.readUInt16BE(i + 2)) {
+      const marker = buf.readUInt16BE(i)
+      if (marker >= 0xffc0 && marker <= 0xffcf && ![0xffc4, 0xffc8, 0xffcc].includes(marker)) return [buf.readUInt16BE(i + 7), buf.readUInt16BE(i + 5)]
+    }
+  }
+  return [0, 0]
+}
 if (!og.startsWith(`${siteUrl}${base}`)) fail(`og:image ${og} is not under ${siteUrl}${base}`)
 else {
   const res = await fetch(new URL(og.slice(siteUrl.length), origin))
-  if (res.status !== 200 || res.headers.get('content-type') !== 'image/png') fail(`og:image ${og} → ${res.status}`)
-  else rows.push(`200 ${og.slice(siteUrl.length)}  og:image (image/png)`)
+  if (res.status !== 200 || res.headers.get('content-type') !== ogType) fail(`og:image ${og} → ${res.status} ${res.headers.get('content-type')} (declared ${ogType})`)
+  else {
+    const size = imageSize(Buffer.from(await res.arrayBuffer()))
+    if (size.join('x') !== ogSize.join('x')) fail(`og:image is ${size.join('×')}, declared ${ogSize.join('×')}`)
+    else rows.push(`200 ${og.slice(siteUrl.length)}  og:image (${ogType}, ${size.join('×')})`)
+  }
 }
 
 // Hidden pages (src/data/flags.ts): still prerendered and served (checked above), but noindex, out of
@@ -138,6 +157,41 @@ if (SHOW_SCREENSHOTS) {
   if (!pages.find(([p]) => p === '/')[1].includes(`href="${base}screenshots/"`)) fail('SHOW_SCREENSHOTS is on but the home page does not link /screenshots/')
 }
 rows.push(`hidden pages: ${hiddenPaths.join(', ') || 'none'} (noindex, not in sitemap, unlinked)`)
+
+// SEO head tags on every page (and 404.html): non-empty title and description mirrored in og:/twitter:,
+// absolute og:image/twitter:image, canonical === og:url under the site URL, unique titles across
+// sitemap pages, valid JSON-LD; robots.txt points at the sitemap.
+const titles = new Map()
+for (const [path, html] of [...pages, ['/404.html', readFileSync(join(dist, '404.html'), 'utf8')]]) {
+  const head = html.slice(0, html.indexOf('</head>'))
+  const title = /<title>([^<]*)<\/title>/.exec(head)?.[1] ?? ''
+  const description = metaContent(head, 'description') ?? ''
+  if (!title.trim()) fail(`${path}: empty <title>`)
+  if (!description.trim()) fail(`${path}: empty meta description`)
+  for (const key of ['og:title', 'twitter:title']) if (metaContent(head, key) !== title) fail(`${path}: ${key} differs from <title>`)
+  for (const key of ['og:description', 'twitter:description']) if (metaContent(head, key) !== description) fail(`${path}: ${key} differs from the description`)
+  for (const key of ['og:image', 'twitter:image']) if (metaContent(head, key) !== og) fail(`${path}: ${key} is not ${og}`)
+  for (const [, json] of head.matchAll(/<script type="application\/ld\+json">([^<]*)<\/script>/g)) {
+    try {
+      JSON.parse(json)
+    } catch {
+      fail(`${path}: invalid JSON-LD`)
+    }
+  }
+  const footer = html.slice(html.lastIndexOf('<footer'))
+  for (const href of [ORG.url, REPO_URL, ISSUES_URL]) if (!footer.includes(`href="${href}"`)) fail(`${path}: footer does not link ${href}`)
+  if (path === '/404.html') continue
+  const canonical = canonicalOf(head)
+  if (!canonical?.startsWith(`${siteUrl}${base}`)) fail(`${path}: canonical ${canonical} is not under ${siteUrl}${base}`)
+  if (metaContent(head, 'og:url') !== canonical) fail(`${path}: og:url differs from the canonical URL`)
+  if (sitemap.includes(siteUrl + base + path.slice(1))) {
+    if (titles.has(title)) fail(`${path}: title "${title}" duplicates ${titles.get(title)}`)
+    titles.set(title, path)
+  }
+}
+const robots = readFileSync(join(dist, 'robots.txt'), 'utf8')
+if (!robots.split('\n').includes(`Sitemap: ${siteUrl}${base}sitemap.xml`)) fail('robots.txt does not reference the sitemap')
+rows.push(`head tags: ${pages.length + 1} pages with title, description, og/twitter, footer project links, ${titles.size} unique sitemap titles; robots.txt → sitemap`)
 
 server.close()
 console.log(`Pages simulation at ${base} — ${routes.length} routes × 2 URL forms, ${assetCache.size} distinct assets:`)

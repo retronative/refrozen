@@ -13,6 +13,8 @@ export interface PageMeta {
   description: string
   /** Canonical path (with trailing slash); undefined for the 404 page. */
   canonical?: string
+  /** Breadcrumb trail for docs pages (structured data), ending with the page itself. */
+  breadcrumbs?: { name: string; path: string }[]
 }
 
 const SITE = 'reFrozen'
@@ -133,14 +135,25 @@ export const aliasPaths = docs.filter((doc) => !doc.route.startsWith('/docs/')).
 
 const docRouteToSlug = Object.fromEntries(docs.map((doc) => [doc.route, doc.slug]))
 
+function breadcrumbsFor(canonical: string, title: string): PageMeta['breadcrumbs'] {
+  if (!canonical.startsWith('/docs/')) return undefined
+  const crumbs = [
+    { name: 'Home', path: '/' },
+    { name: 'Documentation', path: '/docs/' },
+  ]
+  if (canonical !== installPath() && canonical.startsWith(installPath())) crumbs.push({ name: 'Installation guide (preview)', path: installPath() })
+  if (canonical !== '/docs/') crumbs.push({ name: title.split(' — ')[0], path: canonical })
+  return crumbs
+}
+
 export function metaFor(route: RouteLocationNormalized): PageMeta {
   if (route.name === 'not-found') return route.meta as unknown as PageMeta
   const record = route.matched[route.matched.length - 1]
   const canonical = route.params.slug ? route.path : (record?.aliasOf ?? record)?.path ?? route.path
   const slug = typeof route.params.slug === 'string' ? route.params.slug : docRouteToSlug[canonical]
   const doc = slug ? findDoc(slug) : undefined
-  if (doc) return { title: `${doc.title} — ${SITE}`, description: doc.description, canonical }
-  return { ...(route.meta as unknown as PageMeta), canonical }
+  const meta = doc ? { title: `${doc.title} — ${SITE}`, description: doc.description } : (route.meta as unknown as PageMeta)
+  return { title: meta.title, description: meta.description, canonical, breadcrumbs: breadcrumbsFor(canonical, meta.title) }
 }
 
 export function createAppRouter(base: string) {

@@ -1,9 +1,17 @@
-// Renders public/og.png (1200×630). PROVISIONAL: the site's dawn/dusk river-split backdrop
-// and an original stroke-drawn wordmark (no font involved, so no font licence applies).
-// To be replaced once a hero art direction is approved.
-//   npm run og-image
+// RETIRED: renders the old provisional Open Graph image (1200×630 PNG: the site's dawn/dusk
+// river-split backdrop and an original stroke-drawn wordmark, no font involved). The published
+// image is now the owner's artwork in public/og.jpg, so this script is kept for reference only:
+// it has no npm script, needs an explicit output path and refuses to write into public/.
+//   node scripts/og-image.mjs <output.png>
 import { writeFileSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { relative, resolve } from 'node:path'
+
+const out = process.argv[2]
+const publicDir = resolve(import.meta.dirname, '../public')
+if (!out || !relative(publicDir, resolve(out)).startsWith('..')) {
+  console.error('Usage: node scripts/og-image.mjs <output.png> (outside public/; public/og.jpg is the owner\'s image)')
+  process.exit(1)
+}
 import { Resvg } from '@resvg/resvg-js'
 
 const OW = 1200
@@ -73,6 +81,6 @@ ${word('NOT AN EMULATOR · NOT WINE', { x: OW / 2, y: 384, size: 18, tracking: 2
 </svg>`
 
 const png = new Resvg(svg, { fitTo: { mode: 'width', value: OW } }).render().asPng()
-const file = resolve(import.meta.dirname, '../public/og.png')
+const file = resolve(out)
 writeFileSync(file, png)
 console.log(`Wrote ${file} (${png.length} bytes)`)

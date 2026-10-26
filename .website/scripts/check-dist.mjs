@@ -8,8 +8,8 @@ const ALLOWED_EXT = new Set(['.html', '.css', '.js', '.svg', '.woff2', '.txt', '
 const ALLOWED_NAMES = new Set(['CNAME', '.nojekyll'])
 const TEXT_EXT = new Set(['.html', '.css', '.js', '.svg', '.txt', '.xml', '.json', '.webmanifest'])
 const MAX_FILE_BYTES = 1_000_000
-// Raster images: only the generated Open Graph image and rights-reviewed screenshots.
-const OG_IMAGE = 'og.png'
+// Raster images: only the Open Graph image (the owner's artwork) and rights-reviewed screenshots.
+const OG_IMAGE = 'og.jpg'
 const OG_MAX_BYTES = 500_000
 const SCREENSHOT_EXT = new Set(['.png', '.webp'])
 const SCREENSHOT_MAX_BYTES = 1_500_000

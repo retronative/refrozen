@@ -15,7 +15,6 @@
     "test:routing": "node scripts/test-routing.mjs",
     "test:intro": "node --test scripts/test-intro.mjs",
     "pages-sim": "node scripts/pages-sim.mjs",
-    "og-image": "node scripts/og-image.mjs",
     "validate": "npm run check:status && npm run test:intro && npm run build && npm run check:links && npm run check:dist && npm run check:contrast && npm run test:routing"
   },
   "dependencies": {
