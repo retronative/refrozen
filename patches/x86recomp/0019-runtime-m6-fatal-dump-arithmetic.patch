@@ -1,0 +1,82 @@
+diff --git a/src/runtime/dispatch.cpp b/src/runtime/dispatch.cpp
+index fb56b10..00a4af8 100644
+--- a/src/runtime/dispatch.cpp
++++ b/src/runtime/dispatch.cpp
+@@ -97,25 +97,33 @@ namespace {
+ 
+ // <ID>_FATAL_DUMP: guest memory to hex-dump in a fatal report, for
+ // diagnosing a fault from game state (no game addresses in the runtime):
+-// comma-separated "<expr>:<length>" items, where <expr> is a number
+-// (0x-prefixed hex or decimal), "[<expr>]" (the 32-bit value at that
+-// address) or "<expr>+<number>". E.g. "[[0x6FAB65F4]+0x1C]+0x94:0x100".
++// comma-separated "<expr>:<length>" items (at most 0x1000 bytes each).
++// <expr> is terms joined by "+" and "-"; a term is a number (0x-prefixed
++// hex or decimal, unsigned, at most 0xFFFFFFFF) or "[<expr>]" (the 32-bit
++// value at that address, nested at most 8 deep), optionally followed by
++// "*<number>" factors, which bind tighter than "+" and "-". Arithmetic is
++// 32-bit and wraps. E.g. "[[0x401000]+0x1C]+[0x402000]*12+4:0x100".
+ // An unreadable address ends that item with a note, never a fault.
+ struct DumpParser {
++  static constexpr int kMaxDepth = 8;
+   const char* p;
+   bool ok = true;
++  int depth = 0;
+   uint32_t Number() {
++    if (*p < '0' || *p > '9') { ok = false; return 0; }
+     char* end = nullptr;
+-    unsigned long v = std::strtoul(p, &end, 0);
+-    if (end == p) ok = false;
++    unsigned long long v = std::strtoull(p, &end, 0);
++    if (v > 0xFFFFFFFFull) ok = false;
+     p = end;
+     return uint32_t(v);
+   }
+-  uint32_t Expr() {
++  uint32_t Term() {
+     uint32_t v;
+     if (*p == '[') {
+       ++p;
++      if (++depth > kMaxDepth) { ok = false; return 0; }
+       uint32_t a = Expr();
++      --depth;
+       if (*p != ']') { ok = false; return 0; }
+       ++p;
+       if (!ok || !g_proc->mem.IsCommitted(a) || !g_proc->mem.IsCommitted(a + 3)) { ok = false; return 0; }
+@@ -123,9 +131,18 @@ struct DumpParser {
+     } else {
+       v = Number();
+     }
+-    while (ok && *p == '+') {
++    while (ok && *p == '*') {
+       ++p;
+-      v += Number();
++      v *= Number();
++    }
++    return v;
++  }
++  uint32_t Expr() {
++    uint32_t v = Term();
++    while (ok && (*p == '+' || *p == '-')) {
++      char op = *p++;
++      uint32_t t = Term();
++      v = op == '+' ? v + t : v - t;
+     }
+     return v;
+   }
+diff --git a/src/runtime/runtime.h b/src/runtime/runtime.h
+index ffaa390..5604de0 100644
+--- a/src/runtime/runtime.h
++++ b/src/runtime/runtime.h
+@@ -162,9 +162,9 @@ void MapModule(Module& m);
+ // Handles both conventions: the stack pointer is restored afterwards.
+ uint32_t CallGuest(Ctx& c, uint32_t va, std::initializer_list<uint32_t> args);
+ 
+-// Evaluates a guest-memory expression in <ID>_FATAL_DUMP's syntax (a
+-// number, "[<expr>]" for the dword there, "<expr>+<number>"). False if it
+-// is malformed or reads memory that is not committed.
++// Evaluates a guest-memory expression in <ID>_FATAL_DUMP's syntax (numbers,
++// "[<expr>]" for the dword there, "+", "-", "*<number>"; 32-bit, wrapping).
++// False if it is malformed or reads memory that is not committed.
+ bool EvalGuestExpr(const char* expr, uint32_t* out);
+ 
+ // Sets up the process (arena, image, PEB, heaps, command line) and runs

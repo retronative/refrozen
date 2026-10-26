@@ -140,7 +140,7 @@ class Guest:
         self.var = {k: self.d.put(b"\0" * 4) for k in
                     ("hk", "type", "size", "lang", "port", "bytes", "key", "ovl", "wkey", "thread",
                      "hwave", "hwnd", "hdc", "logn", "seg0", "seg1", "seg2", "seg3", "hover", "tryres",
-                     "pcount", "perase", "pl", "pt", "pr", "pb", "phdc", "ecount", "hp", "hq", "cn")}
+                     "pcount", "perase", "pl", "pt", "pr", "pb", "phdc", "ecount", "hp", "hq", "cn", "xself")}
         self.clicks = self.d.put(b"\0" * 16)  # mode F: WM_LBUTTONDOWN lParams
         self.ps = self.d.put(b"\0" * 64)    # PAINTSTRUCT
         self.msg = self.d.put(b"\0" * 28)   # MSG
@@ -839,6 +839,7 @@ mode_s:
 mode_t:
 {g.t_code}{finish}
 mode_x:
+  mov dword ptr [{g.var['xself']:#x}], {g.var['xself']:#x}
   mov ebx, 0x22222222
   mov esi, 0x55555555
   mov edi, 0x66666666
@@ -1117,7 +1118,23 @@ def main():
             # FATAL_DUMP: guest memory named by expressions, dumped in the report.
             # Expected values from the PE format: "MZ" at the image base, the
             # PE signature at base + e_lfanew (read through a dereference).
-            code, out, fatal = run(tmp, binp, "X", FATAL_DUMP="0x400000:16,[0x40003C]+0x400000:4,[0x10]+4:8")
+            # Patch 0019's arithmetic, checked against the image this test
+            # writes: e_lfanew (0x3C) = 0x40, ImageBase at PE + 0x34 = 0x400000;
+            # 32-bit wrapping; "*" before "+"/"-", left to right; xself holds
+            # its own address (mode X stores it), so nested reads stay readable.
+            xs = f"{g.var['xself']:#x}"
+            deep = lambda n: "[" * n + xs + "]" * n
+            dumps = {
+                "sub": "0x400040-4", "prec": "0x400000+0xF*4", "sum": "0x400000+[0x40003C]",
+                "mixed": "[0x400000+[0x40003C]+0x34]*2-0x400000+0x3C",
+                "wrap_add": "0xFFFFFFFF+0x400001", "wrap_mul": "0x80100000*2+0x200000",
+                "too_big": "0x100000000+0x400000", "signed": "0x400000++4", "mul_expr": "0x10*[0x40003C]",
+                "trailing": "0x400000)", "unclosed": "[0x40003C",
+                "deep8": deep(8), "deep9": deep(9), "side9": "+".join([deep(1)] * 9),
+            }
+            spec = ",".join(["0x400000:16", "[0x40003C]+0x400000:4", "[0x10]+4:8", "0x400000:0x2000"] +
+                            [f"{e}:4" for e in dumps.values()])
+            code, out, fatal = run(tmp, binp, "X", FATAL_DUMP=spec)
             log = run.stderr
             check("X: an unhandled guest fault is fatal", code != 0 and bool(fatal), True)
             check("X: the fault address and the reason", bool(re.search(
@@ -1137,6 +1154,36 @@ def main():
                   v[1] if v else None, "00004550")
             check("X: FATAL_DUMP: an unreadable address is noted, not faulted",
                   "dump [0x10]+4: unreadable or malformed" in log, True)
+            check("X: FATAL_DUMP: a dump is at most 0x1000 bytes",
+                  ("dump 0x400000 = 00400000 (4096 bytes):" in log,
+                   len(re.findall(r"^    00400[0-9A-F]{3}:", log, re.M)) >= 256,
+                   bool(re.search(r"^    00401000:", log, re.M))), (True, True, False))
+            v = first_value(dumps["sub"])
+            check("X: FATAL_DUMP: subtraction (0x400040 - 4 = e_lfanew's address, 0x40 there)",
+                  v, ("0040003C", "00000040"))
+            v = first_value(dumps["prec"])
+            check("X: FATAL_DUMP: \"*\" binds tighter than \"+\"", v[0] if v else None, "0040003C")
+            v = first_value(dumps["sum"])
+            check("X: FATAL_DUMP: the sum of two expressions (base + [e_lfanew]) reaches the PE signature",
+                  v, ("00400040", "00004550"))
+            v = first_value(dumps["mixed"])
+            check("X: FATAL_DUMP: a read, a product and a difference, left to right (ImageBase*2 - base + 0x3C)",
+                  v, ("0040003C", "00000040"))
+            v = first_value(dumps["wrap_add"])
+            check("X: FATAL_DUMP: addition wraps at 32 bits", v[0] if v else None, "00400000")
+            v = first_value(dumps["wrap_mul"])
+            check("X: FATAL_DUMP: multiplication wraps at 32 bits", v[0] if v else None, "00400000")
+            for k, why in (("too_big", "a number over 32 bits"), ("signed", "a signed number"),
+                           ("mul_expr", "a product by a non-constant"), ("trailing", "trailing text"),
+                           ("unclosed", "an unclosed read")):
+                check(f"X: FATAL_DUMP: {why} is malformed", f"dump {dumps[k]}: unreadable or malformed" in log, True)
+            v = first_value(dumps["deep8"])
+            check("X: FATAL_DUMP: reads nest 8 deep", v[0] if v else None, f"{g.var['xself']:08X}")
+            check("X: FATAL_DUMP: a 9th nested read is refused",
+                  f"dump {dumps['deep9']}: unreadable or malformed" in log, True)
+            m9 = re.search(re.escape(f"dump {dumps['side9']} = ") + r"([0-9A-F]{8})", log)
+            check("X: FATAL_DUMP: reads side by side do not count as nested (nine summed)",
+                  m9.group(1) if m9 else None, f"{g.var['xself'] * 9 & 0xFFFFFFFF:08X}")
             crashes = os.path.join(tmp, "data", "win32test", "crashes")
             reports = [open(os.path.join(crashes, f)).read() for f in sorted(os.listdir(crashes))] \
                 if os.path.isdir(crashes) else []
