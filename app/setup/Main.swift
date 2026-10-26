@@ -1,6 +1,6 @@
 // reFrozen's first-run setup: the app's entry point.
 //
-//   reFrozen                      the setup window, or the game when setup is complete
+//   reFrozen                      the setup wizard, or the Mini Launcher once setup is complete
 //   reFrozen --setup <command>    the same steps without a window (tests, scripts):
 //     status                      needs-install | needs-build | ready
 //     prerequisites               one line per check; exit 1 if any fails
@@ -9,7 +9,8 @@
 //     owner <name>                ok, or the problem (exit 1)
 //     install <roc> <tft> <patch> <owner>   the two CD keys on stdin, one per line
 //     build                       build the game module, "progress <n>/<total>" lines
-//     add-map <file>
+//     add-map <file>              import a map (never overwrites one)
+//     play                        start the game (the Mini Launcher's Start Game)
 //     render <dir>                the window's pages as PNGs (previews)
 // Paths: REFROZEN_DATA (default ~/Library/Application Support/reFrozen) and
 // REFROZEN_KIT (default the app's Resources/kit).
@@ -25,8 +26,7 @@ enum Entry {
     if args.first == "--setup" {
       exit(SetupCLI.run(Array(args.dropFirst()), paths: paths))
     }
-    if state(paths) == .ready && !args.contains("--show-setup") { launchGame(paths) }
-    SetupApp.main()
+    SetupApp.main()  // the Mini Launcher when setup is complete, else the wizard
   }
 }
 
@@ -42,8 +42,10 @@ struct SetupApp: App {
 
   var body: some Scene {
     Window("reFrozen", id: "setup") {
-      SetupView(model: model)
-        .onAppear { NSApplication.shared.activate(ignoringOtherApps: true) }
+      Group {
+        if model.showLauncher { LauncherView(model: model) } else { SetupView(model: model) }
+      }
+      .onAppear { NSApplication.shared.activate(ignoringOtherApps: true) }
     }
     .windowResizability(.contentSize)
     .windowStyle(.hiddenTitleBar)
@@ -113,8 +115,20 @@ enum SetupCLI {
       print("built: \(paths.module.path)")
       return 0
     case ("add-map", 1):
-      do { print("added: \(try copyMap(URL(fileURLWithPath: rest[0]), paths: paths).path)"); return 0 }
-      catch { print("no: \(error)"); return 1 }
+      do {
+        switch try importMap(URL(fileURLWithPath: rest[0]), paths: paths) {
+        case .added(let u): print("added: \(u.path)")
+        case .alreadyInstalled(let u): print("already installed: \(u.path)")
+        case .renamed(let u): print("added as: \(u.path)")
+        }
+        return 0
+      } catch {
+        print("no: \(error)")
+        return 1
+      }
+    case ("play", 0):
+      guard state(paths) == .ready else { print("no: setup is not complete (\(state(paths)))"); return 1 }
+      launchGame(paths)
     case ("render", 1):
       return MainActor.assumeIsolated { Previews.render(to: URL(fileURLWithPath: rest[0]), paths: paths) }
     default:
@@ -194,11 +208,18 @@ enum Previews {
     // (text fields) render as they do on screen, and no screen recording
     // permission is involved.
     _ = NSApplication.shared
-    for (name, configure) in pages {
+    let launcher: (String, (SetupModel) -> Void) = ("6-launcher", { m in
+      m.showLauncher = true
+      m.maps = ["DotA v6.83dAI PMV 1.42 EN.w3x", "reFrozen Import Test.w3x"]
+      m.importNotes = ["Added reFrozen Import Test.w3x", "DotA v6.83dAI PMV 1.42 EN.w3x is already installed"]
+    })
+    for (name, configure) in pages + [launcher] {
       let model = SetupModel(paths: paths)
+      model.showLauncher = false
       configure(model)
-      let host = NSHostingView(rootView: SetupView(model: model))
-      host.frame = NSRect(x: 0, y: 0, width: 760, height: 560)
+      let view = model.showLauncher ? AnyView(LauncherView(model: model)) : AnyView(SetupView(model: model))
+      let host = NSHostingView(rootView: view)
+      host.frame = model.showLauncher ? NSRect(x: 0, y: 0, width: 560, height: 330) : NSRect(x: 0, y: 0, width: 760, height: 560)
       let window = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
       window.contentView = host
       window.appearance = NSAppearance(named: .darkAqua)

@@ -154,6 +154,19 @@ def main():
         rc, out = setup("add-map", MAP)
         check("map: a Warcraft III map is added", rc == 0 and os.path.exists(
             os.path.join(data, "game", "Maps", "Download", os.path.basename(MAP))), out)
+        dl = os.path.join(data, "game", "Maps", "Download")
+        rc, out = setup("add-map", MAP)
+        check("map: the same map again is already installed, not copied twice",
+              rc == 0 and "already installed" in out and len(os.listdir(dl)) == 1, out)
+        other = os.path.join(tmp, "other", os.path.basename(MAP))
+        os.makedirs(os.path.dirname(other))
+        open(other, "wb").write(open(MAP, "rb").read() + b"\0")  # a different map, same name
+        rc, out = setup("add-map", other)
+        kept = open(os.path.join(dl, os.path.basename(MAP)), "rb").read() == open(MAP, "rb").read()
+        stem, ext = os.path.splitext(os.path.basename(MAP))
+        check("map: a different map with the same name is added as (2), the installed one kept",
+              rc == 0 and kept and os.path.exists(os.path.join(dl, f"{stem} (2){ext}")), out)
+        check("map: no partial import file is left", not [n for n in os.listdir(dl) if n.startswith(".importing-")])
         for name, content, why in (("notes.w3x", b"not a map", "no map header"), ("map.txt", b"HM3W....", "extension"),
                                    ("big.w3x", b"HM3W" + b"\0" * (9 << 20), "over 8 MB")):
             p = os.path.join(tmp, name)

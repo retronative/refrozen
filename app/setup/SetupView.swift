@@ -29,6 +29,9 @@ final class SetupModel: ObservableObject {
   @Published var failure: String?
   @Published var working = false
   @Published var mapNote: String?
+  @Published var showLauncher = false  // setup is complete: the Mini Launcher
+  @Published var maps: [String] = []
+  @Published var importNotes: [String] = []
   // The input a file dialog is choosing. Kept apart from whether the dialog
   // is shown: the dialog's binding is cleared before its result arrives.
   @Published var picking: Input?
@@ -42,8 +45,9 @@ final class SetupModel: ObservableObject {
     switch state(paths) {
     case .needsInstall: page = .welcome
     case .needsBuild: page = .work  // installed earlier: only the game module is (re)built
-    case .ready: page = .done
+    case .ready: page = .done; showLauncher = true
     }
+    maps = installedMaps(paths)
   }
 
   var prereqsOK: Bool { !prereqs.isEmpty && prereqs.allSatisfy(\.ok) }
@@ -116,8 +120,26 @@ final class SetupModel: ObservableObject {
   func cancel() { current?.cancel() }
 
   func addMap(_ url: URL) {
-    do { mapNote = "Added \(try copyMap(url, paths: paths).lastPathComponent) to Maps/Download" }
-    catch { mapNote = "\(error)" }
+    mapNote = note(url)
+    maps = installedMaps(paths)
+  }
+
+  // Several maps at once (the Mini Launcher): one line each.
+  func importMaps(_ urls: [URL]) {
+    importNotes = urls.map(note)
+    maps = installedMaps(paths)
+  }
+
+  private func note(_ url: URL) -> String {
+    do {
+      switch try importMap(url, paths: paths) {
+      case .added(let u): return "Added \(u.lastPathComponent)"
+      case .alreadyInstalled(let u): return "\(u.lastPathComponent) is already installed"
+      case .renamed(let u): return "Added as \(u.lastPathComponent) (a different map has that name)"
+      }
+    } catch {
+      return "\(url.lastPathComponent): \(error)"
+    }
   }
 
   private func begin(_ step: Step, _ phase: String, _ progress: Double?) {
@@ -178,6 +200,68 @@ struct SetupView: View {
     }
     .padding(.horizontal, 28).padding(.vertical, 16)
     .background(Theme.abyss)
+  }
+}
+
+// Every launch after setup: add maps, or start the game. The full wizard is
+// only for the first run and for recovery (an install or module missing).
+struct LauncherView: View {
+  @ObservedObject var model: SetupModel
+
+  var body: some View {
+    VStack(spacing: 0) {
+      HStack(spacing: 14) {
+        if let image = NSImage(contentsOf: model.paths.kit.appendingPathComponent("resources/icon.png")) {
+          Image(nsImage: image).resizable().frame(width: 44, height: 44)
+        }
+        VStack(alignment: .leading, spacing: 2) {
+          (Text("re").font(Theme.serifItalic(26)).foregroundStyle(Theme.frost)
+            + Text("FROZEN").font(Theme.display(24)).foregroundStyle(Theme.goldBright))
+          Text("NATIVE ON APPLE SILICON").font(Theme.display(9)).tracking(3).foregroundStyle(Theme.gold)
+        }
+        Spacer()
+      }
+      .padding(.horizontal, 24).padding(.vertical, 14)
+      .background(Theme.abyss)
+      Rectangle().fill(Theme.goldMetal).frame(height: 1).opacity(0.8)
+      VStack(alignment: .leading, spacing: 16) {
+        Panel {
+          VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+              Stud()
+              Text("Your maps").font(Theme.display(14)).foregroundStyle(Theme.goldBright)
+              Spacer()
+              Text("\(model.maps.count) in Custom Game").font(Theme.body(12)).foregroundStyle(Theme.ash)
+            }
+            if model.importNotes.isEmpty {
+              Text(model.maps.isEmpty ? "No maps yet. Install a map you have to play it in Single Player → Custom Game."
+                                      : model.maps.prefix(4).joined(separator: " · ")
+                                        + (model.maps.count > 4 ? " · …" : ""))
+                .font(Theme.body(12)).foregroundStyle(Theme.ash).lineLimit(2)
+            } else {
+              ForEach(model.importNotes, id: \.self) { n in
+                Text(n).font(Theme.body(12)).foregroundStyle(n.contains(": ") ? Theme.ember : Theme.verdant).lineLimit(1)
+              }
+            }
+          }
+        }
+        Spacer(minLength: 0)
+        HStack {
+          Button("Install New Maps") { model.pickingMap = true }.buttonStyle(FrostButtonStyle(prominent: false))
+          Spacer()
+          Button("Start Game") { launchGame(model.paths) }.buttonStyle(FrostButtonStyle())
+            .keyboardShortcut(.defaultAction)
+        }
+      }
+      .padding(24)
+      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+    .frame(width: 560, height: 330)
+    .background(LinearGradient(colors: [Theme.slab2, Theme.abyss], startPoint: .top, endPoint: .bottom))
+    .foregroundStyle(Theme.bone)
+    .fileImporter(isPresented: $model.pickingMap, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
+      if case .success(let urls) = result { model.importMaps(urls) }
+    }
   }
 }
 

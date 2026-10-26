@@ -356,20 +356,49 @@ struct BuildProgress {
 
 // MARK: - Maps
 
-// Copies a player-supplied map into the game's Maps/Download folder. A
+enum MapImport: Equatable {
+  case added(URL), alreadyInstalled(URL), renamed(URL)
+  var url: URL {
+    switch self { case .added(let u), .alreadyInstalled(let u), .renamed(let u): return u }
+  }
+}
+
+// Imports a player-supplied map into the game's Maps/Download folder (the
+// game lists it in Custom Game; nothing is reinstalled or rebuilt). A
 // Warcraft III map starts with "HM3W" and 1.26a loads maps up to 8 MB.
-func copyMap(_ url: URL, paths: Paths) throws -> URL {
+// Existing maps are never overwritten: the same file again is reported as
+// installed, a different map with the same name is added as "<name> (2)".
+// The file appears under its final name only once complete.
+func importMap(_ url: URL, paths: Paths) throws -> MapImport {
   let ext = url.pathExtension.lowercased()
   guard ext == "w3x" || ext == "w3m" else { throw SetupError("not a Warcraft III map (.w3x or .w3m)") }
   let data = try Data(contentsOf: url)
   guard data.count <= 8 << 20 else { throw SetupError("over 8 MB: Warcraft III 1.26a cannot load it") }
   guard data.starts(with: Array("HM3W".utf8)) else { throw SetupError("not a Warcraft III map (no map header)") }
+  let fm = FileManager.default
   let dir = paths.game.appendingPathComponent("Maps/Download")
-  try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-  let dest = dir.appendingPathComponent(url.lastPathComponent)
-  try? FileManager.default.removeItem(at: dest)
-  try FileManager.default.copyItem(at: url, to: dest)
-  return dest
+  try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+  let stem = url.deletingPathExtension().lastPathComponent, suffix = url.pathExtension
+  for n in 1... {
+    let dest = dir.appendingPathComponent(n == 1 ? url.lastPathComponent : "\(stem) (\(n)).\(suffix)")
+    if fm.fileExists(atPath: dest.path) {
+      if (try? Data(contentsOf: dest)) == data { return .alreadyInstalled(dest) }
+      continue
+    }
+    let tmp = dir.appendingPathComponent(".importing-\(UUID().uuidString)")
+    try data.write(to: tmp)
+    do { try fm.moveItem(at: tmp, to: dest) } catch { try? fm.removeItem(at: tmp); throw error }
+    return n == 1 ? .added(dest) : .renamed(dest)
+  }
+  fatalError("unreachable")
+}
+
+// The maps in Maps/Download, by name.
+func installedMaps(_ paths: Paths) -> [String] {
+  let dir = paths.game.appendingPathComponent("Maps/Download")
+  let names = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
+  return names.filter { ["w3x", "w3m"].contains(($0 as NSString).pathExtension.lowercased()) }
+    .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
 }
 
 // MARK: - Play
