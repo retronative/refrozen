@@ -276,28 +276,47 @@ struct FilesPage: View {
     }
   }
 
+  // [icon] Title (what to choose)
+  //        the chosen folder or file
+  //        ✓ the verified input, or why not
   private func row(_ input: Input) -> some View {
     let check = model.checks[input] ?? InputCheck.none
     let ok: Bool? = { if case .ok = check { return true }; if case .bad = check { return false }; return nil }()
-    return HStack(alignment: .top, spacing: 10) {
-      StatusMark(ok: ok)
+    let url = model.urls[input]
+    let title = input == .roc ? "Reign of Chaos installer" : input == .tft ? "The Frozen Throne installer" : "Patch 1.26a"
+    let hint = input == .patch ? "War3TFT_126a_English.exe" : "dir"
+    return HStack(alignment: .top, spacing: 12) {
+      Image(nsImage: fileIcon(input, url)).resizable().frame(width: 34, height: 34)
       VStack(alignment: .leading, spacing: 3) {
-        Text(input == .roc ? "Reign of Chaos installer" : input == .tft ? "The Frozen Throne installer" : "Patch 1.26a")
-          .font(Theme.bodyMedium(13))
-        Group {
-          switch check {
-          case .none: Text(model.urls[input]?.path ?? "not chosen").foregroundStyle(Theme.ash)
-          case .checking(let f): FrostBar(value: f).frame(width: 220)
-          case .ok(let label): Text(label).foregroundStyle(Theme.verdant)
-          case .bad(let reason): Text(reason).foregroundStyle(Theme.ember)
+        (Text(title).font(Theme.bodyMedium(13)) + Text("  (\(hint))").font(Theme.body(12)).foregroundColor(Theme.ash))
+        Text(url?.lastPathComponent ?? "not chosen").font(Theme.body(12))
+          .foregroundStyle(url == nil ? Theme.ash : Theme.bone).lineLimit(1).truncationMode(.middle)
+        if check != .none {
+          HStack(spacing: 6) {
+            StatusMark(ok: ok)
+            switch check {
+            case .checking(let f): FrostBar(value: f).frame(width: 200)
+            case .ok(let label): Text(label).foregroundStyle(Theme.verdant)
+            case .bad(let reason): Text(reason).foregroundStyle(Theme.ember)
+            case .none: EmptyView()
+            }
           }
+          .font(Theme.body(12))
         }
-        .font(Theme.body(12))
       }
       Spacer()
       Button("Choose…") { model.picking = input; model.showingPicker = true }.buttonStyle(FrostButtonStyle(prominent: false))
     }
   }
+
+  // A folder's own Finder icon; the patch always gets the plain document icon
+  // (an .exe's icon is whichever app claims .exe on this Mac, Wine for example).
+  private func fileIcon(_ input: Input, _ url: URL?) -> NSImage {
+    if input == .patch { return NSWorkspace.shared.icon(for: .data) }
+    if let url = url { return NSWorkspace.shared.icon(forFile: url.path) }
+    return NSWorkspace.shared.icon(for: .folder)
+  }
+
 }
 
 struct KeysPage: View {

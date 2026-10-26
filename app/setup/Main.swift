@@ -160,8 +160,10 @@ enum Previews {
       }),
       ("2-files", { m in
         m.page = .files
-        m.checks = [.roc: .ok(knownInputs[.roc]!.label), .tft: .checking(0.42),
-                    .patch: .bad("not Patch 1.26a (English): reFrozen is verified with that version only")]
+        let src = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Code/retronative/DOTA/ICC Game client install")
+        m.urls = [.roc: src.appendingPathComponent("Warcraft III 1.21b ROC Installer enGB"),
+                  .tft: src.appendingPathComponent("Warcraft III 1.21b TFT Installer enGB")]
+        m.checks = [.roc: .ok(knownInputs[.roc]!.label), .tft: .checking(0.42)]
       }),
       ("3-keys", { m in
         m.page = .keys
