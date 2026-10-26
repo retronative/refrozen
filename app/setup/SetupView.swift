@@ -29,7 +29,10 @@ final class SetupModel: ObservableObject {
   @Published var failure: String?
   @Published var working = false
   @Published var mapNote: String?
-  @Published var picking: Input?  // the file dialog open for this input
+  // The input a file dialog is choosing. Kept apart from whether the dialog
+  // is shown: the dialog's binding is cleared before its result arrives.
+  @Published var picking: Input?
+  @Published var showingPicker = false
   @Published var pickingMap = false
   private var current: Step?
   private var log: SetupLog?
@@ -267,10 +270,9 @@ struct FilesPage: View {
         Button("Continue") { model.page = .keys }.buttonStyle(FrostButtonStyle()).disabled(!model.filesOK)
       }
     }
-    .fileImporter(isPresented: Binding(get: { model.picking != nil }, set: { if !$0 { model.picking = nil } }),
+    .fileImporter(isPresented: $model.showingPicker,
                   allowedContentTypes: model.picking == .patch ? [.item] : [.folder]) { result in
       if let input = model.picking, case .success(let url) = result { model.choose(input, url) }
-      model.picking = nil
     }
   }
 
@@ -293,7 +295,7 @@ struct FilesPage: View {
         .font(Theme.body(12))
       }
       Spacer()
-      Button("Choose…") { model.picking = input }.buttonStyle(FrostButtonStyle(prominent: false))
+      Button("Choose…") { model.picking = input; model.showingPicker = true }.buttonStyle(FrostButtonStyle(prominent: false))
     }
   }
 }
