@@ -1,0 +1,25 @@
+reFrozen
+Copyright (C) 2026 reFrozen contributors
+
+reFrozen is free software: you can redistribute it and/or modify it under the
+terms of the GNU General Public License as published by the Free Software
+Foundation, either version 3 of the License, or (at your option) any later
+version (GPL-3.0-or-later). The full text of version 3 is in COPYING.
+
+reFrozen is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+PARTICULAR PURPOSE. See the GNU General Public License for more details.
+
+reFrozen's runtime and recompiler changes (patches/x86recomp/) are modifications
+of x86recomp (https://github.com/JTM-rootstorm/x86recomp), Copyright (c) 2026 JT,
+used under the MIT License (LICENSES/x86recomp-MIT.txt). Third-party components
+are listed in THIRD_PARTY_NOTICES.md.
+
+reFrozen is an unofficial, fan-made project. It is not affiliated with, endorsed
+by, or sponsored by Blizzard Entertainment, Inc. "Warcraft", "Warcraft III",
+"Reign of Chaos" and "The Frozen Throne" are trademarks or registered trademarks
+of Blizzard Entertainment, Inc. "DotA" and "DotA Allstars" are community maps by
+their respective authors. All other trademarks belong to their respective owners.
+
+No game files are included or distributed. You need your own legally obtained
+copy of Warcraft III: Reign of Chaos and The Frozen Throne.

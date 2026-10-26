@@ -32,8 +32,10 @@ reFrozen builds on open-source work, including:
 - **SDL3** (zlib licence), the cross-platform layer under reFrozen's runtime for windows, input,
   graphics and audio.
 
-A complete list of third-party components and their licences will accompany the first release.
-reFrozen's own licence has not been decided yet; until it is, no licence is granted for its code.
+reFrozen is free software under the GNU General Public License, version 3 or (at your option) any
+later version. Its third-party components and their licences are listed in
+[THIRD_PARTY_NOTICES.md](https://github.com/retronative/refrozen/blob/main/THIRD_PARTY_NOTICES.md),
+and a release will carry them too.
 
 ### This website
 

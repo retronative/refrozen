@@ -29,3 +29,14 @@ Statically recompile the game's executable codefor arm64, and run it on a native
 reimplements the platform it was written for. Here the guest is **x86 Win32** (`war3.exe` + 
 `Game.dll` 1.26a and their DLLs), not an Xbox 360, so the runtime replaces Win32, Direct3D 8/9, 
 DirectSound and Storm instead of an Xbox kernel. M0 decides whether this is feasible.
+
+## Contributing and security
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). Report security problems privately, as described in
+[SECURITY.md](SECURITY.md).
+
+## Licence
+
+reFrozen is free software under the GNU General Public License, version 3 or (at your option) any
+later version (GPL-3.0-or-later): see [COPYING](COPYING) and [NOTICE](NOTICE). Third-party
+components and their licences are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
