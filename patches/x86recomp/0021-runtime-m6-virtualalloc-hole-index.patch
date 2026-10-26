@@ -1,0 +1,376 @@
+diff --git a/src/runtime/guest_alloc.cpp b/src/runtime/guest_alloc.cpp
+index 14af53a..453b0f7 100644
+--- a/src/runtime/guest_alloc.cpp
++++ b/src/runtime/guest_alloc.cpp
+@@ -19,7 +19,40 @@ void GuestAllocator::Init(GuestMemory* mem, uint32_t lo, uint32_t hi) {
+ 
+ void GuestAllocator::MarkReserved(uint32_t va, uint32_t size) {
+   std::lock_guard<std::recursive_mutex> l(mu_);
+-  regions_[va] = size;
++  Insert(va, size);
++}
++
++uint32_t GuestAllocator::CandidateBefore(Regions::const_iterator it) const {
++  if (it == regions_.begin()) return lo_;
++  auto p = std::prev(it);
++  if (uint64_t(p->first) + p->second <= lo_) return lo_;
++  return RoundUp(p->first + p->second, kGranularity);
++}
++
++void GuestAllocator::UpdateGap(Regions::const_iterator it) {
++  uint32_t cand = CandidateBefore(it);
++  if (it->first > cand)
++    gaps_[it->first] = cand;
++  else
++    gaps_.erase(it->first);
++}
++
++// A reservation's own entry and the one above it are the only ones that
++// depend on it.
++void GuestAllocator::Insert(uint32_t base, uint32_t size) {
++  auto it = regions_.insert_or_assign(base, size).first;
++  auto next = std::next(it);
++  if ((it != regions_.begin() && uint64_t(std::prev(it)->first) + std::prev(it)->second > base) ||
++      (next != regions_.end() && uint64_t(base) + size > next->first))
++    overlapped_ = true;
++  UpdateGap(it);
++  if (++it != regions_.end()) UpdateGap(it);
++}
++
++void GuestAllocator::Erase(Regions::iterator it) {
++  gaps_.erase(it->first);
++  it = regions_.erase(it);
++  if (it != regions_.end()) UpdateGap(it);
+ }
+ 
+ bool GuestAllocator::FindLocked(uint32_t va, Region* out) const {
+@@ -63,9 +96,22 @@ uint32_t GuestAllocator::Reserve(uint32_t va, uint32_t size, bool top_down) {
+   if (va) {
+     va &= ~(kGranularity - 1);
+     if (!fits(va)) return 0;
+-    regions_[va] = size;
++    Insert(va, size);
+     return va;
+   }
++  // The lowest hole that is large enough, else above the last reservation.
++  if (!top_down && !overlapped_) {
++    uint32_t cand = CandidateBefore(regions_.end());
++    for (const auto& [base, below] : gaps_) {
++      if (base - below >= size) {
++        cand = below;
++        break;
++      }
++    }
++    if (!fits(cand)) return 0;
++    Insert(cand, size);
++    return cand;
++  }
+   // Walk the gaps between reservations.
+   if (!top_down) {
+     uint32_t cand = lo_;
+@@ -75,7 +121,7 @@ uint32_t GuestAllocator::Reserve(uint32_t va, uint32_t size, bool top_down) {
+       cand = RoundUp(it->first + it->second, kGranularity);
+     }
+     if (!fits(cand)) return 0;
+-    regions_[cand] = size;
++    Insert(cand, size);
+     return cand;
+   }
+   uint32_t top = hi_;
+@@ -91,7 +137,7 @@ uint32_t GuestAllocator::Reserve(uint32_t va, uint32_t size, bool top_down) {
+   if (top < size) return 0;
+   uint32_t cand = (top - size) & ~(kGranularity - 1);
+   if (!fits(cand)) return 0;
+-  regions_[cand] = size;
++  Insert(cand, size);
+   return cand;
+ }
+ 
+@@ -125,7 +171,7 @@ bool GuestAllocator::Release(uint32_t base, bool zero) {
+   auto it = regions_.find(base);
+   if (it == regions_.end()) return false;
+   mem_->Decommit(base, it->second, zero);
+-  regions_.erase(it);
++  Erase(it);
+   return true;
+ }
+ 
+diff --git a/src/runtime/guest_alloc.h b/src/runtime/guest_alloc.h
+index c6f3da3..59bc4dd 100644
+--- a/src/runtime/guest_alloc.h
++++ b/src/runtime/guest_alloc.h
+@@ -47,11 +47,25 @@ class GuestAllocator {
+   GuestMemory& mem() { return *mem_; }
+ 
+  private:
++  using Regions = std::map<uint32_t, uint32_t>;  // base -> size
+   bool FindLocked(uint32_t va, Region* out) const;
++  // The bottom-up first fit (Reserve with va == 0) walks the reservations
++  // from lo_, trying just above each one; the address it tries before a
++  // reservation depends only on the reservation below it (CandidateBefore).
++  // gaps_ keeps that address for every reservation with free space below
++  // it, so the walk visits the holes instead of every reservation. That
++  // holds while reservations do not overlap (Reserve never makes them
++  // overlap; MarkReserved could): after an overlap, the full walk.
++  uint32_t CandidateBefore(Regions::const_iterator it) const;
++  void UpdateGap(Regions::const_iterator it);
++  void Insert(uint32_t base, uint32_t size);
++  void Erase(Regions::iterator it);
+ 
+   GuestMemory* mem_ = nullptr;
+   uint32_t lo_ = 0, hi_ = 0;
+-  std::map<uint32_t, uint32_t> regions_;  // base -> size
++  Regions regions_;
++  std::map<uint32_t, uint32_t> gaps_;  // base -> the address tried below it, when lower
++  bool overlapped_ = false;
+   mutable std::recursive_mutex mu_;
+ };
+ 
+diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
+index f708fe1..93f2500 100644
+--- a/tests/CMakeLists.txt
++++ b/tests/CMakeLists.txt
+@@ -111,6 +111,17 @@ target_compile_features(lazy_mem_test PRIVATE cxx_std_20)
+ target_link_libraries(lazy_mem_test PRIVATE Threads::Threads)
+ add_test(NAME lazy_mem COMMAND lazy_mem_test)
+ 
++# guest_alloc_test: GuestAllocator's reservations against its earlier
++# implementation, kept in the test (random sequences); portable.
++add_executable(guest_alloc_test guest_alloc_test.cpp
++               ${PROJECT_SOURCE_DIR}/src/runtime/guest_memory.cpp
++               ${PROJECT_SOURCE_DIR}/src/runtime/guest_alloc.cpp)
++target_include_directories(guest_alloc_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
++target_compile_features(guest_alloc_test PRIVATE cxx_std_20)
++target_compile_options(guest_alloc_test PRIVATE -O2)
++add_test(NAME guest_alloc COMMAND guest_alloc_test)
++set_tests_properties(guest_alloc PROPERTIES TIMEOUT 300)
++
+ # lift_semantics_test checks the integer/flag helpers in lifted.h against
+ # the host CPU the same way.
+ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64)$")
+diff --git a/tests/guest_alloc_test.cpp b/tests/guest_alloc_test.cpp
+new file mode 100644
+index 0000000..92a280f
+--- /dev/null
++++ b/tests/guest_alloc_test.cpp
+@@ -0,0 +1,220 @@
++// guest_alloc_test: GuestAllocator against the reference, its earlier
++// implementation kept here verbatim (reservations in a map; a reservation
++// at va == 0 walks every reservation from lo_ to the first gap large enough,
++// or from hi_ down with top_down). Random sequences of reservations (lowest
++// free, top down, at an address), releases (also of addresses that are not
++// reservation bases) and permanent reservations (unaligned, below lo_, one
++// ending at 4 GiB) must give the same address for every reservation and the
++// same Find and FreeGap answers, including when the arena runs out.
++
++#include <algorithm>
++#include <cstdio>
++#include <map>
++#include <random>
++#include <string>
++#include <vector>
++
++#include "runtime/guest_alloc.h"
++#include "runtime/guest_memory.h"
++
++using namespace recomp;
++
++namespace {
++
++// The earlier GuestAllocator's reservation logic (no memory, no lock).
++struct Reference {
++  static constexpr uint32_t kGranularity = 0x10000;
++  static constexpr uint32_t kPage = GuestMemory::kPageSize;
++  uint32_t lo_ = 0, hi_ = 0;
++  std::map<uint32_t, uint32_t> regions_;
++
++  static uint32_t RoundUp(uint32_t v, uint32_t a) { return (v + a - 1) & ~(a - 1); }
++
++  void MarkReserved(uint32_t va, uint32_t size) { regions_[va] = size; }
++
++  uint32_t Reserve(uint32_t va, uint32_t size, bool top_down) {
++    if (!size) return 0;
++    size = RoundUp(size, kPage);
++    auto fits = [&](uint32_t base) {
++      if (base < lo_ || uint64_t(base) + size > hi_) return false;
++      auto it = regions_.lower_bound(base);
++      if (it != regions_.end() && it->first < base + size) return false;
++      if (it != regions_.begin()) {
++        auto p = std::prev(it);
++        if (uint64_t(p->first) + p->second > base) return false;
++      }
++      return true;
++    };
++    if (va) {
++      va &= ~(kGranularity - 1);
++      if (!fits(va)) return 0;
++      regions_[va] = size;
++      return va;
++    }
++    if (!top_down) {
++      uint32_t cand = lo_;
++      for (auto it = regions_.begin(); it != regions_.end(); ++it) {
++        if (uint64_t(it->first) + it->second <= cand) continue;
++        if (it->first >= cand && it->first - cand >= size) break;
++        cand = RoundUp(it->first + it->second, kGranularity);
++      }
++      if (!fits(cand)) return 0;
++      regions_[cand] = size;
++      return cand;
++    }
++    uint32_t top = hi_;
++    for (auto it = regions_.rbegin(); it != regions_.rend(); ++it) {
++      uint32_t end = it->first + it->second;
++      if (end > top) {
++        top = std::min(top, it->first);
++        continue;
++      }
++      if (top - end >= size) break;
++      top = it->first;
++    }
++    if (top < size) return 0;
++    uint32_t cand = (top - size) & ~(kGranularity - 1);
++    if (!fits(cand)) return 0;
++    regions_[cand] = size;
++    return cand;
++  }
++
++  bool Release(uint32_t base) { return regions_.erase(base) == 1; }
++
++  bool Find(uint32_t va, GuestAllocator::Region* out) const {
++    auto it = regions_.upper_bound(va);
++    if (it == regions_.begin()) return false;
++    --it;
++    if (va - it->first >= it->second) return false;
++    out->base = it->first;
++    out->size = it->second;
++    return true;
++  }
++
++  void FreeGap(uint32_t va, uint32_t* base, uint32_t* size) const {
++    uint32_t start = va & ~(kPage - 1);
++    auto next = regions_.upper_bound(start);
++    uint32_t end = next == regions_.end() ? hi_ : next->first;
++    *base = start;
++    *size = end > start ? end - start : 0;
++  }
++};
++
++GuestMemory g_mem;
++int g_failures = 0;
++
++void Check(const char* name, bool ok, const char* detail = "") {
++  std::printf("%s %s%s%s\n", ok ? "ok  " : "FAIL", name, ok ? "" : ": ", ok ? "" : detail);
++  g_failures += !ok;
++}
++
++// One random sequence; returns a description of the first difference, or "".
++std::string Run(uint32_t seed, uint32_t lo, uint32_t hi, int ops, bool big, bool late) {
++  GuestAllocator vm;
++  vm.Init(&g_mem, lo, hi);
++  Reference ref;
++  ref.lo_ = lo;
++  ref.hi_ = hi;
++  std::mt19937 rng(seed);
++  auto mark = [&](uint32_t va, uint32_t size) {
++    vm.MarkReserved(va, size);
++    ref.MarkReserved(va, size);
++  };
++  // Permanent reservations as the runtime makes them (images, the thunk
++  // region), plus the awkward ones: unaligned, below lo, ending at 4 GiB.
++  mark(0x00400000, 0x00123000);
++  mark(0x6F000000, 0x00AD5000);
++  mark(0x00008000, 0x00004000);
++  mark(0x15000000, 0x00047800);
++  mark(0xFFFF0000, 0x00010000);
++  std::vector<uint32_t> live;
++  char buf[256];
++  for (int i = 0; i < ops; i++) {
++    uint32_t r = rng() % 100;
++    if (r < 40 && !live.empty()) {  // release a reservation
++      size_t k = rng() % live.size();
++      uint32_t base = live[k];
++      live[k] = live.back();
++      live.pop_back();
++      bool a = vm.Release(base, false), b = ref.Release(base);
++      if (a != b) {
++        std::snprintf(buf, sizeof buf, "op %d: Release(%08X) %d, reference %d", i, base, a, b);
++        return buf;
++      }
++    } else if (r < 42) {  // release an address that is not a base
++      uint32_t va = lo + (rng() % ((hi - lo) / 0x1000)) * 0x1000 + 0x1000;
++      bool a = vm.Release(va, false), b = ref.Release(va);
++      if (a != b) {
++        std::snprintf(buf, sizeof buf, "op %d: Release(%08X) %d, reference %d", i, va, a, b);
++        return buf;
++      }
++      if (a) live.erase(std::remove(live.begin(), live.end(), va), live.end());
++    } else if (late && r < 43) {  // a late permanent reservation, maybe overlapping one
++      uint32_t va = rng() % 2 && !live.empty() ? live[rng() % live.size()]
++                                               : lo + (rng() % ((hi - lo) >> 12)) * 0x1000;
++      mark(va, (1 + rng() % 64) * 0x1000);
++    } else {
++      bool top = r < 50;
++      uint32_t va = r >= 50 && r < 58 ? lo + (rng() % ((hi - lo) >> 16)) * 0x10000 : 0;
++      uint32_t size = big && rng() % 10 == 0 ? (1 + rng() % 256) * 0x10000 : 1 + rng() % 0x30000;
++      uint32_t a = vm.Reserve(va, size, top), b = ref.Reserve(va, size, top);
++      if (a != b) {
++        std::snprintf(buf, sizeof buf, "op %d: Reserve(%08X, %X, %s) %08X, reference %08X", i, va, size,
++                      top ? "top down" : "bottom up", a, b);
++        return buf;
++      }
++      if (a) live.push_back(a);
++    }
++    if (i % 97 == 0) {  // lookups agree
++      for (int k = 0; k < 8; k++) {
++        uint32_t va = rng();
++        GuestAllocator::Region x, y;
++        bool a = vm.Find(va, &x), b = ref.Find(va, &y);
++        if (a != b || (a && (x.base != y.base || x.size != y.size))) {
++          std::snprintf(buf, sizeof buf, "op %d: Find(%08X) differs", i, va);
++          return buf;
++        }
++        uint32_t gb, gs, rb, rs;
++        vm.FreeGap(va, &gb, &gs);
++        ref.FreeGap(va, &rb, &rs);
++        if (gb != rb || gs != rs) {
++          std::snprintf(buf, sizeof buf, "op %d: FreeGap(%08X) differs", i, va);
++          return buf;
++        }
++      }
++    }
++  }
++  return "";
++}
++
++}  // namespace
++
++int main() {
++  if (!g_mem.Reserve()) return 1;
++  struct Scenario {
++    const char* name;
++    uint32_t lo, hi;
++    int ops;
++    bool big, late;
++  };
++  const Scenario scenarios[] = {
++      // No late permanent reservation, as in the runtime: the hole index throughout.
++      {"the runtime's arena (lo 0x10000, hi below the thunks), small reservations", 0x10000, 0x7FFF0000u, 60000,
++       false, false},
++      {"the runtime's arena with large reservations too", 0x10000, 0x7FFF0000u, 30000, true, false},
++      {"a 64 MiB arena that runs out", 0x01000000, 0x05000000, 30000, true, false},
++      {"an unaligned lo", 0x12345000, 0x40000000, 20000, false, false},
++      // Late permanent reservations that may overlap others (the full walk after one).
++      {"late permanent reservations, overlapping ones too", 0x10000, 0x7FFF0000u, 30000, true, true},
++      {"late permanent reservations in a 64 MiB arena", 0x01000000, 0x05000000, 20000, true, true},
++  };
++  for (const Scenario& s : scenarios) {
++    std::string first;
++    for (uint32_t seed = 1; seed <= 4 && first.empty(); seed++) first = Run(seed, s.lo, s.hi, s.ops, s.big, s.late);
++    char name[200];
++    std::snprintf(name, sizeof name, "same as the reference: %s", s.name);
++    Check(name, first.empty(), first.c_str());
++  }
++  std::printf("%s\n", g_failures ? "FAILED" : "ALL PASS");
++  return g_failures ? 1 : 0;
++}

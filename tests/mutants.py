@@ -17,6 +17,7 @@ TESTS = {
     "gl": "test_gl_context.py",
     "build": "test_build_flags.py",
     "observe": "test_m6_observe.py",
+    "alloc": "test_guest_alloc.py",
     "watchdog": "test_m6_watchdog.py",
     "builder": "test_builder_poc.py",
 }
@@ -49,6 +50,7 @@ NI = "scripts/native_install.py"
 JTC = "scripts/jumptable_corrections.py"
 FK = "scripts/font_keydata.py"
 XCM = "tools/x86recomp/CMakeLists.txt"
+GALLOC = "tools/x86recomp/src/runtime/guest_alloc.cpp"
 OBS = "scripts/m6_observe.py"
 M6S = "scripts/m6_accept.sh"
 M6W = "scripts/m6_watchdog.py"
@@ -815,6 +817,26 @@ MUTANTS = [
          old="\n  src/runtime/process.cpp TARGET_DIRECTORY recomp_runtime",
          new=" TARGET_DIRECTORY recomp_runtime",
          expect="optimised in a Debug build: process.cpp"),
+    dict(id="M6-V1", milestone="M6", area="performance", file=GALLOC, test="alloc",
+         fault="a new reservation does not update the hole above it",
+         old="  if (++it != regions_.end()) UpdateGap(it);\n", new="",
+         expect="same as the reference: the runtime's arena (lo 0x10000, hi below the thunks), small reservations"),
+    dict(id="M6-V2", milestone="M6", area="performance", file=GALLOC, test="alloc",
+         fault="a released reservation does not update the hole above it",
+         old="  it = regions_.erase(it);\n  if (it != regions_.end()) UpdateGap(it);\n", new="  regions_.erase(it);\n",
+         expect="same as the reference: the runtime's arena (lo 0x10000, hi below the thunks), small reservations"),
+    dict(id="M6-V3", milestone="M6", area="performance", file=GALLOC, test="alloc",
+         fault="a reservation ending below lo moves the first candidate",
+         old="  if (uint64_t(p->first) + p->second <= lo_) return lo_;\n", new="",
+         expect="same as the reference: an unaligned lo"),
+    dict(id="M6-V4", milestone="M6", area="performance", file=GALLOC, test="alloc",
+         fault="the hole index is used after reservations overlap",
+         old="  if (!top_down && !overlapped_) {", new="  if (!top_down) {",
+         expect="same as the reference: late permanent reservations"),
+    dict(id="M6-V5", milestone="M6", area="performance", file=GALLOC, test="alloc",
+         fault="a hole exactly the size requested is skipped",
+         old="      if (base - below >= size) {", new="      if (base - below > size) {",
+         expect="same as the reference"),
     dict(id="M6-W1", milestone="M6", area="acceptance", file=M6W, test="watchdog",
          fault="the map-load frame allowed up to 20 s",
          old="LOAD_LIMIT_MS = 10000.0", new="LOAD_LIMIT_MS = 20000.0",
