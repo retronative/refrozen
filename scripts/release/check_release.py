@@ -57,7 +57,7 @@ for f in macho:
     if not m or tuple(int(x) for x in m.group(1).split(".")[:2]) > (14, 0):
         bad_min.append(f"{rel} ({m.group(1) if m else 'none'})")
     for rp in re.findall(r"cmd LC_RPATH.*?path (\S+)", lc, re.S):
-        if not rp.startswith(("@executable_path", "@loader_path")):
+        if not rp.startswith(("@executable_path", "@loader_path", "/usr/lib/")):
             bad_rpath.append(f"{rel}: {rp}")
     for dep in run("otool", "-L", f).stdout.splitlines()[1:]:
         dep = dep.strip().split(" (")[0]
@@ -68,7 +68,7 @@ for f in macho:
         bad_dep.append(f"{rel} -> {dep}")
 check(f"every Mach-O is arm64 only ({len(macho)} files)", not bad_arch, ", ".join(bad_arch[:5]))
 check("every Mach-O targets macOS 14 or earlier", not bad_min, ", ".join(bad_min[:5]))
-check("rpaths are bundle-relative only", not bad_rpath, ", ".join(bad_rpath[:5]))
+check("rpaths are bundle-relative or system (/usr/lib: the Swift runtime) only", not bad_rpath, ", ".join(bad_rpath[:5]))
 check("every library loaded is a system library or inside the bundle", not bad_dep, ", ".join(bad_dep[:8]))
 
 paths_found = []

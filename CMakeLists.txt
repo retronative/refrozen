@@ -35,7 +35,11 @@ else()
 endif()
 target_compile_features(refrozen PRIVATE cxx_std_20)
 target_include_directories(refrozen PRIVATE "${X86RECOMP_DIR}/src")
-target_compile_definitions(refrozen PRIVATE
-  REFROZEN_DEFAULT_GAME_DIR="${CMAKE_CURRENT_SOURCE_DIR}/game/native-install")
+# The development default game folder; a dynamic-module launcher (the app's)
+# uses the player's data folder instead (src/main.cpp) and names no build path.
+if(NOT REFROZEN_DYNAMIC_MODULE)
+  target_compile_definitions(refrozen PRIVATE
+    REFROZEN_DEFAULT_GAME_DIR="${CMAKE_CURRENT_SOURCE_DIR}/game/native-install")
+endif()
 # recomp_opengl: game.dll imports opengl32.dll (its OpenGL renderer, "Gfx OpenGL").
 target_link_libraries(refrozen PRIVATE recomp_runtime recomp_opengl)

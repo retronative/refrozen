@@ -181,7 +181,7 @@ enum Previews {
       }),
       ("3-keys", { m in
         m.page = .keys
-        m.rocKey = "XXXXXXXXXXXXXXXXXXXXXXXXXX"
+        m.rocKey = String(repeating: "X", count: 26)  // no key-shaped literal in the binary
         m.owner = "Player"
       }),
       ("4-build", { m in

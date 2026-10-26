@@ -89,18 +89,23 @@ bool LoadGameModule(const std::string& path) {
   return true;
 }
 
-std::string DefaultModule() {
+std::string DataFolder() {
   const char* home = std::getenv("HOME");
-  return std::string(home ? home : "") +
-         "/Library/Application Support/reFrozen/build/current/war3.dylib";
+  return std::string(home ? home : "") + "/Library/Application Support/reFrozen";
 }
+
+std::string DefaultModule() { return DataFolder() + "/build/current/war3.dylib"; }
 #endif
 
 }  // namespace
 
 int main(int argc, char** argv) {
   const char* env = std::getenv("REFROZEN_GAME_DIR");
+#ifdef REFROZEN_DYNAMIC_MODULE
+  std::string game_dir = env ? env : DataFolder() + "/game";
+#else
   std::string game_dir = env ? env : REFROZEN_DEFAULT_GAME_DIR;
+#endif
   std::string args;
 #ifdef REFROZEN_DYNAMIC_MODULE
   const char* module_env = std::getenv("REFROZEN_MODULE");
