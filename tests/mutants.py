@@ -19,6 +19,7 @@ TESTS = {
     "observe": "test_m6_observe.py",
     "watchdog": "test_m6_watchdog.py",
     "builder": "test_builder_poc.py",
+    "setup": "test_first_run_setup.py",
 }
 
 K32 = "tools/x86recomp/src/runtime/hle/kernel32.cpp"
@@ -54,6 +55,7 @@ M6S = "scripts/m6_accept.sh"
 M6W = "scripts/m6_watchdog.py"
 POCB = "scripts/poc/build_module.sh"
 MAIN = "src/main.cpp"
+SETUP = "app/setup/Core.swift"
 
 MUTANTS = [
     # ---- M2: loader (patch 0007) ---------------------------------------------
@@ -898,6 +900,51 @@ MUTANTS = [
          fault="the launcher does not check the loaded library's stamp",
          old="  if (!symbol || std::string(*symbol) != REFROZEN_MODULE_STAMP) {", new="  if (false) {",
          expect="launcher: a library that does not match its stamp file is refused"),
+    dict(id="R-S1", milestone="R", area="setup", file=SETUP, test="setup",
+         fault="an input of the right size is accepted without its hash",
+         old="  if size == known.size && digest == known.sha256 { return .success(known.label) }",
+         new="  if size == known.size { return .success(known.label) }",
+         expect="verify: a tome of the right size but other content is refused"),
+    dict(id="R-S2", milestone="R", area="setup", file=SETUP, test="setup",
+         fault="swapped installers are not named",
+         old="  if let other = knownInputs.first(where: { $0.key != input && $0.value.sha256 == digest }) {",
+         new="  if false, let other = knownInputs.first(where: { $0.key != input && $0.value.sha256 == digest }) {",
+         expect="verify: swapped installers are named"),
+    dict(id="R-S3", milestone="R", area="setup", file=SETUP, test="setup",
+         fault="CD keys not checked against the key alphabet",
+         old="  return k.count == 26 && k.allSatisfy { keyAlphabet.contains($0) } ? k : nil",
+         new="  return k.count == 26 ? k : nil",
+         expect="key: A is not in the key alphabet"),
+    dict(id="R-S4", milestone="R", area="setup", file=SETUP, test="setup",
+         fault="an owner name of 63 characters accepted",
+         old="  if bytes.isEmpty || bytes.count > 62 {", new="  if bytes.isEmpty || bytes.count > 63 {",
+         expect="owner: 63 characters"),
+    dict(id="R-S5", milestone="R", area="setup", file=SETUP, test="setup",
+         fault="a failed or cancelled install leaves its temporary folder",
+         old="  defer { try? fm.removeItem(at: tmp) }\n", new="",
+         expect="install: cancelled, nothing installed and no temporary folder"),
+    dict(id="R-S6", milestone="R", area="setup", file=SETUP, test="setup",
+         fault="a module from another build counts as ready",
+         old="  guard FileManager.default.fileExists(atPath: paths.module.path), let s = built, s == kitStamp(paths) else {",
+         new="  guard FileManager.default.fileExists(atPath: paths.module.path), let _ = built else {",
+         expect="status: a module from another build"),
+    dict(id="R-S7", milestone="R", area="setup", file=SETUP, test="setup",
+         fault="a game folder without the install marker counts as installed",
+         old="  guard FileManager.default.fileExists(atPath: paths.installMarker.path) else { return .needsInstall }",
+         new="  guard FileManager.default.fileExists(atPath: paths.game.path) else { return .needsInstall }",
+         expect="status: a game folder without the install marker"),
+    dict(id="R-S8", milestone="R", area="setup", file=SETUP, test="setup",
+         fault="a file without the map header is accepted as a map",
+         old='  guard data.starts(with: Array("HM3W".utf8)) else {', new="  guard true else {",
+         expect="map: refused, no map header"),
+    dict(id="R-S9", milestone="R", area="setup", file=SETUP, test="setup",
+         fault="maps over 8 MB accepted",
+         old="  guard data.count <= 8 << 20 else {", new="  guard data.count <= 16 << 20 else {",
+         expect="map: refused, over 8 MB"),
+    dict(id="R-S10", milestone="R", area="setup", file=SETUP, test="setup",
+         fault="cancelling does not stop the installer",
+         old="    if process.isRunning { process.terminate() }", new="    _ = process.isRunning",
+         expect="install: a cancel stops the installer at once"),
     dict(id="M6-O1", milestone="M6", area="observation", file=OBS, test="observe",
          fault="one row label taken as an expanded scoreboard",
          old='    if sum(1 for line in lines if BOARD_ROWS.search(line)) >= 2:',

@@ -87,6 +87,7 @@ cat > "$TMP/cc.sh" <<CC
 obj="$TMP/obj/\$(basename "\${1%.cpp}").o"
 /usr/bin/time -l /usr/bin/xcrun clang++ ${FLAGS[*]} -I"$KIT/include" -c "\$1" -o "\$obj" 2> "\$obj.log" \
   || { cat "\$obj.log"; exit 255; }
+echo "compiled \$(basename "\$1")"
 CC
 chmod +x "$TMP/cc.sh"
 ( peak=0; while :; do
@@ -95,6 +96,8 @@ chmod +x "$TMP/cc.sh"
     sleep 1
   done ) &
 SAMPLER=$!
+# Progress for the first-run setup: "compiling <n> files", then one "compiled <file>" line each.
+echo "compiling $(ls "$TMP"/generated/*.cpp "$KIT/src/lifted_table.cpp" | wc -l | tr -d ' ') files"
 ls "$TMP"/generated/*.cpp "$KIT/src/lifted_table.cpp" | xargs -P "$JOBS" -n 1 "$TMP/cc.sh" &
 WORKERS=$!
 wait "$WORKERS" || { WORKERS=""; fail 14 "a file did not compile"; }

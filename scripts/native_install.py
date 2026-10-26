@@ -32,8 +32,10 @@ field. 3-field targets go into a new War3Patch.mpq (delete.lst removes the old
 one), except plain names that exist as loose files; 2-field targets are loose
 files. These rules reproduce the official patcher's output for 1.26a.
 
-Needs StormLib (brew install stormlib) and build/bnupdate_patch
-(scripts/setup_tools.sh).
+Needs StormLib and bnupdate_patch: in the app's kit (bin/bnupdate_patch,
+lib/libstorm.dylib beside scripts/), or in development Homebrew's StormLib
+(brew install stormlib) and build/bnupdate_patch (scripts/setup_tools.sh).
+Runs on Python 3.9 (Apple's Command Line Tools) and later.
 """
 import argparse
 import ctypes
@@ -50,11 +52,18 @@ import xml.etree.ElementTree as ET
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import font_keydata  # noqa: E402
-PATCHER = os.path.join(ROOT, "build", "bnupdate_patch")
+
+
+def tool(kit, development):
+    """The kit's copy (the app's first-run setup) if present, else the development one."""
+    return kit if os.path.exists(kit) else development
+
+
+PATCHER = tool(os.path.join(ROOT, "bin", "bnupdate_patch"), os.path.join(ROOT, "build", "bnupdate_patch"))
 
 # ---- StormLib --------------------------------------------------------------
 
-storm = ctypes.CDLL("/opt/homebrew/opt/stormlib/lib/libstorm.dylib")
+storm = ctypes.CDLL(tool(os.path.join(ROOT, "lib", "libstorm.dylib"), "/opt/homebrew/opt/stormlib/lib/libstorm.dylib"))
 HANDLE = ctypes.c_void_p
 DWORD = ctypes.c_uint32
 MPQ_OPEN_READ_ONLY = 0x100
