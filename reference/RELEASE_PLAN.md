@@ -38,7 +38,7 @@ stay as the game has them and are not supported or tested.
 
 | Gate | What must be shown | Class |
 |---|---|---|
-| **R1 Crash correctness** | The intermittent `GetAttacker()` crash: root cause VERIFIED (FEASIBILITY), fix committed, targeted regression test(s) and mutants in the registry, all KILLED | Mandatory blocker |
+| **R1 Crash correctness** | The intermittent `GetAttacker()` crash: root cause VERIFIED (FEASIBILITY), fix committed, targeted regression test(s) and mutants in the registry, all KILLED. **For the v0.1.0 alpha (approved 2026-10-26):** instead, a documented known limitation with the conditions below; it reopens as a mandatory blocker on any reopening trigger | Mandatory blocker (alpha risk accepted, see below) |
 | **R2 Regression** | All suites and ctest pass; the full mutation registry (earlier mutants re-run, AGENTS.md) plus focused new mutants for every changed critical path (R1's fix, local build, first-run setup, packaging checks); two lifts byte-identical; `validate_lift.py` HARD PASS; patches reapply; M4 and M5 acceptance on the release-candidate build | Mandatory |
 | **R3 M6** | M6 passed and signed off under the revised acceptance in ROADMAP (R1 met; 3–5 clean 25–30-minute AI stress runs; one clean 65-minute run with every existing pass condition), on the release-candidate build | Mandatory blocker |
 | **R4 Release candidate** | One commit built from a clean checkout, packaged, bundle checks, content gate (no PE image, MPQ, map, key-shaped string or lifted-function symbol in any shipped file), dmg round trip, checksums, manifest. The game module the gates use is produced by the packaged app's own first-run builder | Mandatory, automated |
@@ -71,10 +71,10 @@ stay as the game has them and are not supported or tested.
 | Prerequisite "M6 passed" (three 65-minute runs, the script's default) | R3 under the revised M6 acceptance |
 | — | R1 (new) |
 
-### Proposed revisions, pending the user's final approval (2026-10-26)
+### Approved revisions (the user's decision, 2026-10-26)
 
-Neither revision is in force. Until the user approves them explicitly, R1, R3 and M6 read as in
-the table above and in ROADMAP, and M6 stays NOT PASSED.
+Both revisions are in force. Every other gate and every other M6 pass condition is unchanged.
+M6 stays NOT PASSED until its revised acceptance (ROADMAP) is actually met.
 
 **1. R1: the intermittent `GetAttacker()` crash as a known alpha limitation.**
 
@@ -90,20 +90,21 @@ the table above and in ROADMAP, and M6 stays NOT PASSED.
   original game too; whether it depends on timing or load. It is not fixed and its cause is not
   verified.
 
-*Proposed R1.* The crash is accepted as a known limitation of the v0.1.0 alpha, recorded in the
+*R1 for the alpha (approved).* The crash is accepted as a known limitation of the v0.1.0 alpha, recorded in the
 release notes and `docs/status.md`. That text says it was seen on one machine under heavy
 concurrent load and not reproduced on a dedicated machine. It says the cause is unknown and asks
 players to report it. The diagnostics stay in the runtime, opt-in: the fault report with guest
 state, configurable guest-memory dumps and the stall recorder. The private records of the
-investigation are kept. R1 reopens as a mandatory blocker, with its original conditions
-(root cause VERIFIED, fix, regression tests and mutants), if any of these happens:
-- the crash reproduces on the dedicated test machine;
+investigation are kept. Nothing may claim the crash is fixed or its cause verified. R1 reopens
+as a mandatory blocker, with its original conditions (root cause VERIFIED, fix, regression tests
+and mutants), if any of these happens:
+- the crash occurs on the dedicated test machine;
 - the crash occurs in human playtesting (R6 or later);
-- a reproducible fault or a confirmed runtime divergence is identified on this path.
+- a reproducible runtime divergence is identified.
 
-*Consequences for M6 and R3 (proposed).* ROADMAP M6 step 1 would read "the crash fixed, or
-accepted under revised R1". Steps 2 and 3 stay unchanged, with every pass condition. A crash
-during them meets the first reopening trigger and returns M6 to step 1.
+*Consequences for M6 and R3.* ROADMAP M6 step 1 reads "the crash fixed, or accepted under the
+revised R1". Steps 2 and 3 keep every pass condition. Any crash during an M6 stress or acceptance
+run fails that run and reopens R1.
 
 **2. M6: a watchdog policy for map loading.**
 
@@ -113,12 +114,21 @@ it took 5.7 s on the M1 and about 3.4 s on the M5. With the import path optimise
 the M1 took 4.67–4.92 s in five runs. That is under the 5-second watchdog, but by only 0.08 s
 at worst, so it is not reliable. Every other condition passed in those runs.
 
-*Proposed policy.* The runtime's watchdog stays at 5 s everywhere: hang detection in menus and
-gameplay is unchanged. `scripts/m6_accept.sh` counts a watchdog report as a failure, as now,
-except during the map load: from Start Game to the first frame of the match. A report there is
-recorded and passes only if the load's longest frame (the game's own frame-interval report) is
-at most 10 s. 10 s is twice the M1's measured time, so a load that hangs still fails.
-Menus and the match keep the 5-second rule with no exception.
+*Policy (approved, implemented in `scripts/m6_accept.sh` with `scripts/m6_watchdog.py`).* The
+runtime's watchdog stays at 5 s everywhere, so hang detection in menus and gameplay is unchanged.
+An acceptance run may have one watchdog report, and only during the map load: after the frame
+that follows the Start Game click (the `start` shot) and before the loading screen's wait for a
+key (the `loaded` shot), which precedes the first frame of the match. That load frame must be
+verified at most 10 s: the game's own frame-interval report that follows the watchdog report
+shows the longest frame. 10 s is twice the M1's measured time, so a load that hangs still fails.
+A run fails on any of these:
+- a report in the menus or the match;
+- a second report (another hang, or the watchdog's repeated dump of the same one);
+- a crash;
+- phase shots missing or duplicated, so the load can't be identified;
+- a load frame that is over 10 s or can't be verified.
+
+Tests: `tests/test_m6_watchdog.py`, mutants M6-W1–M6-W12.
 
 ## reCarbon release workflow: what is reused
 
@@ -144,6 +154,29 @@ it was done; the reFrozen column is a proposal until implemented.
 | **Not reused:** a download that contains compiled game code | — | — | reFrozen builds the game module on the player's Mac |
 
 ## First-run builder: feasibility proof-of-concept first (planning only)
+
+**Proof of concept done (2026-10-26, on the M1 test Mac; experimental, on `main`):**
+`scripts/poc/build_module.sh` lifts the player's installed game and compiles the module with
+Apple's Command Line Tools only (clean environment, no Homebrew, no CMake). The launcher built
+with `REFROZEN_DYNAMIC_MODULE` loads it at run time after two stamp checks.
+- *Compiler:* every M4–M6 build already used Apple clang. The builder's 242 object files are
+  byte-identical to the development build's. The generated sources differ only in comment lines,
+  because the builder doesn't demangle names, so `llvm-undname` isn't needed.
+- *Loading:* M4 acceptance passed 3/3 with the module loaded at run time, and a short AI match
+  ran normally. The kit's own launcher, in a clean environment, reaches the game's main loop.
+- *Cost on the M1 (8 GB):*
+  - about 5.5 minutes (lift 63 s, compile about 4.5 min with 8 jobs);
+  - a 105 MB module;
+  - 591 MB of disk at peak;
+  - 2.3 GB of compiler memory at peak, with no swapping;
+  - a 15 MB kit of reFrozen's own files.
+- *Errors:* `tests/test_builder_poc.py`, mutants R-B1–R-B6, R-L1 and R-L2. Covered: no
+  Command Line Tools, a missing installed file, low disk, a compile failure and a cancel, each
+  leaving nothing partial and the previous module in place. Also covered: the launcher refusing
+  a module from another build, a missing one and a swapped library.
+- *Open:* the kit still links Homebrew's SDL3, glslang and SPIRV-Tools, which packaging must
+  bundle. `refrozen` does not link FFmpeg (to confirm at packaging). The first-run setup and
+  packaging are not implemented.
 
 The central new work is building the game module on the player's Mac. Before the full builder, a
 proof-of-concept answers, with measurements; it is not started without the user's approval:
@@ -261,9 +294,9 @@ time, "Open Anyway" (if R7a applies) and uninstall. The site deploys with the ap
 
 | # | Item | Kind |
 |---|---|---|
-| 1 | `GetAttacker()` crash (6 of 12 AI runs on the development Mac, about 14–30 minutes in; none in 3 runs on the dedicated test Mac; root cause unknown) | Blocker (R1); revision proposed above |
-| 2 | The game module built with Apple's Command Line Tools, or a bundled toolchain | Blocker (proof-of-concept) |
-| 3 | The lifted code built and loaded as a separate local module (today linked into one executable) | Blocker (implementation) |
+| 1 | `GetAttacker()` crash (6 of 12 AI runs on the development Mac, about 14–30 minutes in; none in 3 runs on the dedicated test Mac; root cause unknown) | Known alpha limitation (R1 as revised); reopens as a blocker on a trigger |
+| 2 | The game module built with Apple's Command Line Tools, or a bundled toolchain | Proof of concept passed with the CLT (above); the builder is experimental |
+| 3 | The lifted code built and loaded as a separate local module (today linked into one executable) | Proof of concept passed (`REFROZEN_DYNAMIC_MODULE`); first-run setup and packaging still to implement |
 | 4 | reFrozen's licence | Blocker (user decision) |
 | 5 | Ad hoc signing's browser-download experience on a clean account | Blocker for R7a's ad hoc option |
 | 6 | An LGPL-only FFmpeg and source-built, pinned release dependencies | Dependency |
@@ -291,8 +324,8 @@ Estimates for one developer with an agent, not measurements:
 | R1 root cause, fix and regression tests; R3's stress and acceptance runs | open; in parallel |
 
 **Critical path:** proof-of-concept → local module and builder → first-run setup → packaging and
-RC tooling → R4 → R3 and R5 on that RC → R6 → R7a/R7b → R8. R1 runs in parallel and must land
-before R4; it becomes the critical path if the root cause takes longer than the packaging work.
+RC tooling → R4 → R3 and R5 on that RC → R6 → R7a/R7b → R8. R1 is met for the alpha by the
+approved risk acceptance, unless a reopening trigger occurs; then its fix must land before R4.
 
 ## Recommended minimum requirements
 - An Apple silicon Mac; Intel is not supported.
@@ -307,7 +340,9 @@ before R4; it becomes the critical path if the root cause takes longer than the 
 ## Release checklist
 - [ ] Approvals: proof-of-concept start; builder design; signing outcome (R7a); reFrozen's licence;
       any unresolved redistribution question; publication.
-- [ ] R1: root cause VERIFIED in FEASIBILITY; fix, regression tests and mutants (KILLED).
+- [ ] R1 (alpha, as revised): known-limitation text in the release notes and `docs/status.md`;
+      the opt-in diagnostics kept; no reopening trigger has occurred (else root cause VERIFIED,
+      fix, regression tests and mutants).
 - [ ] R3: 3–5 clean 25–30-minute AI stress runs, then one clean 65-minute run with every pass
       condition (ROADMAP M6), on the RC build; M6 signed off.
 - [ ] R2: suites, ctest, full mutation registry with focused new mutants, identical lifts, HARD

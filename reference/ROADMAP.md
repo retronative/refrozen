@@ -216,14 +216,20 @@ official cooperation. Nothing network-facing is needed before M7.
   65-minute launches, every pass condition unchanged).** In this order, all on the same build:
   1. **The intermittent `GetAttacker()` crash fixed:** root cause VERIFIED and recorded in
      FEASIBILITY; the fix committed with targeted regression test(s) and mutants in the registry,
-     all KILLED (AGENTS.md, mutation gate).
+     all KILLED (AGENTS.md, mutation gate). **Or, for the v0.1.0 alpha (the user's decision,
+     2026-10-26):** accepted as a documented known limitation under RELEASE_PLAN's revised R1.
+     It is not fixed and its cause is not verified. R1 reopens if the crash occurs on the
+     dedicated test machine or in human playtesting, or if a reproducible runtime divergence is
+     identified.
   2. **3–5 AI stress runs of 25–30 minutes each, all clean, after the fix**
-     (`scripts/m6_accept.sh <n> 30`): in every launch no FATAL, no watchdog report and every
+     (`scripts/m6_accept.sh <n> 30`): in every launch no FATAL, no watchdog report (see the
+     map-loading exception below) and every
      scheduled shot saved, and every pacing report's median frame interval at most 20 ms. The
      victory, score-screen and 15-minute memory conditions cannot apply to a 30-minute run and are
-     judged in step 3 only. Any crash returns to step 1.
+     judged in step 3 only. Any crash fails the run, reopens R1 and returns to step 1.
   3. **One clean 65-minute acceptance run** (`scripts/m6_accept.sh 1 65`) meeting every existing
-     pass condition of `scripts/m6_accept.sh`: no FATAL and no watchdog report, every shot saved; the
+     pass condition of `scripts/m6_accept.sh`: no FATAL and no watchdog report (map-loading
+     exception below; any crash fails the run and reopens R1), every shot saved; the
      victory announcement seen; the score screen lists all 10 players and its elapsed time; pacing
      after the first 5 minutes with every report's median at most 20 ms and the last 10 reports'
      median at most 15 % above minutes 5–15; the largest RSS of the last 15 minutes at most 20 %
@@ -231,6 +237,15 @@ official cooperation. Nothing network-facing is needed before M7.
   For the v0.1.0 release (RELEASE_PLAN R3) steps 2 and 3 are made on the release-candidate build.
   Only the number of 65-minute launches changed; the script, its default and its conditions did
   not.
+  - **Map-loading watchdog exception (the user's decision, 2026-10-26):** the runtime's watchdog
+    stays at 5 s. A run may have one watchdog report, and only during the map load, between the
+    frame after the Start Game click and the loading screen's wait for a key, before the first
+    frame of the match. That frame must be verified at most 10 s by the game's frame-interval
+    report. Reports in menus or gameplay, repeated reports, crashes, an unidentifiable load phase
+    and loads over 10 s or unverified still fail (`scripts/m6_watchdog.py`,
+    `tests/test_m6_watchdog.py`). The reason: the AI map's longest load frame takes 4.7–4.9 s on
+    an M1 with patch 0020, under 5 s by too little to rely on.
+  - **Status: NOT PASSED.** No run has yet been made under this revised acceptance.
 
 ## M7 — LAN and private multiplayer
 - LAN (UDP 6112, W3GS) between two reFrozen instances, then against a Windows 1.26a client
