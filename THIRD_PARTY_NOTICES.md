@@ -15,6 +15,28 @@ it. A release will carry these notices, the licence texts and each bundled libra
 |---|---|---|---|
 | **x86recomp**: Copyright (c) 2026 JT | The static recompiler (lifter) and the Win32 runtime that reFrozen builds on. `scripts/setup_tools.sh` checks out a pinned commit and applies reFrozen's modifications, `patches/x86recomp/*.patch`. | MIT | [`LICENSES/x86recomp-MIT.txt`](LICENSES/x86recomp-MIT.txt) |
 
+## In reFrozen.app
+
+The app (`scripts/release/make_release_app.sh`) carries these, built from checksum-pinned sources
+(`scripts/release/build_deps.sh`). Each one's licence text is in the app, under
+`Contents/Resources/licenses/third-party/`.
+
+| Project | In the app | Licence |
+|---|---|---|
+| **x86recomp** (with reFrozen's patches) | the runtime libraries and the lifter | MIT |
+| **SDL3** 3.4.18 | a shared library (windows, input, graphics, audio) | zlib |
+| **StormLib** 9.40 | a shared library, used by the installer step | MIT |
+| **glslang** 16.6.0 | linked into the runtime (shader compilation) | BSD-3-Clause and others, listed in its `LICENSE.txt` |
+| **SPIRV-Tools**, **SPIRV-Headers** 1.4.363.0 | linked into the runtime | Apache-2.0; SPIRV-Headers: MIT-style (Khronos) |
+| **SPIRV-Cross** 1.4.363.0 | linked into the runtime (shaders for Metal) | Apache-2.0 |
+| **Berkeley SoftFloat 3** | linked into the runtime (x87 floating point) | BSD-3-Clause |
+| **Zydis** 4.1.1 and **Zycore** | linked into the lifter | MIT |
+| **LLVM** 23.1.4, `llvm/lib/Demangle` only | linked into the runtime (symbol demangling) | Apache-2.0 WITH LLVM-exception |
+| Typefaces **Cinzel**, **Cormorant Garamond**, **Inter** | the setup window | SIL Open Font License 1.1 |
+
+The app links no FFmpeg. The installer and builder steps run on Apple's own Python and Command Line
+Tools, which are on the player's Mac and not part of the app.
+
 ## Used when you build reFrozen
 
 These are not part of this repository; their licences apply to the copies you install or fetch.
