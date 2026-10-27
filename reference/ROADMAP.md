@@ -320,4 +320,76 @@ official cooperation. Nothing network-facing is needed before M7.
   code, data, keys or maps (an automated content check); the offline and LAN acceptance tests pass
   on the packaged build.
 
+### Next release: installer progress bar refinements *(implemented 2026-10-27 for the release after v0.1.0; not in v0.1.0)*
+**Implemented** (`fbbcb81`): all three refinements below, as specified. Previews reviewed by the user
+(`reFrozen --setup bars <dir>`); 19 new setup checks and mutants R-V1–R-V8, all killed (R-U1–R-U3
+retired with the v0.1.0 rule they guarded); CPU while animating about the same as v0.1.0's
+(`reFrozen --setup bar-bench`, launched as an app: 6.8–7.4 % of one core against 6.3–7.1 %).
+Published v0.1.0 is unchanged; this ships with the next release.
+
+The user deferred these to the release after v0.1.0, which stays on release candidate 3 (`57a0db5`)
+and final human verification. They change only how the first-run setup draws its progress bar:
+`FrostBar` and `FrostSweep` in `app/setup`. The progress model (`SetupProgress`), the builder and the
+release gates stay as they are.
+
+**Already in v0.1.0 (release candidate 3, `70c91e1`):**
+- A light that sweeps the filled part of the bar only (`FrostSweep`). Under reduced motion, a steady
+  edge at the fill instead.
+- Show/Hide Details as one clickable, keyboard-focusable control with VoiceOver state.
+
+**Deferred refinements:**
+
+1. **A light that sweeps the whole track.**
+   - A subtle icy-blue light crosses the entire 0–100 % track, so it stays visible even at 3 %.
+   - This deliberately reverses v0.1.0's rule that the light never enters the unfilled part. Over
+     the unfilled part it must stay dimmer than the fill, so it can't be read as progress.
+   - `FrostSweep`'s range becomes the track width, and its tests change with it:
+     - the sweep covers the whole track;
+     - it is brighter over the fill than over the unfilled part;
+     - it is still visible at 3 %.
+2. **A calmer gradient.**
+   - The fill runs from deep navy at the bar's start to a restrained icy blue at the progress edge.
+   - No pure white anywhere: today the fill ends in `Theme.iceCore`, which is near-white.
+   - The colours come from the theme's palette (new tokens if needed), and the fill keeps its
+     contrast with the dark track.
+3. **A magical progress edge.**
+   - The hard rectangular end of the fill becomes a soft, blurred icy-blue glow.
+   - A subtle starburst spreads outward from the edge. It follows the actual progress value
+     (`SetupProgress.display`) and never leads it.
+   - The starburst stays inside the bar's frame, or within a few points of it, without covering
+     the percentage label.
+
+**Requirements:**
+- Progress stays accurate and monotonic: the fill and the percentage still come only from
+  `SetupProgress.display(at:)`. The light, gradient and edge are decoration: they never move the
+  value, and they never suggest more progress than there is.
+- **Reduced motion:**
+  - no moving sweep and no animated starburst;
+  - a static soft edge glow and the gradient only.
+- **Lightweight:**
+  - one animation driver at no more than 30 frames a second, paused when the window is hidden or
+    setup is not working;
+  - the blur and starburst drawn cheaply (a pre-rendered or `Canvas` shape, not a stack of
+    shadows);
+  - setup's CPU use during a build stays about the same as v0.1.0's (measured in Activity
+    Monitor).
+- **The theme:** dark fantasy, in the website's frost-and-iron style, kept restrained (no
+  flashing, no saturated colours).
+
+**When implemented:**
+- Previews:
+  - the build page at 3 %, 20 %, 50 % and 98 %;
+  - stopped and failed;
+  - with reduced motion on and off.
+- Focused tests through the setup's command line, as `FrostSweep`'s are:
+  - the sweep's extent over the track;
+  - the edge glow's position equals the fill edge for any progress;
+  - no animated parts under reduced motion;
+  - the gradient's end colour is not white.
+- A mutant for each, in `tests/mutants.py`.
+- **Accept (when scheduled):**
+  - Previews reviewed by the user.
+  - The setup tests and the new mutants pass.
+  - No change to the progress values or the build output.
+
 Following `../game-port-knowledge/general/bring-up-checklist.md` throughout.

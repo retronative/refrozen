@@ -475,24 +475,54 @@ func measuredLiftEstimate(_ paths: Paths) -> TimeInterval {
   return times.isEmpty ? 60 : times.reduce(0, +) / Double(times.count)
 }
 
-// The light that sweeps along the progress bar's filled part: one band `band` points wide,
-// moving at `speed` points a second from before the bar's start to the fill edge, then again.
-// `visible` is the part that shows: never past the fill, none when the fill is too short.
+// The light that sweeps the progress bar's whole track: one band `band` points wide, moving at
+// `speed` points a second from before the track's start to past its end, then again, so it shows
+// even at 3 %. Over the filled part it is `filledOpacity` bright (`activeOpacity` while the work
+// has no measure yet); over the unfilled part only `trackOpacity`, so it never reads as progress.
 enum FrostSweep {
-  static let band = 70.0, speed = 220.0, minFill = 24.0
+  static let band = 70.0, speed = 220.0
+  static let filledOpacity = 0.45, activeOpacity = 0.7, trackOpacity = 0.12
 
-  static func period(fill: Double) -> Double { max((fill + band) / speed, 1.2) }
+  static func period(track: Double) -> Double { max((track + band) / speed, 1.2) }
 
-  static func lead(fill: Double, at t: Double) -> Double {
-    let p = period(fill: fill)
-    return -band + (fill + band) * (t.truncatingRemainder(dividingBy: p) / p)
+  static func lead(track: Double, at t: Double) -> Double {
+    let p = period(track: track)
+    return -band + (track + band) * (t.truncatingRemainder(dividingBy: p) / p)
   }
 
-  static func visible(fill: Double, at t: Double) -> ClosedRange<Double>? {
-    guard fill >= minFill else { return nil }
-    let l = lead(fill: fill, at: t)
-    let start = max(l, 0), end = min(l + band, fill)
+  static func visible(track: Double, at t: Double) -> ClosedRange<Double>? {
+    let l = lead(track: track, at: t)
+    let start = max(l, 0), end = min(l + band, track)
     return end > start ? start...end : nil
+  }
+
+  static func opacity(at x: Double, fill: Double, active: Bool = false) -> Double {
+    x < fill ? (active ? activeOpacity : filledOpacity) : trackOpacity
+  }
+}
+
+// The fill's colours, start to edge: deep navy to a restrained icy blue, never white.
+enum FrostFill {
+  static let colors: [UInt32] = [0x0A1E3C, 0x156EC5, 0x6FB6E4]
+}
+
+// The glow at the progress edge: a soft icy-blue light centred on the fill's end (it follows the
+// progress value and never leads it), reaching at most `overflow` points past the bar's frame, with
+// `rays` faint rays that slowly turn and breathe. Under reduced motion the rays stand still.
+enum FrostEdge {
+  static let glowRadius = 9.0, overflow = 4.0, rays = 6, rayPeriod = 3.0
+
+  static func center(fill: Double) -> Double { fill }
+
+  static func extent(fill: Double, track: Double) -> ClosedRange<Double> {
+    max(center(fill: fill) - glowRadius, -overflow)...min(center(fill: fill) + glowRadius, track + overflow)
+  }
+
+  // The rays' turn (radians) and length (points) at time t.
+  static func rays(at t: Double, reduceMotion: Bool) -> (angle: Double, length: Double) {
+    if reduceMotion { return (0, 7) }
+    let phase = t.truncatingRemainder(dividingBy: rayPeriod) / rayPeriod
+    return (phase * 2 * .pi / Double(rays), 6 + 2 * sin(phase * 2 * .pi))
   }
 }
 

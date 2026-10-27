@@ -229,26 +229,50 @@ def main():
         check("progress: stray, repeated or unknown lines never move it back",
               all(b >= a for a, b in zip(of, of[1:])), of[-6:])
 
-        # The progress light (FrostSweep, through sweep): it sweeps from the bar's start to the fill
-        # edge and never shows past it; none on a fill too short; constant speed, so a longer fill
-        # takes longer. The Show/Hide Details control (through details): words and what VoiceOver says.
-        def sweep(fill):
-            out = subprocess.run([binary, "--setup", "sweep", str(fill)], capture_output=True, text=True,
+        # The progress bar's look (FrostSweep, FrostFill, FrostEdge, through sweep, sweep-light,
+        # fill-colors, edge and edge-rays): the light crosses the whole track at a constant speed,
+        # so it shows even at 3 %, but over the unfilled part it is dimmer than over the fill; the
+        # fill runs from deep navy to an icy blue, never white; the edge glow sits on the fill's end
+        # (it never leads the progress) within a few points of the frame; under reduced motion its
+        # rays stand still. The Show/Hide Details control (through details): words and VoiceOver.
+        def cli(*args):
+            return subprocess.run([binary, "--setup", *map(str, args)], capture_output=True, text=True,
+                                  env=setup.env()).stdout.split()
+        def sweep(track):
+            out = subprocess.run([binary, "--setup", "sweep", str(track)], capture_output=True, text=True,
                                  env=setup.env()).stdout.splitlines()
             return [tuple(float(x) for x in l.split()[1:]) if l.split()[1] != "-" else None for l in out]
-        for fill in (24, 100, 480, 900):
-            s = sweep(fill)
-            shown = [x for x in s if x]
-            check(f"sweep: never past the fill and never before the start ({fill} pt)",
-                  shown and all(0 <= a < b <= fill for _, a, b in shown), shown[:3])
-            check(f"sweep: runs from the start to the fill edge ({fill} pt)",
-                  min(a for _, a, _ in shown) == 0 and max(b for _, _, b in shown) >= fill - 4,
+        for track in (100, 480, 900):
+            shown = [x for x in sweep(track) if x]
+            check(f"bar: the light never leaves the track ({track} pt)",
+                  shown and all(0 <= a < b <= track for _, a, b in shown), shown[:3])
+            check(f"bar: the light crosses the whole track ({track} pt)",
+                  min(a for _, a, _ in shown) == 0 and max(b for _, _, b in shown) >= track - 4,
                   (min(a for _, a, _ in shown), max(b for _, _, b in shown)))
             leads = [x[0] for x in shown]
-            check(f"sweep: one steady pass, start to end ({fill} pt)", all(b >= a for a, b in zip(leads, leads[1:])))
-        check("sweep: none on a fill too short to show it", all(x is None for x in sweep(10)))
-        check("sweep: constant speed, so a longer fill takes longer", len(sweep(900)) > len(sweep(480)) > len(sweep(100)),
-              (len(sweep(100)), len(sweep(480)), len(sweep(900))))
+            check(f"bar: one steady pass, start to end ({track} pt)", all(b >= a for a, b in zip(leads, leads[1:])))
+        check("bar: the light moves at a constant speed, so a longer track takes longer",
+              len(sweep(900)) > len(sweep(480)) > len(sweep(100)), (len(sweep(100)), len(sweep(480)), len(sweep(900))))
+        lit, dim, held = (float(cli("sweep-light", 300, 100)[0]), float(cli("sweep-light", 300, 400)[0]),
+                          float(cli("sweep-light", 300, 100, "active")[0]))
+        check("bar: at 3 % the light still shows, over the unfilled part", float(cli("sweep-light", 18, 300)[0]) > 0)
+        check("bar: the light is dimmer over the unfilled part than over the fill", 0 < dim < lit, (dim, lit))
+        check("bar: work with no measure yet shows the light brighter", held > lit, (held, lit))
+        cols = [int(c, 16) for c in cli("fill-colors")]
+        rgb = lambda c: ((c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF)
+        check("bar: the fill starts deep navy", max(rgb(cols[0])) < 0x50 and rgb(cols[0])[2] == max(rgb(cols[0])),
+              [f"{c:06X}" for c in cols])
+        check("bar: the fill ends in an icy blue, never white",
+              min(rgb(cols[-1])) < 0xC0 and rgb(cols[-1])[2] == max(rgb(cols[-1])), [f"{c:06X}" for c in cols])
+        edges = {fill: [float(x) for x in cli("edge", fill, 600)] for fill in (0, 18, 300, 588, 600)}
+        check("bar: the edge glow sits on the fill's end, never ahead of the progress",
+              all(e[0] == fill for fill, e in edges.items()), edges)
+        check("bar: the edge glow stays within a few points of the frame",
+              all(-4 <= e[1] and e[2] <= 604 for e in edges.values()), edges)
+        rays = lambda *a: {tuple(l.split()[1:]) for l in subprocess.run([binary, "--setup", "edge-rays", *a],
+                           capture_output=True, text=True, env=setup.env()).stdout.splitlines()}
+        check("bar: under reduced motion the edge's rays stand still", len(rays("still")) == 1, rays("still"))
+        check("bar: otherwise the edge's rays move", len(rays()) > 1)
         det = dict(l.split(" ", 1) for l in subprocess.run([binary, "--setup", "details"], capture_output=True,
                                                             text=True, env=setup.env()).stdout.splitlines())
         check("details: collapsed says Show Details, and VoiceOver hears Details, collapsed",

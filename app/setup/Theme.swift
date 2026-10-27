@@ -61,50 +61,131 @@ struct Panel<Content: View>: View {
   }
 }
 
-// The website's loading bar: icy fill in a bronze-tinted iron frame. `sweeping`:
-// setup is working, shown by a light sweeping along the filled part only
-// (FrostSweep, at most 30 frames a second). `active`: work is going on that has
-// no measure yet, the same light brighter. Under reduced motion, a steady
-// brighter edge at the fill instead.
+// The website's loading bar: a navy-to-ice fill in a bronze-tinted iron frame, ending in a soft
+// glowing edge (FrostFill, FrostEdge). `sweeping`: setup is working, shown by a light crossing the
+// whole track, dim over the unfilled part (FrostSweep), and the edge's rays turning. `active`: work
+// is going on that has no measure yet, the light brighter. One timeline drives it, at most 30 frames
+// a second, paused when nothing moves or the window is not active. Under reduced motion: no sweep and
+// still rays. `frozenAt` draws one moment, `stillPreview` as under reduced motion (previews).
 struct FrostBar: View {
   let value: Double?
   var active = false
   var sweeping = false
+  var frozenAt: Double? = nil
+  var stillPreview = false
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.controlActiveState) private var windowState
+  private static let height = 8.0
+
   var body: some View {
     GeometryReader { g in
-      let fill = g.size.width * min(max(value ?? 0, 0), 1)
+      let track = g.size.width, fill = track * min(max(value ?? 0, 0), 1)
+      let moving = (sweeping || active) && !reduceMotion && !stillPreview
+      let o = FrostEdge.overflow
+      // Drawn once: the track, the fill with its softened end, the frame and the edge glow.
       ZStack(alignment: .leading) {
         Rectangle().fill(Theme.abyss)
         Rectangle()
-          .fill(LinearGradient(colors: [Theme.frostDeep, Theme.frost, Theme.iceCore], startPoint: .leading, endPoint: .trailing))
+          .fill(LinearGradient(colors: FrostFill.colors.map { Color(hex: $0) }, startPoint: .leading, endPoint: .trailing))
           .frame(width: fill)
-          .shadow(color: Theme.glow, radius: 6)
-        if active || sweeping {
-          if reduceMotion {
-            Rectangle().fill(Theme.iceCore.opacity(0.5)).frame(width: 3).offset(x: max(fill - 3, 0))
-          } else {
-            TimelineView(.animation(minimumInterval: 1.0 / 30)) { context in
-              let t = context.date.timeIntervalSinceReferenceDate
-              if let shown = FrostSweep.visible(fill: fill, at: t) {
-                Rectangle()
-                  .fill(LinearGradient(colors: [.clear, Theme.iceCore.opacity(active ? 0.7 : 0.45), .clear],
-                                       startPoint: .leading, endPoint: .trailing))
-                  .frame(width: FrostSweep.band)
-                  .offset(x: FrostSweep.lead(fill: fill, at: t))
-                  .frame(width: shown.upperBound, alignment: .leading)
-                  .clipped()
-              }
-            }
-          }
-        }
+          .mask(LinearGradient(stops: [.init(color: .black, location: 0),
+                                       .init(color: .black, location: max(0, 1 - 6 / max(fill, 1))),
+                                       .init(color: .black.opacity(0.55), location: 1)],
+                               startPoint: .leading, endPoint: .trailing))
       }
       .clipped()
       .overlay(Rectangle().stroke(Theme.goldShadow.opacity(0.9), lineWidth: 1))
+      .overlay(alignment: .leading) { glow(fill: fill).frame(width: track + 2 * o, height: Self.height + 2 * o).offset(x: -o) }
+      // Redrawn on the timeline: only the light and the edge's rays.
+      .overlay(alignment: .leading) {
+        Group {
+          if let t = frozenAt {
+            moment(track: track, fill: fill, t: t, moving: moving)
+          } else if moving {
+            TimelineView(.animation(minimumInterval: 1.0 / 30, paused: windowState == .inactive)) { context in
+              moment(track: track, fill: fill, t: context.date.timeIntervalSinceReferenceDate, moving: true)
+            }
+          } else {
+            moment(track: track, fill: fill, t: 0, moving: false)
+          }
+        }
+        .frame(width: track + 2 * o, height: Self.height + 2 * o)
+        .offset(x: -o)
+        .allowsHitTesting(false)
+      }
     }
-    .frame(height: 8)
+    .frame(height: Self.height)
     .accessibilityElement()
     .accessibilityValue(active ? "working" : value.map { "\(Int($0 * 100)) percent" } ?? "working")
+  }
+
+  // The moving parts at time t, in a frame `overflow` points wider than the track on each side.
+  // Each frame changes only transforms: the light's position (one pre-drawn band, dimmed beyond
+  // the fill by a still mask) and the rays' turn and length (drawn once).
+  private func moment(track: Double, fill: Double, t: Double, moving: Bool) -> some View {
+    let o = FrostEdge.overflow, h = Self.height
+    let r = FrostEdge.rays(at: t, reduceMotion: !moving)
+    let lit = FrostSweep.opacity(at: 0, fill: 1, active: active)
+    return ZStack(alignment: .leading) {
+      if moving {
+        Rectangle()
+          .fill(LinearGradient(colors: [.clear, Theme.frost, .clear], startPoint: .leading, endPoint: .trailing))
+          .frame(width: FrostSweep.band, height: h)
+          .offset(x: FrostSweep.lead(track: track, at: t))
+          .frame(width: track, height: h, alignment: .leading)
+          .clipped()
+          .mask(alignment: .leading) {
+            HStack(spacing: 0) {
+              Rectangle().frame(width: fill)
+              Rectangle().opacity(FrostSweep.trackOpacity / lit)
+            }
+          }
+          .opacity(lit)
+          .offset(x: o)
+      }
+      if fill > 0 {
+        FrostRays()
+          .rotationEffect(.radians(r.angle))
+          .scaleEffect(r.length / FrostRays.length)
+          .frame(width: 2 * FrostRays.length, height: 2 * FrostRays.length)
+          .offset(x: o + FrostEdge.center(fill: fill) - FrostRays.length)
+          .frame(width: track + 2 * o, height: h + 2 * o, alignment: .leading)
+          .clipped()
+      }
+    }
+  }
+
+  // The soft glow on the fill's end (still).
+  private func glow(fill: Double) -> some View {
+    let x = FrostEdge.center(fill: fill), r = FrostEdge.glowRadius, o = FrostEdge.overflow
+    return Canvas { ctx, size in
+      let c = CGPoint(x: x + o, y: size.height / 2)
+      ctx.fill(Path(ellipseIn: CGRect(x: c.x - r, y: c.y - (Self.height / 2 + o), width: 2 * r, height: Self.height + 2 * o)),
+               with: .radialGradient(Gradient(colors: [Theme.frost.opacity(0.6), Theme.frost.opacity(0)]),
+                                     center: c, startRadius: 0, endRadius: r))
+    }
+    .clipped()
+    .opacity(fill > 0 ? 1 : 0)
+    .allowsHitTesting(false)
+  }
+
+}
+
+// The edge's faint rays, drawn once around the centre of a square `2 * length` points wide.
+struct FrostRays: View {
+  static let length = 7.0
+  var body: some View {
+    Canvas { ctx, size in
+      let c = CGPoint(x: size.width / 2, y: size.height / 2)
+      for i in 0..<FrostEdge.rays {
+        let a = Double(i) * 2 * .pi / Double(FrostEdge.rays)
+        var ray = Path()
+        ray.move(to: c)
+        ray.addLine(to: CGPoint(x: c.x + cos(a) * Self.length, y: c.y + sin(a) * Self.length))
+        ctx.stroke(ray, with: .color(Theme.iceCore.opacity(0.22)), lineWidth: 0.8)
+      }
+    }
+    .drawingGroup()
   }
 }
 
