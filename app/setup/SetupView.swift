@@ -483,14 +483,16 @@ struct WorkPage: View {
             TimelineView(.periodic(from: .now, by: reduceMotion ? 1 : 0.25)) { context in
               let shown = model.overall.display(at: context.date)
               HStack(spacing: 10) {
-                FrostBar(value: shown, active: model.working && model.overall.active(at: context.date))
+                FrostBar(value: shown, active: model.working && model.overall.active(at: context.date),
+                         sweeping: model.working)
                   .animation(reduceMotion ? nil : .easeOut(duration: 0.4), value: shown)
                 Text("\(Int((shown * 100).rounded(.down))) %").font(Theme.body(12).monospacedDigit())
                   .foregroundStyle(Theme.ash).frame(width: 40, alignment: .trailing)
               }
             }
           }
-          DisclosureGroup(isExpanded: $model.showDetails) {
+          DetailsToggle(expanded: $model.showDetails)
+          if model.showDetails {
             ScrollViewReader { proxy in
               ScrollView {
                 VStack(alignment: .leading, spacing: 1) {
@@ -503,8 +505,6 @@ struct WorkPage: View {
               .frame(height: 150)
               .onChange(of: model.lines.count) { _, _ in proxy.scrollTo(min(model.lines.count, 200) - 1) }
             }
-          } label: {
-            Text(model.showDetails ? "Hide Details" : "Show Details").font(Theme.body(12)).foregroundStyle(Theme.frost)
           }
         }
       }

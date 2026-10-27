@@ -61,12 +61,15 @@ struct Panel<Content: View>: View {
   }
 }
 
-// The website's loading bar: icy fill in a bronze-tinted iron frame. `active`:
-// work is going on that has no measure yet, shown by a light sweeping along
-// the bar (a steady brighter edge instead under reduced motion).
+// The website's loading bar: icy fill in a bronze-tinted iron frame. `sweeping`:
+// setup is working, shown by a light sweeping along the filled part only
+// (FrostSweep, at most 30 frames a second). `active`: work is going on that has
+// no measure yet, the same light brighter. Under reduced motion, a steady
+// brighter edge at the fill instead.
 struct FrostBar: View {
   let value: Double?
   var active = false
+  var sweeping = false
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   var body: some View {
     GeometryReader { g in
@@ -77,16 +80,21 @@ struct FrostBar: View {
           .fill(LinearGradient(colors: [Theme.frostDeep, Theme.frost, Theme.iceCore], startPoint: .leading, endPoint: .trailing))
           .frame(width: fill)
           .shadow(color: Theme.glow, radius: 6)
-        if active {
+        if active || sweeping {
           if reduceMotion {
             Rectangle().fill(Theme.iceCore.opacity(0.5)).frame(width: 3).offset(x: max(fill - 3, 0))
           } else {
-            TimelineView(.animation) { context in
-              let phase = context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 1.6) / 1.6
-              Rectangle()
-                .fill(LinearGradient(colors: [.clear, Theme.iceCore.opacity(0.55), .clear], startPoint: .leading, endPoint: .trailing))
-                .frame(width: 70)
-                .offset(x: -70 + (g.size.width + 70) * phase)
+            TimelineView(.animation(minimumInterval: 1.0 / 30)) { context in
+              let t = context.date.timeIntervalSinceReferenceDate
+              if let shown = FrostSweep.visible(fill: fill, at: t) {
+                Rectangle()
+                  .fill(LinearGradient(colors: [.clear, Theme.iceCore.opacity(active ? 0.7 : 0.45), .clear],
+                                       startPoint: .leading, endPoint: .trailing))
+                  .frame(width: FrostSweep.band)
+                  .offset(x: FrostSweep.lead(fill: fill, at: t))
+                  .frame(width: shown.upperBound, alignment: .leading)
+                  .clipped()
+              }
             }
           }
         }
@@ -97,6 +105,39 @@ struct FrostBar: View {
     .frame(height: 8)
     .accessibilityElement()
     .accessibilityValue(active ? "working" : value.map { "\(Int($0 * 100)) percent" } ?? "working")
+  }
+}
+
+// "Show Details" / "Hide Details" with its arrow: one control, clicked anywhere on
+// the words or the arrow, or focused with Tab and toggled with Space or Return.
+struct DetailsToggle: View {
+  @Binding var expanded: Bool
+  @FocusState private var focused: Bool
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  var body: some View {
+    HStack(spacing: 6) {
+      Image(systemName: "chevron.right").font(.system(size: 10, weight: .semibold))
+        .rotationEffect(.degrees(expanded ? 90 : 0))
+      Text(DetailsControl.title(expanded: expanded)).font(Theme.body(12))
+    }
+    .foregroundStyle(Theme.frost)
+    .contentShape(Rectangle())
+    .overlay(RoundedRectangle(cornerRadius: 3).stroke(Theme.frost.opacity(focused ? 0.9 : 0), lineWidth: 1).padding(-3))
+    .onTapGesture { toggle() }
+    .focusable()
+    .focused($focused)
+    .focusEffectDisabled()
+    .onKeyPress(.space) { toggle(); return .handled }
+    .onKeyPress(.return) { toggle(); return .handled }
+    .accessibilityElement(children: .ignore)
+    .accessibilityLabel(DetailsControl.accessibilityLabel)
+    .accessibilityValue(DetailsControl.accessibilityValue(expanded: expanded))
+    .accessibilityAddTraits(.isButton)
+    .accessibilityAction { toggle() }
+  }
+
+  private func toggle() {
+    withAnimation(reduceMotion ? nil : .easeOut(duration: 0.15)) { expanded.toggle() }
   }
 }
 

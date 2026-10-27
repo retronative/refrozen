@@ -13,6 +13,9 @@
 //                                 the overall progress for timed lines on stdin, "<seconds> <line>";
 //                                 "<seconds> ?" asks, "<seconds> #stop" stops, "<seconds> #verified"
 //                                 verifies; per line "<shown> <stage> <active> <status>"
+//     sweep <fill>                the progress light over one sweep of a bar filled <fill> points:
+//                                 per 1/60 s "<seconds> <lead> <start> <end>", or "<seconds> -"
+//     details                     the Show/Hide Details control: "<expanded> <title>|<label>|<value>"
 //     add-map <file>              import a map (never overwrites one)
 //     play                        start the game (the Mini Launcher's Start Game)
 //     render <dir>                the window's pages as PNGs (previews)
@@ -139,6 +142,24 @@ enum SetupCLI {
         }
         print(String(format: "%.4f", progress.display(at: now)), progress.stage, progress.active(at: now) ? 1 : 0,
               progress.status)
+      }
+      return 0
+    case ("sweep", 1):
+      guard let fill = Double(rest[0]) else { return 2 }
+      let p = FrostSweep.period(fill: fill)
+      for i in 0..<Int((p * 60).rounded(.up)) {
+        let t = Double(i) / 60
+        if let v = FrostSweep.visible(fill: fill, at: t) {
+          print(String(format: "%.4f %.2f %.2f %.2f", t, FrostSweep.lead(fill: fill, at: t), v.lowerBound, v.upperBound))
+        } else {
+          print(String(format: "%.4f -", t))
+        }
+      }
+      return 0
+    case ("details", 0):
+      for expanded in [false, true] {
+        print(expanded ? 1 : 0, [DetailsControl.title(expanded: expanded), DetailsControl.accessibilityLabel,
+                                 DetailsControl.accessibilityValue(expanded: expanded)].joined(separator: "|"))
       }
       return 0
     case ("add-map", 1):
