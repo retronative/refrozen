@@ -475,6 +475,34 @@ func measuredLiftEstimate(_ paths: Paths) -> TimeInterval {
   return times.isEmpty ? 60 : times.reduce(0, +) / Double(times.count)
 }
 
+// The light that sweeps along the progress bar's filled part: one band `band` points wide,
+// moving at `speed` points a second from before the bar's start to the fill edge, then again.
+// `visible` is the part that shows: never past the fill, none when the fill is too short.
+enum FrostSweep {
+  static let band = 70.0, speed = 220.0, minFill = 24.0
+
+  static func period(fill: Double) -> Double { max((fill + band) / speed, 1.2) }
+
+  static func lead(fill: Double, at t: Double) -> Double {
+    let p = period(fill: fill)
+    return -band + (fill + band) * (t.truncatingRemainder(dividingBy: p) / p)
+  }
+
+  static func visible(fill: Double, at t: Double) -> ClosedRange<Double>? {
+    guard fill >= minFill else { return nil }
+    let l = lead(fill: fill, at: t)
+    let start = max(l, 0), end = min(l + band, fill)
+    return end > start ? start...end : nil
+  }
+}
+
+// The Show/Hide Details control: its words and what assistive technologies are told.
+enum DetailsControl {
+  static let accessibilityLabel = "Details"
+  static func title(expanded: Bool) -> String { expanded ? "Hide Details" : "Show Details" }
+  static func accessibilityValue(expanded: Bool) -> String { expanded ? "expanded" : "collapsed" }
+}
+
 // MARK: - Maps
 
 enum MapImport: Equatable {
