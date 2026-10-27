@@ -35,6 +35,8 @@ declare module 'virtual:docs' {
     milestones: Milestone[]
     /** Inline HTML list items. */
     planned: string[]
+    /** The release's known limitations. */
+    known: string[]
     excluded: string[]
   }
   export const status: ProjectStatus

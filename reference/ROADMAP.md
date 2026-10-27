@@ -132,7 +132,7 @@ official cooperation. Nothing network-facing is needed before M7.
   HLE; Direct3D 8 absent); input untested; upstream fake-success no-ops (`InvalidateRect`,
   `UpdateWindow`, `FillRect`, `DrawTextA`); `font.ccd`; game.dll's threads' memory ordering.
 
-## M4 — Interactive menus and rendering correctness *(Passed 2026-10-25; progression to M5 approved under the user's overnight delegation, final sign-off with the user)*
+## M4 — Interactive menus and rendering correctness *(Passed 2026-10-25, signed off by the user)*
 - **Scope (the user's 2026-10-25 request):** main menu and Custom Game interface fully interactive
   and visually correct: mouse, keyboard, focus, resize, minimize/restore, menu navigation;
   rendering compared with the official 1.26a Wine oracle; observed GL defects fixed;
@@ -160,7 +160,7 @@ official cooperation. Nothing network-facing is needed before M7.
   (unexplained, lighting-related); isotropic vs macOS's anisotropic filtering; Start Game
   initialises winsock (first stop `wsock32!htons`); Direct3D 8 absent; 315 strict stubs.
 
-## M5 — Playable local match (offline) *(Passed 2026-10-25; progression to M6 approved under the user's overnight delegation, final sign-off with the user)*
+## M5 — Playable local match (offline) *(Passed 2026-10-25, signed off by the user)*
 - Load a DotA map in single player (custom game), select a hero, play a full match to the end
   screen: terrain/models/UI rendered, Miles audio, mouse and keyboard.
 - **Accept:** a full local match on the chosen DotA build, 3 runs, no fatal stop; replay saved.

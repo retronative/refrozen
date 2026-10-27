@@ -117,6 +117,7 @@ export function parseStatus(docsDir, base) {
     releaseVersion,
     milestones,
     planned: list('In v0.1.0'),
+    known: list('Known limitations in v0.1.0'),
     excluded: list('Not part of v0.1.0'),
   }
 }

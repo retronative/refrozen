@@ -22,8 +22,8 @@ milestone passes only when its acceptance criteria have been met and observed.
 | M1 | Recompile all modules | Passed, signed off | |
 | M2 | Native link and process start | Passed, signed off | |
 | M3 | Runtime initialisation | Passed, signed off | |
-| M4 | Interactive menus and rendering | Passed, sign-off pending | Passed under delegation; final sign-off pending. |
-| M5 | Playable local match (offline) | Passed, sign-off pending | Passed under delegation; final sign-off pending. A full local DotA match plays to the score screen. |
+| M4 | Interactive menus and rendering | Passed, signed off | |
+| M5 | Playable local match (offline) | Passed, signed off | A full local DotA match plays to the score screen. |
 | M6 | AI bots and long sessions | Passed, signed off | Full DotA AI matches with computer players: three 30-minute runs and one 65-minute match won by the Scourge, with stable frame pacing and memory. An intermittent crash seen in earlier long runs is a known alpha limitation (not fixed). |
 | M7 | LAN and private multiplayer | Future work | Not part of v0.1.0. |
 | M8 | iCCup online | Future work | Only with iCCup's official cooperation. Not part of v0.1.0. |
@@ -41,6 +41,21 @@ milestone passes only when its acceptance criteria have been met and observed.
 - Audio, mouse and keyboard
 - Borderless fullscreen and Retina / HiDPI, with the 4:3 interface preserved
 - Replays written after each match, and played back in the game
+
+### Known limitations in v0.1.0
+
+- **An intermittent crash in long AI matches.** Its cause is not known and it is not fixed. If it
+  happens, please report it with the crash report from `~/Library/Application Support/reFrozen/crashes`.
+- **Saved games of the DotA v6.83d AI map can't be loaded.** Saving works, but loading such a save
+  shows "The save file is unavailable or corrupted", and then the game crashes and closes. Saving and
+  loading on standard maps works; other DotA maps have not been tested.
+- **A short pause before loading starts** (about half a second) when you select a map and when you
+  press Start Game. This comes from the game itself.
+- **The loading bar freezes for a few seconds** while a large map loads, and audio may stutter during
+  match loading. Gameplay itself runs smoothly.
+- The scoreboard may show expanded during a match.
+- reFrozen is not notarized: macOS blocks the first open until you choose **Open Anyway** (see
+  [Getting started](getting-started.md)).
 
 ### Not part of v0.1.0
 

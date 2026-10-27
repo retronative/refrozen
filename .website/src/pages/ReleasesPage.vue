@@ -46,6 +46,16 @@ const outro = releasesSection?.html.split(/<\/ul>\n?/).pop() ?? ''
         </div>
       </div>
 
+      <div class="mt-12">
+        <h3 id="known-limitations" class="eyebrow !text-ember">Known limitations in v0.1.0</h3>
+        <ul class="mt-5 list-none space-y-3 p-0 m-0">
+          <li v-for="item in status.known" :key="item" class="grid grid-cols-[1rem_1fr] gap-3">
+            <span class="mt-[.55em] h-2 w-2 rotate-45 bg-ember" aria-hidden="true" />
+            <span v-html="item" />
+          </li>
+        </ul>
+      </div>
+
       <Prose :html="outro" class="mt-12 border-l-2 border-gold/50 pl-4 text-ash" />
     </section>
 
