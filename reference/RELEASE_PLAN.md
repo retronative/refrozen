@@ -394,7 +394,8 @@ Outcomes for v0.1.0 (release candidate 3, `57a0db5`), recorded 2026-10-27:
       exact "Open Anyway" steps documented (macOS 27.0.1).
 - [x] R6 (signed off by the owner): the human session; no "blocks play" defect open. A launch
       failure found on release candidate 2 was fixed in release candidate 3 and verified. Saved
-      games of the DotA v6.83d AI map can't be loaded: a known limitation, not a gate.
+      games of one map version, DotA v6.83d AI (PMV 1.42 EN), can't be loaded: a known limitation,
+      not a gate (saves load on Booty Bay and on DotA v6.78c AI 1.4e; the owner, 2026-10-27).
 - [x] R7b: licence file, notices, no LGPL component shipped, history audit, trademarks.
 - [x] Disclosure review of the published changes and the release notes (no addresses, keys or private files).
 - [x] Release notes: scope, requirements, known issues, non-goals (M7, M8), no legal-clearance claim.

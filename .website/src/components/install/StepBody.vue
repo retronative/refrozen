@@ -176,8 +176,8 @@ const dataFolder = '~/Library/Application Support/reFrozen'
       <component :is="h" :id="id('known-limitations')">Known limitations</component>
       <p>
         v0.1.0 is an alpha. Its <a :href="release.page ?? undefined">release notes</a> list the known limitations, among them an
-        intermittent crash in long AI matches, and saved games of the DotA v6.83d AI map that can't be loaded (the game reports an
-        error, then crashes; standard maps' saves load).
+        intermittent crash in long AI matches, and saved games of one map version, DotA v6.83d AI (PMV 1.42 EN), that can't be
+        loaded (the game reports an error, then crashes). Saves load on standard maps and on DotA v6.78c AI 1.4e.
       </p>
 
       <component :is="h" :id="id('troubleshooting')">Troubleshooting</component>

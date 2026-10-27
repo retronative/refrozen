@@ -62,8 +62,9 @@ reFrozen never ships any of these. It contains no game code, assets, maps or key
 v0.1.0 is an alpha. The [release notes](https://github.com/retronative/refrozen/releases/tag/v0.1.0) list its known limitations, among them:
 
 - an intermittent crash in long AI matches, whose cause is not known;
-- saved games of the DotA v6.83d AI map can't be loaded: the game reports the save as unavailable
-  or corrupted, then crashes and closes (saving and loading on standard maps works);
+- saved games of one map version, DotA v6.83d AI (PMV 1.42 EN), can't be loaded: the game reports
+  the save as unavailable or corrupted, then crashes and closes. Saving and loading work on standard
+  maps and on DotA v6.78c AI 1.4e;
 - a short pause before a map starts loading, and a loading bar that freezes for a few seconds on
   large maps.
 

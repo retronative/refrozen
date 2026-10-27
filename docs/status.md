@@ -46,9 +46,11 @@ milestone passes only when its acceptance criteria have been met and observed.
 
 - **An intermittent crash in long AI matches.** Its cause is not known and it is not fixed. If it
   happens, please report it with the crash report from `~/Library/Application Support/reFrozen/crashes`.
-- **Saved games of the DotA v6.83d AI map can't be loaded.** Saving works, but loading such a save
-  shows "The save file is unavailable or corrupted", and then the game crashes and closes. Saving and
-  loading on standard maps works; other DotA maps have not been tested.
+- **Saved games of one map version, DotA v6.83d AI (PMV 1.42 EN), can't be loaded.** Saving works,
+  but loading such a save shows "The save file is unavailable or corrupted", and then the game
+  crashes and closes. This is specific to that map version, not to DotA AI maps in general: saving
+  and loading work on a standard map (Booty Bay) and on DotA v6.78c AI 1.4e. How the original
+  Warcraft III client behaves with this map's saves has not been checked yet.
 - **A short pause before loading starts** (about half a second) when you select a map and when you
   press Start Game. This comes from the game itself.
 - **The loading bar freezes for a few seconds** while a large map loads, and audio may stutter during
