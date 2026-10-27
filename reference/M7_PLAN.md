@@ -141,6 +141,38 @@ LAN play is Mac to Mac.
 | Wine reference broken on m1-air | No automated Windows peer | Repair it (deferred from v0.1.0), or a real Windows PC |
 | The intermittent crash in long AI matches | A crash ends a LAN game for everyone | Tracked as before; LAN soak runs add evidence |
 
+## Replay cross-check: findings (2026-10-27, diagnostic only)
+
+- **Replays carry a per-turn state checksum.** Every replay reFrozen records has one `0x22` block
+  per time slot (a turn of about 100 ms of game time), holding a 4-byte value that changes every
+  turn: 1,193 in M5's 110-second match, 18,098 in a 30-minute M6 match. These are the values a LAN
+  game exchanges to detect a desync, so replays are an exact determinism record.
+- **The replay viewer does not check them.** A reFrozen replay re-encoded with valid block and
+  header checksums plays normally (`-loadfile`). The same replay with one turn's checksum altered
+  (turn 200, about 20 s in) also plays on with no message. So watching a replay cannot by itself
+  show a desync: the checksum the game computes during playback has to be read out and compared.
+- **The game writes the replay only at the end.** `TempReplay.w3g` stays empty during play (the
+  replay is kept in memory), so the checksum routine cannot be found from file writes; it needs
+  reverse-engineering of the game's code (private notes, as the docs policy requires).
+- **No replay recorded by the original client existed.** The Wine reference's `TempReplay.w3g` is
+  empty.
+- **The Wine reference is repaired.** Wine itself works; the game exited because, launched over
+  ssh, Wine's Mac display driver cannot reach the window server ("the graphics driver is missing").
+  Launched through LaunchServices (`open` on a small `.app`), the original client runs, so
+  replays recorded by the original 1.26a client can now be made on m1-air.
+- **Not yet known:** whether reFrozen's simulation is deterministic against itself (record versus
+  playback) and against the original client. Both need the playback checksum.
+
+**Next step (proposed):** a diagnostic-only probe that logs the checksum the game computes each turn,
+during play and during replay playback, using the runtime's existing probe mechanism, after locating
+the routine. Then:
+1. reFrozen against itself: record, play back, compare every turn;
+2. reFrozen against Windows: replays recorded by the original client (Wine) played in reFrozen,
+   and the reverse;
+3. the first differing turn, if any, points at the cause (x87 fast paths, an import's result).
+
+Estimated 1–2 days. Its answer decides whether M7a needs an exact-x87 mode before LAN play.
+
 ## M7b: private servers (separate scope, not started)
 
 Private servers that players run themselves (PvPGN-style): Battle.net-style logon (the `w3l`
@@ -150,8 +182,9 @@ anything network-facing, and a legal check. It follows M7a only if the owner wan
 
 ## Order and effort (rough)
 
-1. **Replay cross-check** (determinism), diagnostic only, before any socket code. The Wine
-   reference repair is time-boxed within it.
+1. **Replay cross-check** (determinism), diagnostic only, before any socket code. Done so far: the
+   findings above, and the Wine reference repaired. Remaining: the playback checksum probe and
+   the comparisons (1–2 days).
 2. Socket layer with unit tests and mutants: 3–5 days.
 3. Two instances on one Mac, scripted: 2–4 days.
 4. Two Macs, the owner's checklist: 1–2 sessions.
