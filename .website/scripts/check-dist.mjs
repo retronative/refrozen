@@ -2,6 +2,7 @@
 // or content that suggests private material (internal notes, game files, local paths, keys).
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { basename, extname, join, relative, resolve } from 'node:path'
+import { RELEASE_DMG_URL, parseFrontmatter } from '../plugins/docs.mjs'
 
 const dist = resolve(import.meta.dirname, '../dist')
 const ALLOWED_EXT = new Set(['.html', '.css', '.js', '.svg', '.woff2', '.txt', '.xml', '.json', '.ico', '.webmanifest'])
@@ -87,6 +88,28 @@ for (const file of files) {
   for (const [pattern, why] of FORBIDDEN) {
     const m = pattern.exec(text)
     if (m) errors.push(`${rel}: ${why}: "…${text.slice(Math.max(0, m.index - 30), m.index + m[0].length + 30).replace(/\s+/g, ' ')}…"`)
+  }
+}
+
+// The home hero's download button (components/ReleaseCta.vue) must agree with docs/status.md:
+// an active link only when release_url is set, and then only to that GitHub release .dmg asset;
+// otherwise a disabled button (aria-disabled, no href).
+{
+  const { data } = parseFrontmatter(readFileSync(resolve(import.meta.dirname, '../../docs/status.md'), 'utf8'))
+  const releaseUrl = data.release_url || null
+  const home = readFileSync(join(dist, 'index.html'), 'utf8')
+  const tags = [...home.matchAll(/<(a|button)\b[^>]*\bdata-release-cta="([^"]*)"[^>]*>/g)]
+  if (tags.length !== 1) errors.push(`index.html: expected one download button (data-release-cta), found ${tags.length}`)
+  for (const [tag, element, state] of tags) {
+    const href = /\shref="([^"]*)"/.exec(tag)?.[1]
+    if (element === 'a' || state === 'active' || href !== undefined) {
+      if (!releaseUrl) errors.push(`index.html: the download button is an active link but docs/status.md sets no release_url: ${tag}`)
+      else if (element !== 'a' || state !== 'active' || href !== releaseUrl) errors.push(`index.html: the download button must link to release_url (${releaseUrl}): ${tag}`)
+      if (href !== undefined && !RELEASE_DMG_URL.test(href)) errors.push(`index.html: the download button links outside the GitHub releases' .dmg assets: ${href}`)
+    } else {
+      if (state !== 'soon' || !/\saria-disabled="true"/.test(tag)) errors.push(`index.html: the "Coming soon" button must be aria-disabled: ${tag}`)
+      if (releaseUrl) errors.push(`index.html: docs/status.md sets release_url but the download button is still "Coming soon"`)
+    }
   }
 }
 

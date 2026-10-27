@@ -11,6 +11,24 @@ export const HOLD_AT = 0.95
 export const MAX_WAIT_MS = 4000
 export const MAX_STEP_MS = 50
 
+// After completion (all CSS, keyed on the hero's intro-complete class and timed by these values,
+// passed in as custom properties so the timeline lives in one place):
+// "The ancients are awake" shows for AWAKE_MS, then the bar fades out over BAR_FADE_MS while the
+// download CTA fades in over CTA_FADE_MS from CTA_DELAY_MS, overlapping the bar's fade by
+// BAR_FADE_MS - (CTA_DELAY_MS - AWAKE_MS). From the start: complete at 2.4 s, bar fades 3.2-3.6 s,
+// CTA fades in 3.4-3.9 s. A skip or reduced motion shows the final state at once.
+export const AWAKE_MS = 800
+export const BAR_FADE_MS = 400
+export const CTA_DELAY_MS = 1000
+export const CTA_FADE_MS = 500
+
+export const outroTimingStyle = {
+  '--t-awake': `${AWAKE_MS}ms`,
+  '--t-bar-fade': `${BAR_FADE_MS}ms`,
+  '--t-cta-delay': `${CTA_DELAY_MS}ms`,
+  '--t-cta-fade': `${CTA_FADE_MS}ms`,
+}
+
 export type IntroPhase = 'playing' | 'complete' | 'skipped'
 
 export interface IntroState {

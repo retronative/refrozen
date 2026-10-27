@@ -12,13 +12,12 @@ import ChatLog from '../components/ChatLog.vue'
 import Minimap from '../components/Minimap.vue'
 import Glyph from '../components/Glyph.vue'
 import LoadingBar from '../components/LoadingBar.vue'
+import ReleaseCta from '../components/ReleaseCta.vue'
 import { landmarks } from '../data/lanes'
 import { milestone, status } from '../docs'
-import { createIntro, initialIntroState, introSession, type IntroState } from '../intro'
+import { createIntro, initialIntroState, introSession, outroTimingStyle, type IntroState } from '../intro'
 
 const hot = ref<string | null>(null)
-const chronicle = ref<HTMLElement | null>(null)
-const continueButton = ref<HTMLButtonElement | null>(null)
 const current = status.milestones.find((m) => m.state === 'in-progress')
 const m5 = milestone('M5')
 
@@ -34,7 +33,8 @@ let controller: ReturnType<typeof createIntro> | null = null
 function finishIntro(moveFocus = false) {
   if (introDone.value) return
   controller?.skip()
-  if (moveFocus) requestAnimationFrame(() => continueButton.value?.focus())
+  // The download button takes the place the loading bar had.
+  if (moveFocus) requestAnimationFrame(() => document.querySelector<HTMLElement>('.hero-cta')?.focus())
 }
 
 // Real loading the bar waits on (up to a cap): the hero artwork decoding, on screens that show it,
@@ -58,14 +58,6 @@ function onKey(event: KeyboardEvent) {
 
 function onHeroClick(event: MouseEvent) {
   if (!(event.target as HTMLElement).closest('a, button')) finishIntro()
-}
-
-function descend() {
-  const el = chronicle.value
-  if (!el) return
-  const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches
-  el.scrollIntoView({ behavior: reduce ? 'auto' : 'smooth', block: 'start' })
-  el.focus({ preventScroll: true })
 }
 
 onMounted(() => {
@@ -106,7 +98,7 @@ const steps = [
 <template>
   <div>
     <!-- The loading screen: dawn and dusk, divided by the river. -->
-    <section class="hero" :class="{ 'intro-done': introDone, 'intro-complete': intro.phase === 'complete' }" aria-labelledby="hero-title" @click="onHeroClick">
+    <section class="hero" :class="{ 'intro-done': introDone, 'intro-complete': intro.phase === 'complete' }" :style="outroTimingStyle" aria-labelledby="hero-title" @click="onHeroClick">
       <div class="hero__sky" aria-hidden="true" />
       <div class="hero__river" aria-hidden="true" />
       <FrostField :count="12" />
@@ -141,13 +133,17 @@ const steps = [
         </div>
 
         <div class="loading-plate mx-auto mt-12 flex max-w-md flex-col items-center gap-3">
-          <LoadingBar
-            :progress="intro.progress"
-            :complete="intro.phase === 'complete'"
-            :skipped="intro.phase === 'skipped'"
-            label="Recompiling the ancients…"
-            complete-label="The ancients are awake"
-          />
+          <!-- One reserved box: the loading bar, then the download button in the same place. -->
+          <div class="hero-cta-slot">
+            <LoadingBar
+              :progress="intro.progress"
+              :complete="intro.phase === 'complete'"
+              :skipped="intro.phase === 'skipped'"
+              label="Recompiling the ancients…"
+              complete-label="The ancients are awake"
+            />
+            <ReleaseCta />
+          </div>
           <div class="relative h-11 w-full">
             <button
               type="button"
@@ -155,14 +151,6 @@ const steps = [
               @click.stop="finishIntro(true)"
             >
               Skip intro
-            </button>
-            <button
-              ref="continueButton"
-              type="button"
-              class="press-key absolute inset-x-0 mx-auto w-fit min-h-11 px-4 bg-transparent border-0 cursor-pointer font-display text-[.8rem] uppercase tracking-[.3em] text-gold-bright hover:text-white"
-              @click.stop="descend"
-            >
-              Continue &mdash; the first wave is marching
             </button>
           </div>
         </div>
@@ -175,7 +163,7 @@ const steps = [
     </section>
 
     <!-- What it is -->
-    <section id="chronicle" ref="chronicle" tabindex="-1" class="fog-edge relative mx-auto max-w-6xl px-4 sm:px-8 py-24 outline-none" aria-labelledby="what-title">
+    <section id="chronicle" tabindex="-1" class="fog-edge relative mx-auto max-w-6xl px-4 sm:px-8 py-24 outline-none" aria-labelledby="what-title">
       <div class="section-head">
         <p class="eyebrow">Not an emulator</p>
         <h2 id="what-title" class="gilded">Recompiled, not imitated</h2>

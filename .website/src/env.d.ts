@@ -28,6 +28,10 @@ declare module 'virtual:docs' {
   export interface ProjectStatus {
     releaseHeadline: string
     releasePlanned: string
+    /** The published DMG (docs/status.md `release_url`), or null before the release: "Coming soon". */
+    releaseUrl: string | null
+    /** e.g. "v0.1.0" (`release_version`), set together with releaseUrl. */
+    releaseVersion: string | null
     milestones: Milestone[]
     /** Inline HTML list items. */
     planned: string[]

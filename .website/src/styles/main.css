@@ -417,30 +417,125 @@ a:hover > .brand-mark { filter: drop-shadow(0 2px 3px rgba(0, 0, 0, .7)) drop-sh
   margin-right: .02em;
 }
 
-/* Loading plate (the bar is components/LoadingBar.vue), then the prompt. */
+/* Loading plate (the bar is components/LoadingBar.vue). */
 /* The loading bar sits on its own dark, gilt-edged plate, like a classic loading screen. */
-/* No panel: the bar floats over the artwork; this only spaces the bar and the prompt. */
+/* No panel: the bar floats over the artwork. */
 .loading-plate {
   background: none;
   border: 0;
   box-shadow: none;
   padding: 0;
 }
-/* The prompt appears when the intro completes (or is skipped), not on a timer; one line under the bar. */
-.press-key {
-  opacity: 0;
-  visibility: hidden;
-  font-size: .68rem !important;
-  letter-spacing: .16em !important;
-  white-space: nowrap;
-}
 .intro-skip { transition: opacity .3s; }
 /* Intro finished or skipped: show the final state. */
-.intro-done .press-key { animation: fade-in .35s ease forwards; }
-/* After a natural completion the prompt follows the bar's glow; a skip shows it at once. */
-.intro-complete .press-key { animation-delay: 1.2s; }
 .intro-done .intro-skip { opacity: 0; visibility: hidden; }
-@keyframes fade-in { to { opacity: 1; visibility: visible; } }
+
+/* The loading bar and the download button share one reserved box (components/ReleaseCta.vue), so
+   nothing moves when one replaces the other. With JS the button waits for the intro; a skip or a
+   revisit shows it at once; without JS it shows and the bar does not. */
+.hero-cta-slot { position: relative; width: min(23.75rem, 100%); height: 4.5rem; margin-inline: auto; }
+.hero-cta-slot .lbar { position: absolute; inset: 0; width: 100%; display: flex; flex-direction: column; justify-content: center; }
+html:not(.js) .hero-cta-slot .lbar { visibility: hidden; }
+.js .hero-cta { opacity: 0; visibility: hidden; }
+.js .intro-done .hero-cta { opacity: 1; visibility: visible; }
+.js .intro-complete .hero-cta { animation: cta-in var(--t-cta-fade, 500ms) ease var(--t-cta-delay, 1000ms) both; }
+@keyframes cta-in { from { opacity: 0; visibility: hidden; } to { opacity: 1; visibility: visible; } }
+
+/* The button: a gilded frame around a cold-lit stone face, in the pointed shape of the site's
+   buttons; an ice glow behind it (outside the clip) and a light sweep across it on hover/focus. */
+.hero-cta {
+  position: absolute;
+  inset: 0;
+  display: block;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: var(--color-bone);
+  text-decoration: none;
+  cursor: pointer;
+}
+.hero-cta::before {
+  content: "";
+  position: absolute;
+  inset: -14px -22px;
+  border-radius: 50%;
+  background: radial-gradient(closest-side, rgba(79, 178, 235, .34), rgba(79, 178, 235, .1) 60%, transparent);
+  pointer-events: none;
+  transition: opacity .4s, transform .6s var(--ease-out);
+}
+.hero-cta__plate {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: .8rem;
+  height: 100%;
+  padding: 0 1.75rem;
+  overflow: hidden;
+  background: linear-gradient(135deg, #eed2a7, #ab7f52 38%, #47301c 58%, #ab7f52 82%, #eed2a7);
+  clip-path: polygon(18px 0, calc(100% - 18px) 0, 100% 50%, calc(100% - 18px) 100%, 18px 100%, 0 50%);
+}
+.hero-cta__plate::before {
+  content: "";
+  position: absolute;
+  inset: 2px;
+  background:
+    radial-gradient(70% 120% at 50% 0%, rgba(136, 211, 249, .14), transparent 70%),
+    linear-gradient(180deg, #183150, #0b1726 62%, #0d1c2e);
+  box-shadow: inset 0 1px 0 rgba(223, 237, 250, .22), inset 0 0 24px rgba(79, 178, 235, .28);
+  clip-path: polygon(17px 0, calc(100% - 17px) 0, 100% 50%, calc(100% - 17px) 100%, 17px 100%, 0 50%);
+  transition: background .4s;
+}
+.hero-cta__plate::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(100deg, transparent 38%, rgba(223, 237, 250, .26) 50%, transparent 62%);
+  transform: translateX(-120%);
+  pointer-events: none;
+}
+.hero-cta__icon, .hero-cta__text { position: relative; z-index: 1; }
+.hero-cta__icon svg { display: block; fill: rgba(136, 211, 249, .25); stroke: var(--color-ice-core); stroke-width: 1.3; stroke-linejoin: round; filter: drop-shadow(0 0 6px rgba(79, 178, 235, .7)); }
+.hero-cta__text { display: grid; gap: .2rem; text-align: center; }
+.hero-cta__label {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: .92rem;
+  letter-spacing: .09em;
+  line-height: 1.1;
+  text-transform: uppercase;
+  white-space: nowrap;
+  color: var(--color-ice-core);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, .8), 0 0 14px rgba(79, 178, 235, .55);
+}
+.hero-cta__meta {
+  font-family: var(--font-display);
+  font-size: .64rem;
+  letter-spacing: .24em;
+  line-height: 1.2;
+  text-transform: uppercase;
+  white-space: nowrap;
+  color: var(--color-frost);
+}
+a.hero-cta:hover::before, a.hero-cta:focus-visible::before { transform: scale(1.08); }
+a.hero-cta:hover .hero-cta__plate::before { background: radial-gradient(70% 120% at 50% 0%, rgba(136, 211, 249, .18), transparent 70%), linear-gradient(180deg, #1b3558, #0d1b2c 62%, #0f2033); }
+a.hero-cta:hover .hero-cta__plate::after, a.hero-cta:focus-visible .hero-cta__plate::after { transform: translateX(120%); transition: transform .9s var(--ease-out); }
+.hero-cta:focus-visible { outline: none; }
+.hero-cta:focus-visible .hero-cta__plate::before { box-shadow: inset 0 0 0 2px var(--color-frost), inset 0 0 0 4px var(--color-abyss), inset 0 0 24px rgba(79, 178, 235, .35); }
+/* Before the release: a disabled plate, not a link (aria-disabled), legible but quiet. */
+.hero-cta--soon { cursor: not-allowed; }
+.hero-cta--soon::before { opacity: .55; }
+.hero-cta--soon .hero-cta__plate { background: linear-gradient(135deg, #b8996f, #6e5236 45%, #3a2817 60%, #6e5236 85%, #b8996f); }
+.hero-cta--soon .hero-cta__plate::before { background: linear-gradient(180deg, #152030, #0b121b 70%, #0d151f); box-shadow: inset 0 1px 0 rgba(223, 237, 250, .1), inset 0 0 20px rgba(79, 178, 235, .12); }
+.hero-cta--soon .hero-cta__label { color: var(--color-gold-bright); text-shadow: 0 1px 2px rgba(0, 0, 0, .8); letter-spacing: .2em; }
+.hero-cta--soon .hero-cta__meta { color: var(--color-ash); }
+@media (max-width: 30rem) {
+  .hero-cta__plate { padding: 0 1.25rem; gap: .6rem; }
+  .hero-cta__label { font-size: .84rem; letter-spacing: .08em; }
+  .hero-cta--soon .hero-cta__label { letter-spacing: .18em; }
+  .hero-cta__meta { font-size: .6rem; letter-spacing: .18em; }
+}
 
 /* Entrance reveal for hero copy. */
 .rise { animation: rise 1.2s var(--ease-out) both; }
@@ -802,7 +897,8 @@ a:hover > .brand-mark { filter: drop-shadow(0 2px 3px rgba(0, 0, 0, .7)) drop-sh
   }
   .frost-field, .hero__river { animation: none !important; }
   .frost-field { display: none; }
-  .press-key { opacity: 1; visibility: visible; }
+  .hero-cta { opacity: 1 !important; visibility: visible !important; animation: none !important; }
+  .hero-cta__plate::after { display: none; }
   .minimap .ping { display: none; }
 }
 
