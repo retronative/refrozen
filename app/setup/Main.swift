@@ -8,7 +8,11 @@
 //     key                         a CD key on stdin: ok, or exit 1 (never echoed)
 //     owner <name>                ok, or the problem (exit 1)
 //     install <roc> <tft> <patch> <owner>   the two CD keys on stdin, one per line
-//     build                       build the game module, "progress <n>/<total>" lines
+//     build                       build the game module; "progress <percent> <stage>: <status>" lines
+//     replay-progress [build] [estimate=<s>] [floor=<f>]
+//                                 the overall progress for timed lines on stdin, "<seconds> <line>";
+//                                 "<seconds> ?" asks, "<seconds> #stop" stops, "<seconds> #verified"
+//                                 verifies; per line "<shown> <stage> <active> <status>"
 //     add-map <file>              import a map (never overwrites one)
 //     play                        start the game (the Mini Launcher's Start Game)
 //     render <dir>                the window's pages as PNGs (previews)
@@ -104,15 +108,38 @@ enum SetupCLI {
     case ("build", 0):
       let step = buildStep(paths: paths)
       let log = SetupLog(paths: paths)
-      var progress = BuildProgress()
+      var progress = SetupProgress(installing: false)
       cancelOnSignal(step)
       let status = (try? step.run { line in
+        let before = progress
         progress.read(line)
         log.write(line)
-        if line.hasPrefix("compiled ") { print("progress \(progress.done)/\(progress.total)") } else { print(line) }
+        if progress != before { print("progress \(progress.percent(at: Date()))% \(progress.stage): \(progress.status)") }
+        if !line.hasPrefix("compiled ") && !line.hasPrefix("prepared ") { print(line) }
       }) ?? -1
       if status != 0 { print("no: \(buildFailure(status))"); return 1 }
+      guard state(paths) == .ready else { print("no: the built game module could not be verified"); return 1 }
+      progress.verified()
+      print("progress \(progress.percent(at: Date()))% \(progress.stage): \(progress.status)")
       print("built: \(paths.module.path)")
+      return 0
+    case ("replay-progress", _):
+      let opt = { (k: String) in rest.first { $0.hasPrefix(k + "=") }.flatMap { Double($0.dropFirst(k.count + 1)) } }
+      var progress = SetupProgress(installing: !rest.contains("build"), liftEstimate: opt("estimate") ?? 60,
+                                   floor: opt("floor") ?? 0)
+      let t0 = Date(timeIntervalSinceReferenceDate: 0)
+      while let input = readLine() {
+        guard let space = input.firstIndex(of: " "), let t = Double(input[..<space]) else { continue }
+        let now = t0.addingTimeInterval(t), line = String(input[input.index(after: space)...])
+        switch line {
+        case "#verified": progress.verified()
+        case "#stop": progress.stop(at: now)
+        case "?": break
+        default: progress.read(line, at: now)
+        }
+        print(String(format: "%.4f", progress.display(at: now)), progress.stage, progress.active(at: now) ? 1 : 0,
+              progress.status)
+      }
       return 0
     case ("add-map", 1):
       do {
@@ -188,16 +215,33 @@ enum Previews {
         m.page = .work
         m.working = true
         m.phase = "Building the game for this Mac"
-        m.progress = 0.37
-        m.lines = ["— Installing Warcraft III and patching it to 1.26a", "installed: RoC 1.21b", "installed: TFT 1.21b",
-                   "patch 1.26a: 723 files", "— Building the game for this Mac",
-                   "reFrozen game module: 8 jobs, Apple clang 21.0.0", "compiling 243 files"]
-          + (1...12).map { "compiled gen_game_\(String(format: "%03d", $0)).cpp" }
+        m.started = Date().addingTimeInterval(-154)
+        let ls: [String] = ["— Installing Warcraft III and patching it to 1.26a", "install RoC: {'file': 77}", "install TFT: {'file': 194}",
+                  "patch 1.26a: {'disk': 147}", "— Building the game for this Mac", "reFrozen game module 1234-abcd: 8 jobs"]
+          + (1...11).map { i in "prepared module (\(i)/11)" } + ["lifting the game code", "compiling 244 files"]
+          + (1...96).map { i in "compiled gen_game_\(String(format: "%03d", i)).cpp" }
+        for l in ls { m.overall.read(l); m.lines.append(l) }
+      }),
+      ("4-lifting", { m in
+        m.page = .work
+        m.working = true
+        m.phase = "Building the game for this Mac"
+        m.started = Date().addingTimeInterval(-41)
+        m.overall = SetupProgress(installing: false, liftEstimate: 63)
+        m.showDetails = true
+        let ls: [String] = ["— Building the game for this Mac", "reFrozen game module 1234-abcd: 8 jobs"] + (1...11).map { i in "prepared module (\(i)/11)" }
+          + ["lifting the game code"]
+        for l in ls { m.overall.read(l, at: Date().addingTimeInterval(-41)); m.lines.append(l) }
       }),
       ("4-failed", { m in
         m.page = .work
         m.failure = "a file did not compile"
-        m.lines = ["— Building the game for this Mac", "compiling 243 files", "build failed: a file did not compile"]
+        m.started = Date().addingTimeInterval(-131)
+        m.finished = Date()
+        m.overall = SetupProgress(installing: false)
+        let ls: [String] = ["— Building the game for this Mac", "reFrozen game module 1234-abcd: 8 jobs"] + (1...11).map { i in "prepared module (\(i)/11)" }
+          + ["lifting the game code", "compiling 244 files", "compiled gen_000.cpp", "build failed: a file did not compile"]
+        for l in ls { m.overall.read(l); m.lines.append(l) }
       }),
       ("5-ready", { m in
         m.page = .done

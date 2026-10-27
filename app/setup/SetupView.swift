@@ -24,7 +24,10 @@ final class SetupModel: ObservableObject {
   @Published var tftKey = ""
   @Published var owner = NSFullUserName()
   @Published var phase = ""
-  @Published var progress: Double?
+  @Published var overall = SetupProgress(installing: true)
+  @Published var started: Date?
+  @Published var finished: Date?
+  @Published var showDetails = false
   @Published var lines: [String] = []
   @Published var failure: String?
   @Published var working = false
@@ -94,30 +97,35 @@ final class SetupModel: ObservableObject {
       rocKey: normaliseKey(rocKey)!, tftKey: normaliseKey(tftKey)!, owner: owner) : nil
     rocKey = ""
     tftKey = ""  // the keys are only needed by the installer
+    // A retry never shows less than where the stopped attempt stood.
+    let floor = overall.stoppedAt != nil ? overall.display(at: Date()) : 0
+    overall = SetupProgress(installing: installation != nil, liftEstimate: measuredLiftEstimate(paths), floor: floor)
+    started = Date()
+    finished = nil
     Task.detached {
       do {
         if let i = installation {
           let step = installStep(i, paths: paths)
-          await self.begin(step, "Installing Warcraft III and patching it to 1.26a", nil)
+          await self.begin(step, "Installing Warcraft III and patching it to 1.26a")
           try install(i, paths: paths, step: step) { l in Task { @MainActor in self.add(l) } }
         }
         let step = buildStep(paths: paths)
-        await self.begin(step, "Building the game for this Mac", 0)
-        var progress = BuildProgress()
-        let status = try step.run { l in
-          progress.read(l)
-          let f = progress.fraction
-          Task { @MainActor in self.add(l); if let f = f { self.progress = f } }
-        }
+        await self.begin(step, "Building the game for this Mac")
+        let status = try step.run { l in Task { @MainActor in self.add(l) } }
         guard status == 0 else { throw SetupError(buildFailure(status)) }
-        await MainActor.run { self.working = false; self.page = .done }
+        // 100 % only once the installed module is there and matches this app.
+        guard state(paths) == .ready else { throw SetupError("the built game module could not be verified") }
+        await MainActor.run { self.overall.verified(); self.finished = Date(); self.working = false; self.page = .done }
       } catch {
-        await MainActor.run { self.working = false; self.failure = "\(error)" }
+        await MainActor.run { self.overall.stop(); self.finished = Date(); self.working = false; self.failure = "\(error)" }
       }
     }
   }
 
-  func cancel() { current?.cancel() }
+  func cancel() {
+    overall.stop()
+    current?.cancel()
+  }
 
   func addMap(_ url: URL) {
     mapNote = note(url)
@@ -142,14 +150,19 @@ final class SetupModel: ObservableObject {
     }
   }
 
-  private func begin(_ step: Step, _ phase: String, _ progress: Double?) {
+  private func begin(_ step: Step, _ phase: String) {
     current = step
     self.phase = phase
-    self.progress = progress
     add("— " + phase)
   }
 
+  // A failed or cancelled install needs the CD keys again (they are not kept); a failed build retries at once.
+  func retry() {
+    if state(paths) == .needsInstall { page = .keys } else { start() }
+  }
+
   private func add(_ line: String) {
+    overall.read(line)
     log?.write(line)
     lines.append(line)
     if lines.count > 400 { lines.removeFirst(lines.count - 400) }
@@ -447,26 +460,51 @@ struct KeysPage: View {
 
 struct WorkPage: View {
   @ObservedObject var model: SetupModel
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
       PageTitle(title: model.failure == nil ? "Installing and building" : "Setup stopped",
                 subtitle: model.failure ?? (model.phase.isEmpty
                   ? "The game is installed; the game module needs to be built for this version of reFrozen."
-                  : model.phase + ". This takes a few minutes; you can cancel at any time."))
+                  : "This takes a few minutes; you can cancel at any time."))
       Panel {
-        VStack(alignment: .leading, spacing: 10) {
-          if model.working || model.progress != nil { FrostBar(value: model.progress) }
-          ScrollViewReader { proxy in
-            ScrollView {
-              VStack(alignment: .leading, spacing: 1) {
-                ForEach(Array(model.lines.suffix(200).enumerated()), id: \.offset) { i, l in
-                  Text(l).font(.system(size: 10, design: .monospaced)).foregroundStyle(Theme.ash).id(i)
-                }
-              }
-              .frame(maxWidth: .infinity, alignment: .leading)
+        VStack(alignment: .leading, spacing: 12) {
+          if model.working || model.started != nil {
+            StageStrip(progress: model.overall, stopped: model.failure != nil)
+            HStack(alignment: .firstTextBaseline) {
+              Text(model.failure == nil ? model.overall.status : "Stopped: \(model.overall.status.lowercased())")
+                .font(Theme.bodyMedium(13)).foregroundStyle(model.failure == nil ? Theme.bone : Theme.ember)
+                .lineLimit(1)
+              Spacer()
+              ElapsedText(since: model.started, until: model.finished)
             }
-            .frame(height: 220)
-            .onChange(of: model.lines.count) { _, _ in proxy.scrollTo(min(model.lines.count, 200) - 1) }
+            // The Lift's estimate moves with time: redrawn every 0.25 s (1 s under reduced motion),
+            // eased over 0.4 s (no easing under reduced motion).
+            TimelineView(.periodic(from: .now, by: reduceMotion ? 1 : 0.25)) { context in
+              let shown = model.overall.display(at: context.date)
+              HStack(spacing: 10) {
+                FrostBar(value: shown, active: model.working && model.overall.active(at: context.date))
+                  .animation(reduceMotion ? nil : .easeOut(duration: 0.4), value: shown)
+                Text("\(Int((shown * 100).rounded(.down))) %").font(Theme.body(12).monospacedDigit())
+                  .foregroundStyle(Theme.ash).frame(width: 40, alignment: .trailing)
+              }
+            }
+          }
+          DisclosureGroup(isExpanded: $model.showDetails) {
+            ScrollViewReader { proxy in
+              ScrollView {
+                VStack(alignment: .leading, spacing: 1) {
+                  ForEach(Array(model.lines.suffix(200).enumerated()), id: \.offset) { i, l in
+                    Text(l).font(.system(size: 10, design: .monospaced)).foregroundStyle(Theme.ash).id(i)
+                  }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+              }
+              .frame(height: 150)
+              .onChange(of: model.lines.count) { _, _ in proxy.scrollTo(min(model.lines.count, 200) - 1) }
+            }
+          } label: {
+            Text(model.showDetails ? "Hide Details" : "Show Details").font(Theme.body(12)).foregroundStyle(Theme.frost)
           }
         }
       }
@@ -481,8 +519,44 @@ struct WorkPage: View {
         if model.working {
           Button("Cancel") { model.cancel() }.buttonStyle(FrostButtonStyle(prominent: false))
         } else if model.failure != nil || model.phase.isEmpty {
-          Button(model.failure == nil ? "Build" : "Try again") { model.start() }.buttonStyle(FrostButtonStyle())
+          Button(model.failure == nil ? "Build" : "Try again") { model.retry() }.buttonStyle(FrostButtonStyle())
         }
+      }
+    }
+  }
+}
+
+// The setup's four stages: done, current (or where it stopped), still to come.
+struct StageStrip: View {
+  let progress: SetupProgress
+  let stopped: Bool
+  private let names = ["Install", "Lift", "Compile", "Finish"]
+  var body: some View {
+    HStack(spacing: 14) {
+      ForEach(0..<4, id: \.self) { i in
+        let done = progress.stage.rawValue > i, current = progress.stage.rawValue == i
+        HStack(spacing: 5) {
+          Image(systemName: done ? "checkmark.diamond.fill" : current ? (stopped ? "exclamationmark.triangle.fill" : "diamond.fill") : "diamond")
+            .font(.system(size: 10))
+            .foregroundStyle(done ? Theme.verdant : current ? (stopped ? Theme.ember : Theme.frost) : Theme.seam)
+          Text(names[i]).font(Theme.body(11)).foregroundStyle(current ? Theme.bone : Theme.ash)
+        }
+      }
+      Spacer()
+    }
+  }
+}
+
+// Minutes and seconds since the setup started (frozen once it stops), so a
+// long step never looks frozen.
+struct ElapsedText: View {
+  let since: Date?
+  let until: Date?
+  var body: some View {
+    TimelineView(.periodic(from: .now, by: 1)) { context in
+      if let since = since {
+        let t = max(0, Int((until ?? context.date).timeIntervalSince(since)))
+        Text(String(format: "%d:%02d", t / 60, t % 60)).font(Theme.body(12).monospacedDigit()).foregroundStyle(Theme.ash)
       }
     }
   }

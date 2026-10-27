@@ -173,6 +173,62 @@ def main():
             open(p, "wb").write(content)
             check(f"map: refused, {why}", setup("add-map", p)[0] == 1)
 
+        # One overall progress (SetupProgress, through replay-progress, with timed lines): Install,
+        # Compile and Finish follow completed work; the Lift shows estimated progress from 3 % toward
+        # 19 % at a fifth of the measured Lift's speed, 20 % only when it is done.
+        def replay(timed, *args):
+            text = "\n".join(f"{t} {l}" for t, l in timed) + "\n"
+            out = subprocess.run([binary, "--setup", "replay-progress", *args], input=text, capture_output=True,
+                                 text=True, env=setup.env()).stdout.splitlines()
+            return [(float(l.split()[0]), l.split()[1], l.split()[2] == "1", " ".join(l.split()[3:])) for l in out]
+
+        lift = [(10, "reFrozen game module 1234-abcd: 8 jobs")] + [(10 + i, f"prepared m{i} ({i}/11)") for i in range(1, 12)] \
+            + [(22, "lifting the game code"), (70, "?"), (310, "?"), (1000, "?")]
+        rest = [(1001, "compiling 244 files")] + [(1002 + i, f"compiled gen_{i:03d}.cpp") for i in range(244)] \
+            + [(1250, "linking"), (1251, "signing"), (1252, "installing the module"), (1253, "built: /x/war3.dylib")]
+        install = [(1, "install RoC: {'file': 77}"), (4, "install TFT: {'file': 194}"), (8, "patch 1.26a: {'disk': 147}")]
+        seq = install + lift + rest + [(1254, "#verified")]
+        r = replay(seq, "estimate=60")
+        at = {t: x for (t, l), x in zip(seq, r) if l == "?"}
+        check("progress: one Lift estimate (60 s) in, the bar shows 6.2 %", abs(at[70][0] - 0.062) < 0.0005, at[70])
+        check("progress: at five times the estimate the Lift's estimate reaches 19 %", abs(at[310][0] - 0.19) < 0.0005,
+              at[310])
+        check("progress: a long Lift holds at 19 % with the shimmer", at[1000][0] == 0.19 and at[1000][2], at[1000])
+        lift_values = [x[0] for (t, l), x in zip(seq, r) if x[1] == "lift"]
+        check("progress: never 20 % before the Lift completes", max(lift_values) <= 0.19, max(lift_values))
+        done_lift = seq.index((1001, "compiling 244 files"))
+        check("progress: 20 % when the Lift completes", r[done_lift][0] == 0.20, r[done_lift])
+        check("progress: the Lift says Recompiling game code", r[seq.index((22, "lifting the game code"))][3]
+              == "Recompiling game code…")
+        fr = [x[0] for x in r]
+        check("progress: one bar that never moves back across install, lift, compile and finish",
+              all(b >= a for a, b in zip(fr, fr[1:])), fr[:20])
+        order = ["install", "lift", "compile", "finish", "done"]
+        stages = [order.index(x[1]) for x in r]
+        check("progress: the stages only move forward", all(b >= a for a, b in zip(stages, stages[1:])))
+        check("progress: the install follows its completed products", [round(x[0], 4) for x in r[:3]] == [0.01, 0.02, 0.03],
+              r[:3])
+        mid = seq.index((1002 + 121, "compiled gen_121.cpp"))
+        check("progress: halfway through compiling is halfway through the compile stage",
+              abs(r[mid][0] - (0.20 + 0.78 * 122 / 244)) < 0.002, r[mid])
+        check("progress: the status names the stage and the count", "122 of 244" in r[mid][3], r[mid][3])
+        check("progress: never 100 % before the module is verified", max(fr[:-1]) < 1.0, max(fr[:-1]))
+        check("progress: 100 % once verified", r[-1][0] == 1.0 and r[-1][1] == "done")
+        rb = replay([(0, "?")] + [(t - 10, l) for t, l in lift[:1]], "build", "estimate=60")
+        check("progress: a build after an install starts where the install ended", rb[0][0] == 0.03, rb)
+        stop = replay(lift[:13] + [(40, "#stop"), (200, "?")], "build", "estimate=60")
+        check("progress: a cancel freezes the bar where it stood, without the shimmer",
+              stop[-1][0] == stop[-2][0] and not stop[-1][2], stop[-2:])
+        retry = replay([(0, "?"), (1, "reFrozen game module 1234-abcd: 8 jobs"), (30, "?"), (2000, "?")],
+                       "build", "estimate=60", f"floor={stop[-1][0]}")
+        check("progress: a retry starts where the stopped attempt stood and never shows less",
+              all(x[0] >= stop[-1][0] for x in retry) and retry[1][2], retry)
+        odd = replay(install + lift[:12] + rest[:30] + [(1100, "prepared m1 (1/11)"), (1101, "compiling 244 files"),
+                                                        (1102, "warning: x"), (1103, "build failed: y")], "estimate=60")
+        of = [x[0] for x in odd]
+        check("progress: stray, repeated or unknown lines never move it back",
+              all(b >= a for a, b in zip(of, of[1:])), of[-6:])
+
         # Install: refused before anything is written, cancelled, then complete.
         import shutil
         shutil.rmtree(data)

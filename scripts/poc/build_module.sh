@@ -66,6 +66,10 @@ echo "reFrozen game module $STAMP: $JOBS jobs, $($XCODE_SELECT -p), $(/usr/bin/x
 
 SECONDS=0
 args=()
+# Progress for the first-run setup (it parses these lines): "prepared <module>
+# (<i>/<n>)", "lifting the game code" (silent, about a minute), "compiling <n>
+# files" and one "compiled <file>" each, then "linking", "signing",
+# "installing the module" and "built: ...".
 for i in "${!MODULES[@]}"; do
   file=${MODULES[$i]%%:*} name=${MODULES[$i]##*:} dir="$TMP/symbols/${MODULES[$i]##*:}"
   mkdir -p "$dir"
@@ -76,7 +80,9 @@ for i in "${!MODULES[@]}"; do
     || fail 13 "reading $file"
   [ "$i" = 0 ] && args+=(--exe "$INSTALL/$file") || args+=(--module "$INSTALL/$file")
   args+=(--symbols "$dir" --manifest "$KIT/config/$name.manifest")
+  echo "prepared $name ($((i + 1))/${#MODULES[@]})"
 done
+echo "lifting the game code"
 "$KIT/bin/recomp_lift" "${args[@]}" --out "$TMP/generated" > "$TMP/lift.log" 2>&1 \
   || { tail -20 "$TMP/lift.log"; fail 13 "the lifter stopped"; }
 T_LIFT=$SECONDS
@@ -96,7 +102,6 @@ chmod +x "$TMP/cc.sh"
     sleep 1
   done ) &
 SAMPLER=$!
-# Progress for the first-run setup: "compiling <n> files", then one "compiled <file>" line each.
 echo "compiling $(ls "$TMP"/generated/*.cpp "$KIT/src/lifted_table.cpp" | wc -l | tr -d ' ') files"
 # NUL-separated: the default data folder, Application Support, has a space.
 printf '%s\0' "$TMP"/generated/*.cpp "$KIT/src/lifted_table.cpp" | xargs -0 -P "$JOBS" -n 1 "$TMP/cc.sh" &
@@ -105,9 +110,11 @@ wait "$WORKERS" || { WORKERS=""; fail 14 "a file did not compile"; }
 WORKERS=""
 T_CC=$SECONDS
 
+echo "linking"
 "/usr/bin/xcrun" clang++ -dynamiclib -arch arm64 -o "$TMP/out/war3.dylib" "$TMP"/obj/*.o \
   -L"$KIT/lib" -lrecomp_runtime -lrecomp_x87 -lrecomp_image -install_name @rpath/war3.dylib \
   || fail 15 "linking the module"
+echo "signing"
 /usr/bin/codesign -f -s - "$TMP/out/war3.dylib" || fail 15 "signing the module"
 T_LINK=$SECONDS
 kill "$SAMPLER" 2>/dev/null; SAMPLER=""
@@ -118,6 +125,7 @@ echo "$STAMP" > "$TMP/out/stamp.txt"
 # Into place: build/<stamp>, then build/current (renames; a rebuild keeps the
 # previous module until the new one is in place).
 final="$DATA/build/$STAMP"
+echo "installing the module"
 mv "$TMP/out" "$DATA/build/.$STAMP.ready" || fail 15 "moving the module into place"
 [ -e "$final" ] && mv "$final" "$DATA/build/.$STAMP.previous"
 mv "$DATA/build/.$STAMP.ready" "$final" && ln -s "$STAMP" "$DATA/build/.current.new" &&
