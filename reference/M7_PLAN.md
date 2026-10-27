@@ -163,15 +163,30 @@ LAN play is Mac to Mac.
 - **Not yet known:** whether reFrozen's simulation is deterministic against itself (record versus
   playback) and against the original client. Both need the playback checksum.
 
-**Next step (proposed):** a diagnostic-only probe that logs the checksum the game computes each turn,
-during play and during replay playback, using the runtime's existing probe mechanism, after locating
-the routine. Then:
-1. reFrozen against itself: record, play back, compare every turn;
-2. reFrozen against Windows: replays recorded by the original client (Wine) played in reFrozen,
-   and the reverse;
-3. the first differing turn, if any, points at the cause (x87 fast paths, an import's result).
-
-Estimated 1–2 days. Its answer decides whether M7a needs an exact-x87 mode before LAN play.
+**Checksum probe (2026-10-27, diagnostic only; details in private notes):**
+- **The checksum is located.** Each turn the game computes it and sends it as an internal message,
+  which the replay records. A diagnostic probe on that send reads exactly the recorded values:
+  381 of 381 in a live game, in order.
+- **During replay playback the game does not compute the checksum at all.** It is skipped by a
+  session flag, and part of its input comes from session data that a playback does not have. So
+  the full checksum cannot be compared in playback. The checksum combines a **simulation-state
+  value** (one of its inputs, mixed with the game's build number) with session values that change
+  during the game.
+- **The simulation-state value can be read in both modes**, and it is the meaningful one for
+  determinism:
+  - **DotA 6.83d AI, about 38 s of game with computer heroes: 381 of 381 turns identical**, live
+    against the playback of its own replay;
+  - **the M5 match (DotA 6.85oz LoD: hero selection, attack-move, the enemy base destroyed,
+    victory): 1,195 of 1,195 turns identical.**
+- **Conclusion for M7a (Mac to Mac):** reFrozen's simulation is deterministic against itself on
+  m1-air, in record versus playback, through player actions and combat. Nothing so far calls for
+  an exact-x87 mode before LAN play between Macs.
+- **Not yet measured:**
+  - two different Macs (M1 and M5) on the same replay;
+  - long matches (30 minutes and more);
+  - against the original client. That needs the same value read inside the original client under
+    Wine (for example a small logging DLL), since the full checksum cannot be compared from replays
+    alone.
 
 ## M7b: private servers (separate scope, not started)
 
@@ -182,9 +197,13 @@ anything network-facing, and a legal check. It follows M7a only if the owner wan
 
 ## Order and effort (rough)
 
-1. **Replay cross-check** (determinism), diagnostic only, before any socket code. Done so far: the
-   findings above, and the Wine reference repaired. Remaining: the playback checksum probe and
-   the comparisons (1–2 days).
+1. **Replay cross-check** (determinism), diagnostic only: **done** for reFrozen against itself
+   (above), and the Wine reference repaired. Remaining checks, cheap and independent of the
+   socket work:
+   - the same replay played on two different Macs (M1 and M5);
+   - a long match.
+
+   Windows comparison (a logging DLL under Wine) stays with the stretch goal.
 2. Socket layer with unit tests and mutants: 3–5 days.
 3. Two instances on one Mac, scripted: 2–4 days.
 4. Two Macs, the owner's checklist: 1–2 sessions.
