@@ -259,6 +259,14 @@ official cooperation. Nothing network-facing is needed before M7.
   (bit-exact x87/SSE lockstep, no desyncs over a full match); then private servers the players
   run themselves (PvPGN-style, the w3l logon-hash behaviour), only with the user's approval for
   anything network-facing. Public online services, iCCup included, are M8.
+- **M7a release target (the owner, 2026-10-28): reFrozen v0.2.0 Alpha — LAN Multiplayer.**
+  Mac-to-Mac LAN hosting, discovery, joining, lobby, chat, custom map transfer, stable play with
+  desync detection, and correct disconnect, cancellation and cleanup; plus the installer
+  progress-bar refinements. Release requires M1 ↔ M5 testing in both directions, a 30+ minute
+  DotA session without desync, map transfer and disconnect recovery tests, M4–M6 regression
+  protection, clean packaging, signing and human verification, and updated website,
+  compatibility docs and release notes. Windows interoperability and M7b private servers are
+  outside v0.2.0. Plan, status and runtime work: `reference/M7_PLAN.md`.
 
 ## M8 — iCCup online compatibility
 - **Goal:** native macOS players can join the existing iCCup DotA community, within iCCup's

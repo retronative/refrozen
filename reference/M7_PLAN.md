@@ -1,6 +1,11 @@
-# M7 plan: LAN multiplayer (planning only, 2026-10-27)
+# M7 plan: LAN multiplayer (2026-10-27, updated 2026-10-28)
 
-Nothing here is implemented. **Approved direction (the owner, 2026-10-27):**
+**Release target (the owner, 2026-10-28): M7a ships as its own release, reFrozen v0.2.0 Alpha —
+LAN Multiplayer.** See "v0.2.0 release target" below. Work is on isolated branches; nothing is
+merged, pushed, tagged or released without the owner's approval, and the published v0.1.0 stays
+unchanged.
+
+**Approved direction (the owner, 2026-10-27):**
 1. **M7a targets Mac-to-Mac LAN multiplayer first.**
 2. **M7b** (private servers, PvPGN-style) is a separate, deferred scope that needs its own approval.
 3. **Windows 1.26a compatibility is a stretch goal**, not a blocker for the first M7a release.
@@ -24,10 +29,23 @@ by ordinal from `wsock32.dll` (`scripts/import_coverage.py`).
 |---|---|
 | `WSAStartup`, `WSACleanup`, `WSAGetLastError`, `gethostname`, `gethostbyname`, `htonl/htons/ntohl/ntohs`, `inet_addr`, `inet_ntoa` | `socket`, `bind`, `listen`, `accept`, `connect`, `closesocket`, `getsockname`, `getpeername`, `ioctlsocket`, `setsockopt`, `select`, `send`, `recv`, `sendto`, `recvfrom` |
 
-- No asynchronous Winsock (`WSAAsyncSelect`, `WSAEventSelect`, overlapped I/O): the game polls with
-  `select` and non-blocking sockets (`ioctlsocket(FIONBIO)`), so a direct mapping onto BSD sockets
-  fits.
-- The game also tries `LoadLibrary("mswsock.dll")` and carries on without it; that stays so.
+- **FALSIFIED (2026-10-28): "no asynchronous Winsock".** Discovery and the lobby's
+  connection set-up poll with `select` and non-blocking sockets, but **hosting and joining
+  use I/O completion ports** (traced on m1-air, details in private notes):
+  - `WSAStartup` reports Winsock 1.1, so the game loads `mswsock.dll` and takes `AcceptEx` and
+    `GetAcceptExSockaddrs` from it (with Winsock 2 it would use `ws2_32.dll`'s `WSASend`,
+    `WSARecv` and `WSAIoctl` instead; that branch is not used);
+  - the listening socket and every connection are associated with one completion port; 16
+    `AcceptEx` calls stay pending; each connection's input is an overlapped `ReadFile` on the
+    socket, completed through the port; output is a plain `send`;
+  - leaving a lobby closes the sockets with operations pending and **waits until every one of
+    them has completed**: without cancellation the game hangs (observed).
+  - Not used on these paths: `WriteFile` on sockets, `CancelIo`, `PostQueuedCompletionStatus`,
+    `TransmitFile`, name lookups.
+
+  This is patch 0024 (below). Patch 0023 (the Winsock 1.1 calls) is implemented and tested.
+- The game calls `LoadLibrary("mswsock.dll")`; without it, hosting stops at a call through a
+  missing `AcceptEx`.
 - `wininet` (`InternetCanonicalizeUrlA`) is Battle.net only: not M7a.
 
 **The LAN protocol (W3GS)**, as the 1.26a client uses it:
@@ -61,6 +79,16 @@ its own tests, written from the Winsock 1.1 specification and Wine's behaviour, 
 7. **Threads.** Calls can come from the game's network thread: the handle table is thread-safe, and
    blocking calls leave the runtime's import lock, as file I/O does.
 
+8. **Patch 0024: sockets as kernel handles, completion ports and overlapped input.** Socket
+   handles share the kernel handle table (0023's own numbering collided with kernel handles);
+   sockets can be associated with a completion port; a minimal `mswsock.dll` provides `AcceptEx`
+   and `GetAcceptExSockaddrs`; overlapped `ReadFile` on a socket completes through the port, from
+   one background thread over all pending socket operations; failed completions carry their status
+   (`GetQueuedCompletionStatus` returns FALSE with the operation, distinct from a timeout); closing
+   a socket ends each of its pending operations exactly once with `ERROR_OPERATION_ABORTED`, and
+   its buffer is never written after that. Expected values from Wine's conformance tests (run
+   against Windows). Only the traced paths: no Winsock 2.
+
 ## Mac platform work
 
 - **Local Network privacy.** Recent macOS asks the user before an app talks on the local network
@@ -92,10 +120,11 @@ its own tests, written from the Winsock 1.1 specification and Wine's behaviour, 
 1. **Unit tests** of the socket layer (x86recomp tests, as `run_on_stack_test`): `fd_set`
    translation, error mapping, non-blocking connect, broadcast send/receive on loopback, handle
    reuse; with mutants in `tests/mutants.py`.
-2. **One Mac, two instances (automated, m1-air):** two reFrozen instances with separate data
-   folders, the second on another `netgameport`. Scripted input (as M4/M5): host a LAN game,
-   discover it, join, chat, start, play a short scripted match, quit. Whether the client finds a
-   host on a non-default port is measured first, since discovery is on 6112.
+2. **One Mac, one instance (automated, m1-air).** Two instances on one Mac cannot both bind
+   UDP 6112 (OBSERVED: the game does not ask for address reuse on it, so Windows rules refuse the
+   second bind), so the automated runs pair one game with a small private test peer: a scripted
+   join against a hosted game (join, lobby, leave, disconnect, host cancel), and the game joining a
+   replayed host. Bounded runs; no network configuration changes.
 3. **Two Macs (m1-air and the owner's darkBook), manual on darkBook:** discovery both ways on the
    same Wi-Fi and on Ethernet, join, a map download, a full DotA match with two players plus
    computer players, at least 30 minutes, then the replays compared. darkBook stays free of
@@ -188,6 +217,66 @@ LAN play is Mac to Mac.
     Wine (for example a small logging DLL), since the full checksum cannot be compared from replays
     alone.
 
+## v0.2.0 release target (the owner, 2026-10-28)
+
+**reFrozen v0.2.0 Alpha — LAN Multiplayer**, a standalone release.
+
+**Scope:**
+- Native Mac-to-Mac LAN: hosting, discovery, joining and the lobby.
+- Multiplayer chat and custom map transfer.
+- Stable multiplayer gameplay with desync detection.
+- Correct disconnect, cancellation and cleanup behaviour.
+- The installer progress-bar refinements already on main (source only since v0.1.0).
+
+**Release requirements:**
+1. LAN testing between the M1 and the M5 Mac in both host/client directions.
+2. A 30+ minute DotA multiplayer session without desync.
+3. Map transfer and disconnect recovery tests.
+4. M4–M6 regression protection.
+5. Clean installation, packaging, signing and human verification (as R1–R8 for v0.1.0).
+6. Website, compatibility documentation and release notes updated.
+
+**Outside v0.2.0:** Windows 1.26a interoperability (the stretch goal above) and M7b private
+servers.
+
+**Status (2026-10-28):**
+- Determinism: VERIFIED for reFrozen against itself (record vs playback, a 30-minute match), and
+  across Macs (M1 and M5, the same replay).
+- Patch 0023 (Winsock 1.1): implemented and tested on its branch, not merged.
+- Patch 0024 (completion ports, `AcceptEx`, overlapped socket input): implemented and tested on
+  its own branch (`feat/m7a-iocp`), not merged. VERIFIED on m1-air (2026-10-28):
+  - `test_win32`: 540 checks pass; mode Q (completion ports) 40 of 40 repeated runs, which
+    include 2,000 closes racing a completion; mode N 30 of 30;
+  - the mutation gate: all 37 M7 mutants (0023's 14, 0024's 23) KILLED;
+  - the patch series 0001–0024 applied to the pinned upstream commit reproduces the tree;
+  - one game instance with a private test peer, twice: hosting, three joins (a leave, a
+    reset, a player still connected when the host cancels the lobby), and joining a replayed
+    host that then disconnects. No fatal stop, no hang, the lobby and LAN screens as expected;
+  - M4 acceptance 3 of 3 and one M5 match PASS on the 0024 runtime.
+- **Network tests must run attached.** OBSERVED: on m1-air a process left running after its ssh
+  session ends gets "No route to host" for every LAN broadcast (loopback unaffected): this caused
+  the intermittent broadcast failure seen with patch 0023. `test_win32` now checks this
+  precondition first. The mechanism is presumably macOS's local network privacy (HYPOTHESIS),
+  which also matters for players: see "Mac platform work".
+- Not yet tested: two Macs, map transfer, a full multiplayer match, desync detection.
+- Two-Mac session: checklist below; runs on darkBook only with the owner's approval per session.
+
+### Two-Mac session checklist (M1 ↔ M5)
+
+Both Macs on the same LAN, no network settings changed; the same patch 0024 build on both, a fresh
+data folder each, `REFROZEN_NET_LOG=1`. If macOS asks for local network access, record the exact
+wording, then allow it.
+1. M1 hosts Booty Bay: M5 sees it in its LAN list within 5 s, joins; chat both ways; slot changes.
+2. M5 leaves the lobby: M1 shows the departure and accepts a new join.
+3. M1 cancels the lobby with M5 joined: both return to the LAN screen, no hang.
+4. Map transfer: M1 hosts a custom map M5 lacks (under 8 MB); M5 downloads it and joins.
+5. A short game (about 2 minutes), then exit normally: both write a replay; compare checksums.
+6. Repeat 1–5 with M5 hosting.
+7. Disconnect: during a game, turn Wi-Fi off on one Mac for about 30 s: the other drops the player
+   and plays on, no hang or crash.
+8. Afterwards on both: no `hangs/` dump, no FATAL in the logs; keep the logs and replays.
+9. The release requirement's 30+ minute DotA session is a separate, later session.
+
 ## M7b: private servers (separate scope, not started)
 
 Private servers that players run themselves (PvPGN-style): Battle.net-style logon (the `w3l`
@@ -198,10 +287,9 @@ anything network-facing, and a legal check. It follows M7a only if the owner wan
 ## Order and effort (rough)
 
 1. **Replay cross-check** (determinism), diagnostic only: **done** for reFrozen against itself
-   (above), and the Wine reference repaired. Remaining checks, cheap and independent of the
-   socket work:
-   - the same replay played on two different Macs (M1 and M5);
-   - a long match.
+   (above), and the Wine reference repaired. **Done since (2026-10-28):** the same replay on the
+   M1 and the M5 Mac, 381 of 381 turns identical; a 30-minute match, record against playback,
+   33,024 of 33,024 identical.
 
    Windows comparison (a logging DLL under Wine) stays with the stretch goal.
 2. Socket layer with unit tests and mutants: 3–5 days.
