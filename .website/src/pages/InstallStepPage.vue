@@ -28,7 +28,7 @@ watch(
 <template>
   <div>
     <PageHero
-      eyebrow="Installation guide · Preview"
+      eyebrow="Installation guide"
       :title="step.title"
       :lore="`Step ${index + 1} of ${total}`"
       :art="index === total - 1 ? 'icegate' : 'candlelit'"
@@ -70,8 +70,8 @@ watch(
           <span class="install-pager__what">Step {{ index + 2 }}: {{ next.short }}</span>
         </RouterLink>
         <RouterLink v-else class="install-pager__btn install-pager__btn--next" to="/releases/">
-          <span class="install-pager__dir">End of the preview</span>
-          <span class="install-pager__what">Follow the release status &rarr;</span>
+          <span class="install-pager__dir">End of the guide</span>
+          <span class="install-pager__what">Release status &rarr;</span>
         </RouterLink>
       </nav>
 

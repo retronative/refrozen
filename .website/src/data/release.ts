@@ -1,28 +1,28 @@
-// The release the installation guide describes. There is no release yet: every value that only a
-// published, tested release can supply is null and shown as "to be announced". Fill these in from
-// the published release, together with docs/getting-started.md, when it ships. The headline text
-// comes from docs/status.md, the single status source.
+// The release the installation guide describes: reFrozen 0.1.0, published 27 October 2026. The
+// values come from the published release and its tests, as docs/getting-started.md gives them. The
+// headline text comes from docs/status.md, the single status source.
 import { status } from '../docs'
 
 export const TBA = 'To be announced'
 
 export const release = {
-  /** "No releases yet" while nothing is published (docs/status.md front matter). */
+  /** The release headline (docs/status.md front matter). */
   headline: status.releaseHeadline,
-  /** "v0.1.0 (offline) planned" (docs/status.md front matter). */
+  /** The line under the headline (docs/status.md front matter). */
   planned: status.releasePlanned,
-  published: false,
-  version: null as string | null,
-  tag: null as string | null,
-  page: null as string | null,
+  published: true,
+  version: 'v0.1.0' as string | null,
+  tag: 'v0.1.0' as string | null,
+  released: '27 October 2026' as string | null,
+  page: 'https://github.com/retronative/refrozen/releases/tag/v0.1.0' as string | null,
   dmg: {
-    name: null as string | null,
-    url: null as string | null,
-    sha256: null as string | null,
+    name: 'reFrozen-0.1.0.dmg' as string | null,
+    url: status.releaseUrl,
+    sha256: '0658af0ad31185e83b5b6af14e6eec7589a6c3a5739b394b759098eff4e46153' as string | null,
   },
-  minMacos: null as string | null,
-  diskSpace: null as string | null,
-  buildTime: null as string | null,
+  minMacos: 'macOS 14' as string | null,
+  diskSpace: 'About 2.5 GB free during setup; about 1.2 GB once set up' as string | null,
+  buildTime: 'About 3 minutes on an M5, about 5½ minutes on an M1' as string | null,
 }
 
 // The guide's steps, in order: one prerendered page each at /docs/installation/<slug>/.
@@ -31,31 +31,31 @@ export const installSteps = [
     slug: 'step-1',
     title: 'Download reFrozen',
     short: 'Download',
-    description: 'Step 1 of 5 of the planned reFrozen installation (preview): what you will need, and the download once v0.1.0 is released.',
+    description: 'Step 1 of 5 of installing reFrozen 0.1.0: what you will need, the download and its checksum.',
   },
   {
     slug: 'step-2',
     title: 'Move reFrozen to Applications',
     short: 'Install',
-    description: 'Step 2 of 5 of the planned reFrozen installation (preview): open the disk image and drag reFrozen to Applications.',
+    description: 'Step 2 of 5 of installing reFrozen 0.1.0: open the disk image and drag reFrozen to Applications.',
   },
   {
     slug: 'step-3',
     title: 'Open it for the first time',
     short: 'First launch',
-    description: 'Step 3 of 5 of the planned reFrozen installation (preview): the first launch, and what to do if macOS blocks the app.',
+    description: 'Step 3 of 5 of installing reFrozen 0.1.0: the first launch, and allowing the app when macOS blocks it.',
   },
   {
     slug: 'step-4',
     title: 'Prepare Warcraft III',
     short: 'Prepare the game',
-    description: 'Step 4 of 5 of the planned reFrozen installation (preview): your own installers are checked, then the game is built on your Mac.',
+    description: 'Step 4 of 5 of installing reFrozen 0.1.0: your own installers are checked, then the game is built on your Mac.',
   },
   {
     slug: 'step-5',
     title: 'Play',
     short: 'Play',
-    description: 'Step 5 of 5 of the planned reFrozen installation (preview): offline play, controls, troubleshooting and uninstalling.',
+    description: 'Step 5 of 5 of installing reFrozen 0.1.0: offline play, controls, troubleshooting and uninstalling.',
   },
 ] as const
 

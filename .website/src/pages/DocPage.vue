@@ -13,9 +13,9 @@ const doc = computed(() => requireDoc(String(route.params.slug)))
 <template>
   <DocLayout :key="doc.slug" :doc="doc" eyebrow="Documentation" art="library" art-position="50% 45%">
     <p v-if="doc.slug === 'getting-started'" class="install-feature install-feature--inline mb-10">
-      <span class="eyebrow">Preview</span>
+      <span class="eyebrow">Installation guide</span>
       <span class="mt-1 block">
-        See the planned installation in five steps:
+        Installing reFrozen 0.1.0 in five steps:
         <RouterLink :to="installPath()">the installation guide</RouterLink>.
       </span>
     </p>

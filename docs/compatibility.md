@@ -38,7 +38,7 @@ You supply the maps yourself; reFrozen does not include or distribute any.
 |---|---|
 | Apple Silicon (M-series) | Target platform |
 | Intel Macs | Not targeted |
-| Minimum macOS version | To be announced |
+| Minimum macOS version | macOS 14 (tested on macOS 27.0.1) |
 
 Retina and scaled displays are supported: the game renders at its own resolution and the frame is
 scaled to the window with its 4:3 shape preserved. Borderless fullscreen toggles with
@@ -50,7 +50,8 @@ scaled to the window with its 4:3 shape preserved. Borderless fullscreen toggles
 |---|---|
 | Single player, Custom Game | Supported (verified) |
 | AI opponents and allies on DotA AI maps | Covered by M6; see [status](status.md#milestones) |
-| Replays | Written after each match (verified); in-game playback not yet verified |
+| Replays | Written after each match and played back in the game (verified) |
+| Saved games | Saving and loading on standard maps (verified). Saved games of the DotA v6.83d AI map can't be loaded: the game reports an error, then crashes (a known limitation) |
 | LAN and private servers | Not supported yet (M7); not in v0.1.0 |
 | iCCup online | Not supported (M8), only ever with iCCup's official cooperation |
 | Battle.net | Not supported |

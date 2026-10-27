@@ -32,11 +32,11 @@ themselves are a later milestone (M7). iCCup support (M8) would only ever happen
 official cooperation and within its anti-cheat requirements; nothing is bypassed. Battle.net is not
 supported. See [Status and releases](status.md).
 
-## When will there be a release?
+## Is there a release?
 
-There are no releases yet. The first one, **v0.1.0**, is an offline-only release planned for after
-the AI-bots milestone (M6) and human playtesting. No date has been announced. The current state is
-on the [Status and releases](status.md) page.
+Yes. **reFrozen 0.1.0 (alpha)**, an offline-only pre-release, was published on 27 October 2026. See
+[Getting started](getting-started.md) to install it, and the [release page](https://github.com/retronative/refrozen/releases/tag/v0.1.0) for its notes
+and known limitations. The current state is on the [Status and releases](status.md) page.
 
 ## Is it legal?
 

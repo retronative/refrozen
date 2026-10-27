@@ -15,7 +15,7 @@ const outro = releasesSection?.html.split(/<\/ul>\n?/).pop() ?? ''
 
 <template>
   <div>
-    <PageHero eyebrow="The armory" title="Releases" lore="The gates are not yet open." art="forge" art-position="55% 55%" />
+    <PageHero eyebrow="The armory" title="Releases" lore="The gates are open." art="forge" art-position="55% 55%" />
 
     <section class="mx-auto max-w-4xl px-4 sm:px-8 py-20" aria-labelledby="releases">
       <div class="panel panel--carved relative overflow-hidden p-8 sm:p-12 text-center">
@@ -27,7 +27,7 @@ const outro = releasesSection?.html.split(/<\/ul>\n?/).pop() ?? ''
 
       <div class="mt-16 grid gap-10 md:grid-cols-2">
         <div>
-          <h3 id="planned-for-v010" class="eyebrow !text-verdant">Planned for v0.1.0</h3>
+          <h3 id="in-v010" class="eyebrow !text-verdant">In v0.1.0</h3>
           <ul class="mt-5 list-none space-y-3 p-0 m-0">
             <li v-for="item in status.planned" :key="item" class="grid grid-cols-[1rem_1fr] gap-3">
               <span class="mt-[.55em] h-2 w-2 rotate-45 bg-verdant" aria-hidden="true" />

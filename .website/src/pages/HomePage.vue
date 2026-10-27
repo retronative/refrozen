@@ -258,7 +258,7 @@ const steps = [
         <div class="relative p-8 sm:p-10 bg-[radial-gradient(90%_80%_at_0%_0%,rgba(163,213,140,.12),transparent_70%)]">
           <p class="eyebrow !text-verdant flex items-center gap-2"><Glyph name="shard" :size="16" /> You bring</p>
           <ul class="mt-5 space-y-3 list-none p-0 m-0 text-bone">
-            <li>An Apple Silicon Mac (minimum macOS to be announced)</li>
+            <li>An Apple Silicon Mac with macOS 14 or later</li>
             <li>Your own Warcraft III: Reign of Chaos and The Frozen Throne installers and CD keys</li>
             <li>The official 1.26a patch</li>
             <li>The maps you want to play</li>

@@ -116,7 +116,7 @@ export function parseStatus(docsDir, base) {
     releaseUrl,
     releaseVersion,
     milestones,
-    planned: list('Planned for v0.1.0'),
+    planned: list('In v0.1.0'),
     excluded: list('Not part of v0.1.0'),
   }
 }

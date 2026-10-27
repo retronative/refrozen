@@ -13,7 +13,7 @@ const banner = `${import.meta.env.BASE_URL}banners/icegate`
 
 <template>
   <div>
-    <PageHero eyebrow="Installation guide · Preview" title="Installing reFrozen" lore="Five steps, from download to the Custom Game screen." art="candlelit" art-position="50% 55%">
+    <PageHero eyebrow="Installation guide" title="Installing reFrozen" lore="Five steps, from download to the Custom Game screen." art="candlelit" art-position="50% 55%">
       <p class="rise rise-3 mt-8">
         <RouterLink class="btn btn--frost" :to="installPath(installSteps[0])">Go step by step</RouterLink>
       </p>

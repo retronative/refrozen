@@ -63,9 +63,9 @@ const routes: RouteRecordRaw[] = [
     name: 'install',
     component: () => import('./pages/InstallAllPage.vue'),
     meta: {
-      title: `Installation guide (preview) — ${SITE}`,
+      title: `Installation guide — ${SITE}`,
       description:
-        'A preview of the planned reFrozen installation, all five steps on one page. There is no release yet; unverified steps are marked.',
+        'Installing reFrozen 0.1.0, all five steps on one page: download, Applications, first launch, preparing your own game and playing.',
     },
   },
   ...installSteps.map(
@@ -74,7 +74,7 @@ const routes: RouteRecordRaw[] = [
       name: `install-${step.slug}`,
       component: () => import('./pages/InstallStepPage.vue'),
       props: { index },
-      meta: { title: `${step.title} — Installation guide (preview) — ${SITE}`, description: step.description },
+      meta: { title: `${step.title} — Installation guide — ${SITE}`, description: step.description },
     }),
   ),
   {
@@ -141,7 +141,7 @@ function breadcrumbsFor(canonical: string, title: string): PageMeta['breadcrumbs
     { name: 'Home', path: '/' },
     { name: 'Documentation', path: '/docs/' },
   ]
-  if (canonical !== installPath() && canonical.startsWith(installPath())) crumbs.push({ name: 'Installation guide (preview)', path: installPath() })
+  if (canonical !== installPath() && canonical.startsWith(installPath())) crumbs.push({ name: 'Installation guide', path: installPath() })
   if (canonical !== '/docs/') crumbs.push({ name: title.split(' — ')[0], path: canonical })
   return crumbs
 }

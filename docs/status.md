@@ -1,9 +1,11 @@
 ---
 title: Status and releases
-description: The single public record of reFrozen's milestones and release plans. No releases yet; v0.1.0 (offline) is planned.
+description: The single public record of reFrozen's milestones and releases. reFrozen 0.1.0 (alpha, offline) is available.
 order: 2
-release_headline: No releases yet
-release_planned: v0.1.0 (offline) planned
+release_headline: reFrozen 0.1.0 (alpha) available
+release_planned: Offline-only pre-release, published 27 October 2026
+release_url: https://github.com/retronative/refrozen/releases/download/v0.1.0/reFrozen-0.1.0.dmg
+release_version: v0.1.0
 ---
 
 # Status and releases
@@ -28,17 +30,17 @@ milestone passes only when its acceptance criteria have been met and observed.
 
 ## Releases
 
-**No releases yet.** There is nothing to download. The first release, **v0.1.0**, is planned as
-an offline-only release once M6 has passed and been signed off and human playtesting is complete.
-No date has been announced.
+**reFrozen 0.1.0 (alpha)**, an offline-only pre-release, was published on 27 October 2026:
+[download and release notes](https://github.com/retronative/refrozen/releases/tag/v0.1.0), including the known limitations. The SHA-256 of
+`reFrozen-0.1.0.dmg` is `0658af0ad31185e83b5b6af14e6eec7589a6c3a5739b394b759098eff4e46153`. To install it, follow [Getting started](getting-started.md).
 
-### Planned for v0.1.0
+### In v0.1.0
 
 - Offline custom games from the Custom Game screen, with maps you supply
 - DotA AI maps with computer allies and opponents
 - Audio, mouse and keyboard
 - Borderless fullscreen and Retina / HiDPI, with the 4:3 interface preserved
-- Replays written after each match (in-game playback is not yet verified)
+- Replays written after each match, and played back in the game
 
 ### Not part of v0.1.0
 
@@ -46,5 +48,5 @@ No date has been announced.
 - iCCup online (M8)
 - Battle.net
 
-A release will contain only reFrozen itself: the recompiler, the runtime and the native installer.
+A release contains only reFrozen itself: the recompiler, the runtime and the native installer.
 The game modules are built on your Mac from your own copy; see [Getting started](getting-started.md).
