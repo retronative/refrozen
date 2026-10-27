@@ -4,7 +4,7 @@
 // state. Run with Node's own test runner (Node strips the TypeScript types).
 import assert from 'node:assert/strict'
 import { beforeEach, test } from 'node:test'
-import { HOLD_AT, INTRO_MS, MAX_STEP_MS, MAX_WAIT_MS, createIntro, introSession } from '../src/intro.ts'
+import { AWAKE_MS, BAR_FADE_MS, CTA_DELAY_MS, CTA_FADE_MS, HOLD_AT, INTRO_MS, MAX_STEP_MS, MAX_WAIT_MS, createIntro, introSession, outroTimingStyle } from '../src/intro.ts'
 
 // A frame clock the test advances by hand.
 function clock() {
@@ -139,4 +139,16 @@ test('reduced motion starts in the final state and stays usable', async () => {
   assert.equal(c.pending(), 0, 'no animation frames')
   intro.skip() // the skip control and keys stay harmless
   assert.equal(states.length, 1)
+})
+
+test('the outro follows the approved timeline', () => {
+  // Approved for v0.1.0: complete at 2.4 s, "awake" until 3.2 s, bar fades 3.2-3.6 s, CTA fades
+  // in 3.4-3.9 s (a 200 ms overlap), then stays.
+  assert.equal(INTRO_MS, 2400)
+  assert.equal(INTRO_MS + AWAKE_MS, 3200)
+  assert.equal(INTRO_MS + AWAKE_MS + BAR_FADE_MS, 3600)
+  assert.equal(INTRO_MS + CTA_DELAY_MS, 3400)
+  assert.equal(INTRO_MS + CTA_DELAY_MS + CTA_FADE_MS, 3900)
+  assert.equal(AWAKE_MS + BAR_FADE_MS - CTA_DELAY_MS, 200)
+  assert.deepEqual(outroTimingStyle, { '--t-awake': '800ms', '--t-bar-fade': '400ms', '--t-cta-delay': '1000ms', '--t-cta-fade': '500ms' })
 })

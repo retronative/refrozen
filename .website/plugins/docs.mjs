@@ -73,6 +73,12 @@ export const STATUS_STATES = {
   'future work': 'future',
 }
 
+// The home page's download button links only to a DMG asset of a published GitHub release of this
+// repository. docs/status.md sets it with `release_url` and `release_version` (both or neither);
+// without them the button shows "Coming soon". scripts/check-dist.mjs checks the built page too.
+export const RELEASE_DMG_URL = /^https:\/\/github\.com\/retronative\/refrozen\/releases\/download\/[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+\.dmg$/
+export const RELEASE_VERSION = /^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/
+
 // docs/status.md is the single source of milestone status and release scope.
 export function parseStatus(docsDir, base) {
   const md = createRenderer(base)
@@ -99,9 +105,16 @@ export function parseStatus(docsDir, base) {
       .filter((line) => line.startsWith('- '))
       .map((line) => md.renderInline(line.slice(2).trim()))
   if (!data.release_headline || !data.release_planned) throw new Error('docs/status.md: release_headline and release_planned are required')
+  const releaseUrl = data.release_url || null
+  const releaseVersion = data.release_version || null
+  if (!releaseUrl !== !releaseVersion) throw new Error('docs/status.md: set release_url and release_version together, or neither')
+  if (releaseUrl && !RELEASE_DMG_URL.test(releaseUrl)) throw new Error(`docs/status.md: release_url must be a .dmg asset under https://github.com/retronative/refrozen/releases/download/ (got ${releaseUrl})`)
+  if (releaseVersion && !RELEASE_VERSION.test(releaseVersion)) throw new Error(`docs/status.md: release_version must look like v0.1.0 (got ${releaseVersion})`)
   return {
     releaseHeadline: data.release_headline,
     releasePlanned: data.release_planned,
+    releaseUrl,
+    releaseVersion,
     milestones,
     planned: list('Planned for v0.1.0'),
     excluded: list('Not part of v0.1.0'),

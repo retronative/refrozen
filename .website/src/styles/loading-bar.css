@@ -119,12 +119,16 @@
   opacity: var(--glow);
 }
 /* Completion: the comet goes out and the fill glows once (brightness only, never dimmer than full,
-   so nothing blinks); then the bar fades away. Skipped: hidden at once, no animation. */
+   so nothing blinks); then the bar fades away. Skipped: hidden at once, no animation. The bar is
+   decorative and never takes the pointer. */
+.lbar { pointer-events: none; }
 .lbar--complete .lbar__tail,
 .lbar--complete .lbar__core { opacity: 0; transition: opacity .25s ease; }
 .lbar--complete .lbar__fill { animation: lbar-glow .8s ease-out 1 both; }
-.lbar--complete .lbar__done { animation: lbar-done .4s ease .15s 1 both; }
-.lbar--complete { animation: lbar-leave .6s ease 1.2s 1 forwards; }
+/* Timing from src/intro.ts (custom properties on the hero): the label shows at once, the bar fades
+   out after --t-awake over --t-bar-fade, and the download button takes its place. */
+.lbar--complete .lbar__done { animation: lbar-done 150ms ease 0s 1 both; }
+.lbar--complete { animation: lbar-leave var(--t-bar-fade, 400ms) ease var(--t-awake, 800ms) 1 forwards; }
 .lbar--skipped { animation: none; opacity: 0; visibility: hidden; }
 
 @keyframes lbar-enter {

@@ -63,7 +63,14 @@ and exposes the result as the virtual module `virtual:docs`:
 - **`docs/status.md` is the single source of project status.** The plugin parses its milestone
   table (`State` must be one of `Passed, signed off`, `Passed, sign-off pending`, `In progress`,
   `Future work`; anything else fails the build), its `Planned for v0.1.0` / `Not part of v0.1.0`
-  lists and its `release_headline` / `release_planned` front matter. The Releases page, the home
+  lists and its `release_headline` / `release_planned` front matter. Two optional front-matter fields drive the home
+  page's download button: `release_version` (for example `v0.1.0`) and `release_url`, the
+  release's DMG asset, which must match
+  `https://github.com/retronative/refrozen/releases/download/<tag>/<name>.dmg`. They are set
+  together or not at all; the build fails otherwise. While they are absent the button is a
+  disabled "Coming soon" plate (`aria-disabled`, not a link). Set them only when the release
+  approval (R8) is given and the asset is published and verified. `check:dist` fails if the built
+  button is a link without `release_url`, or links anywhere else. The Releases page, the home
   page's status log and the Features page's milestone labels all read it. `npm run check:status`
   fails if a milestone id appears next to a state word in any other doc or site source.
 

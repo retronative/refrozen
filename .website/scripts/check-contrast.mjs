@@ -69,6 +69,15 @@ const checks = [
   ['UI: ornament gold (gold-deep) on page', ui.goldDeep, abyss, 3],
   ['UI: ornament gold (gold-deep) on lit stone', ui.goldDeep, panelLit, 3],
   ['UI: ice ornament on page', ui.ice, abyss, 3],
+  // Home hero download button (ReleaseCta.vue): the face's lightest point is the top of its
+  // gradient under the cold radial highlight; hover lightens both.
+  ['download: label (ice-core) on face', hex('#dfedfa'), over([136, 211, 249], 0.14, hex('#183150')), 4.5],
+  ['download: label (ice-core) on hover face', hex('#dfedfa'), over([136, 211, 249], 0.18, hex('#1b3558')), 4.5],
+  ['download: meta (frost) on face', text.frost, over([136, 211, 249], 0.14, hex('#183150')), 4.5],
+  ['download: meta (frost) on hover face', text.frost, over([136, 211, 249], 0.18, hex('#1b3558')), 4.5],
+  ['coming soon: label (gold-bright) on stone face', text.goldBright, hex('#152030'), 4.5],
+  ['coming soon: meta (ash) on stone face', text.ash, hex('#152030'), 4.5],
+  ['UI: download focus ring (frost) on face', text.frost, hex('#183150'), 3],
 ]
 
 // Home hero and page banners (.hero__sky + .hero__river): the lightest points text can sit on
