@@ -106,8 +106,10 @@ IMPORTS = [
                       "CreateFileA", "ReadFile", "WriteFile", "CloseHandle", "SetFilePointer",
                       "SetLastError", "GetCurrentThreadId", "GetTickCount"]),
     # Winsock 1.1 by ordinal (Wine's wsock32.spec): htonl, htons, inet_addr,
-    # inet_ntoa, ntohl, ntohs, WSAGetLastError.
-    ("wsock32.dll", [8, 9, 10, 11, 14, 15, 111]),
+    # inet_ntoa, ntohl, ntohs, WSAGetLastError; mode N's sockets: accept, bind,
+    # closesocket, connect, getpeername, getsockname, ioctlsocket, listen,
+    # recv, recvfrom, select, send, sendto, setsockopt, socket.
+    ("wsock32.dll", [8, 9, 10, 11, 14, 15, 111, 1, 2, 3, 4, 5, 6, 12, 13, 16, 17, 18, 19, 20, 21, 23]),
     ("user32.dll", ["EnumDisplayDevicesA", "EnumDisplaySettingsA", "ChangeDisplaySettingsExA",
                     "RegisterClassA", "CreateWindowExA", "DefWindowProcA", "ShowWindow", "GetDC",
                     "wsprintfA", "SystemParametersInfoA", "InvalidateRect", "UpdateWindow", "BeginPaint",
@@ -162,6 +164,12 @@ class Guest:
         self.wcaps = self.d.put(b"\0" * 52)
         self.hwo, self.wmain, self.wsnap = self.d.put(b"\0" * 4), self.d.put(b"\0" * 4), self.d.put(b"\0" * 4)
         self.iobuf = self.d.put(b"\0" * 32)
+        self.nv = {k: self.d.put(b"\0" * 4) for k in ("u1", "u2", "u3", "u4", "t0", "ls", "cs", "as", "c2", "len", "one", "x", "lin")}
+        self.nsa1, self.nsa2, self.nsa3, self.nsa4, self.nsa5, self.nfrom, self.nbc = (self.d.put(b"\0" * 16)
+                                                                                     for _ in range(7))
+        self.nbuf = self.d.put(b"\0" * 64)
+        self.nfr, self.nfw, self.nfe = (self.d.put(b"\0" * 20) for _ in range(3))  # fd_set: count + 4 SOCKETs
+        self.ntv1, self.ntv0 = self.d.put(struct.pack("<ii", 1, 0)), self.d.put(struct.pack("<ii", 0, 0))
         self.oport, self.ofile, self.obytes, self.okey, self.opovl, self.oev = (self.d.put(b"\0" * 4)
                                                                              for _ in range(6))
         self.label = 0
@@ -599,6 +607,142 @@ def build_text(g):
     g.f_code = f + "  add esp, 36\n" + g.call("OutputDebugStringA", g.out) + g.call("ExitProcess", 0)
     g.o_names, g.names = g.names[first_o:], g.names[:first_o]
 
+    # mode N: Winsock 1.1 sockets on loopback (patch 0023). Expected values:
+    # MSDN's socket, bind, getsockname, getpeername, setsockopt, ioctlsocket,
+    # listen, accept, connect, send, recv, sendto, recvfrom and select pages,
+    # and the Winsock 1.1 specification: errors are WSA codes (WSAGetLastError);
+    # a non-blocking connect returns WSAEWOULDBLOCK and completes in select's
+    # writefds or fails in its exceptfds; an accepted socket has the listening
+    # socket's properties; a datagram longer than the buffer fills it and fails
+    # with WSAEMSGSIZE; getsockname of an unbound socket and listen on one are
+    # WSAEINVAL, as is select with no socket in any set; sendto a broadcast
+    # address without SO_BROADCAST is WSAEACCES.
+    first_n = len(g.names)
+    W = lambda k: f"dword ptr [{g.nv[k]:#x}]"
+    SA = lambda va, port_from=None, addr=0x0100007F: (
+        f"  mov word ptr [{va:#x}], 2{NL}  mov word ptr [{va + 2:#x}], 0{NL}  mov dword ptr [{va + 4:#x}], {addr:#x}{NL}"
+        + (f"  mov ax, word ptr [{port_from + 2:#x}]{NL}  mov word ptr [{va + 2:#x}], ax{NL}" if port_from else ""))
+    LEN = lambda: f"  mov dword ptr [{g.nv['len']:#x}], 16{NL}"
+    ERR = lambda name, code: g.call(111) + g.chk(name, g.eq(code))
+    FD = lambda va, *keys: f"  mov dword ptr [{va:#x}], {len(keys)}{NL}" + "".join(
+        f"  mov eax, {W(k)}{NL}  mov dword ptr [{va + 4 + 4 * i:#x}], eax{NL}" for i, k in enumerate(keys))
+    SOCK = lambda k, t, p: g.call(23, 2, t, p) + f"  mov {W(k)}, eax{NL}"
+    NB = lambda k: f"  mov dword ptr [{g.nv['one']:#x}], 1{NL}" + g.call(12, W(k), 0x8004667E, g.nv["one"])
+    n = ""
+    # -- socket(): only AF_INET stream and datagram sockets.
+    n += SOCK("u1", 2, 0) + g.chk("N: socket(AF_INET, SOCK_DGRAM)", "  cmp eax, -1\n  setne al\n  cmp al, 1\n")
+    n += g.call(23, 23, 2, 0) + g.chk("N: socket(AF_INET6) fails", g.eq(-1)) + ERR("N: ... WSAEAFNOSUPPORT", 10047)
+    n += g.call(23, 2, 3, 0) + g.chk("N: socket(SOCK_RAW) fails", g.eq(-1)) + ERR("N: ... WSAESOCKTNOSUPPORT", 10044)
+    n += g.call(23, 2, 1, 17) + g.chk("N: a stream socket with IPPROTO_UDP fails", g.eq(-1)) + ERR("N: ... WSAEPROTONOSUPPORT", 10043)
+    # -- names: unbound, then bound to 127.0.0.1 on a port of the system's choice.
+    n += LEN() + g.call(6, W("u1"), g.nsa1, g.nv["len"]) + g.chk("N: getsockname of an unbound socket fails", g.eq(-1))
+    n += ERR("N: ... WSAEINVAL", 10022)
+    n += SA(g.nsa1) + g.call(2, W("u1"), g.nsa1, 16) + g.chk("N: bind(127.0.0.1:0)", g.eq(0))
+    n += LEN() + g.call(6, W("u1"), g.nsa1, g.nv["len"]) + g.chk("N: getsockname", g.eq(0))
+    n += g.chk("N: ... family AF_INET (16 bits, no sin_len)", g.mem(g.nsa1, 2, "word"))
+    n += g.chk("N: ... address 127.0.0.1", g.mem(g.nsa1 + 4, 0x0100007F)) + g.chk("N: ... length 16", g.mem(g.nv["len"], 16))
+    n += g.chk("N: ... a port was chosen", f"  cmp word ptr [{g.nsa1 + 2:#x}], 0{NL}  setne al{NL}  cmp al, 1{NL}")
+    n += g.call(2, W("u1"), g.nsa1, 8) + g.chk("N: bind with a short address fails", g.eq(-1)) + ERR("N: ... WSAEFAULT", 10014)
+    # -- datagrams between two sockets.
+    n += SOCK("u2", 2, 17) + SA(g.nsa2) + g.call(2, W("u2"), g.nsa2, 16)
+    # a receive never waits more than 1 s (SO_RCVTIMEO, milliseconds), so a
+    # broken socket fails a check instead of hanging the test.
+    n += f"  mov dword ptr [{g.nv['x']:#x}], 1000{NL}" + g.call(21, W("u2"), 0xFFFF, 0x1006, g.nv["x"], 4)
+    n += g.chk("N: setsockopt(SO_RCVTIMEO, 1000 ms)", g.eq(0))
+    n += LEN() + g.call(17, W("u2"), g.nbuf, 64, 0, g.nfrom, g.nv["len"])
+    n += g.chk("N: a blocking receive with nothing to read times out", g.eq(-1))
+    n += ERR("N: ... with WSAETIMEDOUT", 10060)
+    n += LEN() + g.call(6, W("u2"), g.nsa2, g.nv["len"])
+    n += g.call(20, W("u1"), g.str("hello"), 5, 0, g.nsa2, 16) + g.chk("N: sendto: 5 bytes", g.eq(5))
+    n += LEN() + g.call(17, W("u2"), g.nbuf, 64, 0, g.nfrom, g.nv["len"]) + g.chk("N: recvfrom: 5 bytes", g.eq(5))
+    n += g.chk("N: ... the data", g.mem(g.nbuf, 0x6C6C6568))
+    n += g.chk("N: ... from AF_INET", g.mem(g.nfrom, 2, "word"))
+    n += g.chk("N: ... from the sender's port", f"  mov ax, word ptr [{g.nsa1 + 2:#x}]{NL}  cmp word ptr [{g.nfrom + 2:#x}], ax{NL}")
+    n += g.call(20, W("u1"), g.str("ABCDEFGH"), 8, 0, g.nsa2, 16)
+    n += LEN() + g.call(17, W("u2"), g.nbuf, 4, 0, g.nfrom, g.nv["len"])
+    n += g.chk("N: a datagram longer than the buffer fails", g.eq(-1)) + ERR("N: ... WSAEMSGSIZE", 10040)
+    n += g.chk("N: ... and the buffer holds its start", g.mem(g.nbuf, 0x44434241))
+    n += NB("u2") + g.chk("N: ioctlsocket(FIONBIO)", g.eq(0))
+    n += LEN() + g.call(17, W("u2"), g.nbuf, 64, 0, g.nfrom, g.nv["len"]) + g.chk("N: non-blocking recvfrom with nothing", g.eq(-1))
+    n += ERR("N: ... WSAEWOULDBLOCK", 10035)
+    n += g.call(12, W("u2"), 0x12345678, g.nv["one"]) + g.chk("N: an unknown ioctlsocket command fails", g.eq(-1))
+    n += ERR("N: ... WSAEINVAL", 10022)
+    # -- broadcast needs SO_BROADCAST; options.
+    n += SA(g.nbc, g.nsa2, 0xFFFFFFFF) + g.call(20, W("u1"), g.str("x"), 1, 0, g.nbc, 16)
+    n += g.chk("N: sendto the broadcast address without SO_BROADCAST fails", g.eq(-1)) + ERR("N: ... WSAEACCES", 10013)
+    n += f"  mov dword ptr [{g.nv['one']:#x}], 1{NL}" + g.call(21, W("u1"), 0xFFFF, 0x20, g.nv["one"], 4)
+    n += g.chk("N: setsockopt(SO_BROADCAST)", g.eq(0))
+    n += g.call(21, W("u1"), 0xFFFF, 0x4, g.nv["one"], 4) + g.chk("N: setsockopt(SO_REUSEADDR)", g.eq(0))
+    # broadcast from an unbound socket (the system binds it to every address,
+    # as the game's are); a socket bound to 127.0.0.1 has no broadcast route.
+    n += SOCK("u4", 2, 0) + g.call(21, W("u4"), 0xFFFF, 0x20, g.nv["one"], 4)
+    # A broadcast can fail for a moment when the host's network changes (seen
+    # rarely on Wi-Fi); up to 3 attempts, 50 ms apart. Without SO_BROADCAST it
+    # fails every time (WSAEACCES).
+    n += f"  mov dword ptr [{g.nv['x']:#x}], 3{NL}8:{NL}" + g.call(20, W("u4"), g.str("x"), 1, 0, g.nbc, 16)
+    n += f"  cmp eax, 1{NL}  je 7f{NL}" + g.call("Sleep", 50) + f"  dec dword ptr [{g.nv['x']:#x}]{NL}  jnz 8b{NL}  xor eax, eax{NL}7:{NL}"
+    n += g.chk("N: ... then sendto the broadcast address succeeds", g.eq(1))
+    n += g.call(3, W("u4"))
+    n += SOCK("u3", 2, 0) + g.call(21, W("u3"), 0xFFFF, 0x4, g.nv["one"], 4) + g.call(2, W("u3"), g.nsa1, 16)
+    n += g.chk("N: with SO_REUSEADDR a second socket binds the same port", g.eq(0)) + g.call(3, W("u3"))
+    n += g.call(21, W("u1"), 0xFFFF, 0x1234, g.nv["one"], 4) + g.chk("N: an unknown option fails", g.eq(-1))
+    n += ERR("N: ... WSAENOPROTOOPT", 10042)
+    n += g.call(21, W("u1"), 99, 1, g.nv["one"], 4) + g.chk("N: an unknown level fails", g.eq(-1)) + ERR("N: ... WSAEINVAL", 10022)
+    n += g.call(13, W("u1"), 1) + g.chk("N: listen on a datagram socket fails", g.eq(-1)) + ERR("N: ... WSAEOPNOTSUPP", 10045)
+    # -- a TCP connection: non-blocking connect, select, accept, data, close.
+    n += SOCK("ls", 1, 6) + g.call(13, W("ls"), 5) + g.chk("N: listen on an unbound socket fails", g.eq(-1))
+    n += ERR("N: ... WSAEINVAL", 10022)
+    n += SA(g.nsa3) + g.call(2, W("ls"), g.nsa3, 16) + g.call(13, W("ls"), 5) + g.chk("N: listen", g.eq(0))
+    n += LEN() + g.call(6, W("ls"), g.nsa3, g.nv["len"])
+    n += NB("ls") + LEN() + g.call(1, W("ls"), g.nsa4, g.nv["len"])
+    n += g.chk("N: accept with no connection pending fails", g.eq(-1)) + ERR("N: ... WSAEWOULDBLOCK", 10035)
+    n += SOCK("cs", 1, 0) + NB("cs") + g.call(4, W("cs"), g.nsa3, 16)
+    n += g.chk("N: a non-blocking connect returns SOCKET_ERROR", g.eq(-1))
+    n += ERR("N: ... WSAEWOULDBLOCK (the connect in progress)", 10035)
+    n += FD(g.nfw, "cs") + FD(g.nfe, "cs") + g.call(18, 0, 0, g.nfw, g.nfe, g.ntv1)
+    n += g.chk("N: select: the connect completes", g.eq(1))
+    n += g.chk("N: ... in writefds", g.mem(g.nfw, 1)) + g.chk("N: ... not in exceptfds", g.mem(g.nfe, 0))
+    n += FD(g.nfr, "ls") + g.call(18, 0, g.nfr, 0, 0, g.ntv1)
+    n += g.chk("N: select: the listening socket is readable", g.eq(1)) + g.chk("N: ... readfds keeps it", g.mem(g.nfr, 1))
+    n += LEN() + g.call(1, W("ls"), g.nsa4, g.nv["len"]) + f"  mov {W('as')}, eax{NL}"
+    n += g.chk("N: accept", "  cmp eax, -1\n  setne al\n  cmp al, 1\n") + g.chk("N: ... address length 16", g.mem(g.nv["len"], 16))
+    n += f"  mov dword ptr [{g.nv['x']:#x}], 1000{NL}" + g.call(21, W("as"), 0xFFFF, 0x1006, g.nv["x"], 4)
+    n += LEN() + g.call(6, W("cs"), g.nsa5, g.nv["len"])
+    n += g.chk("N: ... the connecting socket's port", f"  mov ax, word ptr [{g.nsa5 + 2:#x}]{NL}  cmp word ptr [{g.nsa4 + 2:#x}], ax{NL}")
+    n += LEN() + g.call(5, W("as"), g.nsa4, g.nv["len"]) + g.chk("N: getpeername", g.eq(0))
+    n += g.chk("N: ... the peer's port", f"  mov ax, word ptr [{g.nsa5 + 2:#x}]{NL}  cmp word ptr [{g.nsa4 + 2:#x}], ax{NL}")
+    n += g.call(21, W("cs"), 6, 1, g.nv["one"], 4) + g.chk("N: setsockopt(TCP_NODELAY)", g.eq(0))
+    n += f"  mov dword ptr [{g.nv['lin']:#x}], 1{NL}" + g.call(21, W("as"), 0xFFFF, 0x80, g.nv["lin"], 4)
+    n += g.chk("N: setsockopt(SO_LINGER) with Winsock 1.1's 16-bit linger", g.eq(0))
+    n += g.call(19, W("cs"), g.str("ping"), 4, 0) + g.chk("N: send: 4 bytes", g.eq(4))
+    n += FD(g.nfr, "as") + g.call(18, 0, g.nfr, 0, 0, g.ntv1) + g.chk("N: select: data to read", g.eq(1))
+    n += g.call(12, W("as"), 0x4004667F, g.nv["x"]) + g.chk("N: ioctlsocket(FIONREAD)", g.eq(0)) + g.chk("N: ... 4 bytes", g.mem(g.nv["x"], 4))
+    n += g.call(16, W("as"), g.nbuf, 64, 0) + g.chk("N: recv: 4 bytes", g.eq(4)) + g.chk("N: ... the data", g.mem(g.nbuf, 0x676E6970))
+    n += g.call("GetTickCount") + f"  mov dword ptr [{g.nv['t0']:#x}], eax{NL}"
+    n += g.call(16, W("as"), g.nbuf, 64, 0) + f"  mov dword ptr [{g.nv['lin']:#x}], eax{NL}"
+    n += g.call("GetTickCount") + f"  sub eax, dword ptr [{g.nv['t0']:#x}]{NL}"
+    n += g.chk("N: the accepted socket is non-blocking like its listener (no wait)", f"  cmp eax, 500{NL}  setb al{NL}  cmp al, 1{NL}")
+    n += f"  mov eax, dword ptr [{g.nv['lin']:#x}]{NL}" + g.chk("N: ... SOCKET_ERROR", g.eq(-1))
+    n += ERR("N: ... WSAEWOULDBLOCK at once, not a wait", 10035)
+    n += g.call(3, W("cs")) + g.chk("N: closesocket", g.eq(0))
+    n += FD(g.nfr, "as") + g.call(18, 0, g.nfr, 0, 0, g.ntv1) + g.chk("N: select: the closed connection is readable", g.eq(1))
+    n += g.call(16, W("as"), g.nbuf, 64, 0) + g.chk("N: recv after the peer closed: 0", g.eq(0))
+    n += g.call(3, W("cs")) + g.chk("N: closesocket twice fails", g.eq(-1)) + ERR("N: ... WSAENOTSOCK", 10038)
+    # -- a refused connect: exceptfds, never writefds.
+    n += g.call(3, W("ls")) + SOCK("c2", 1, 0) + NB("c2") + g.call(4, W("c2"), g.nsa3, 16)
+    n += g.chk("N: a refused non-blocking connect returns SOCKET_ERROR", g.eq(-1)) + ERR("N: ... WSAEWOULDBLOCK", 10035)
+    n += FD(g.nfw, "c2") + FD(g.nfe, "c2") + g.call(18, 0, 0, g.nfw, g.nfe, g.ntv1)
+    n += g.chk("N: select: the failure is reported", g.eq(1))
+    n += g.chk("N: ... in exceptfds", g.mem(g.nfe, 1)) + g.chk("N: ... not in writefds", g.mem(g.nfw, 0))
+    # -- select's own rules.
+    n += g.call(18, 0, 0, 0, 0, g.ntv1) + g.chk("N: select with no sets fails", g.eq(-1)) + ERR("N: ... WSAEINVAL", 10022)
+    n += FD(g.nfr, "u1") + g.call(18, 0, g.nfr, 0, 0, g.ntv0) + g.chk("N: select with nothing ready returns 0", g.eq(0))
+    n += g.chk("N: ... and empties the set", g.mem(g.nfr, 0))
+    n += f"  mov dword ptr [{g.nfr:#x}], 1{NL}  mov dword ptr [{g.nfr + 4:#x}], 0xDEAD{NL}" + g.call(18, 0, g.nfr, 0, 0, g.ntv0)
+    n += g.chk("N: select with an invalid socket fails", g.eq(-1)) + ERR("N: ... WSAENOTSOCK", 10038)
+    g.n_code = n
+    g.n_names, g.names = g.names[first_n:], g.names[:first_n]
+
     # mode M: a shown (active) popup minimized and restored, by ShowWindow
     # and by the system commands; the log is printed as in mode W.
     m = mkclass + win("n", 0x90000000, 10, 20, 100, 50) + f"  mov dword ptr [{v['hover']:#x}], eax{NL}"
@@ -807,6 +951,8 @@ main:
   je mode_m
   cmp eax, 0x4F
   je mode_o
+  cmp eax, 0x4E
+  je mode_n
   cmp eax, 0x56
   je mode_v
   cmp eax, 0x46
@@ -824,6 +970,8 @@ mode_m:
 {g.m_code}
 mode_o:
 {g.o_code}{finish}
+mode_n:
+{g.n_code}{finish}
 mode_v:
 {g.v_code}{finish}
 mode_f:
@@ -1044,6 +1192,14 @@ def main():
             code, out, fatal = run(tmp, binp, "O")
             check("O: runs to the end", (code, fatal), (0, None))
             flags(g.o_names, out, "O")
+
+            # Mode N: Winsock 1.1 sockets on loopback (patch 0023).
+            code, out, fatal = run(tmp, binp, "N", NET_LOG="1")
+            check("N: runs to the end", (code, fatal), (0, None))
+            before = failures
+            flags(g.n_names, out, "N")
+            if failures > before:  # the host errors behind them (<ID>_NET_LOG)
+                print("".join(l + "\n" for l in run.stderr.splitlines() if l.startswith("wsock32:")), end="")
 
             # Mode F: the screen the game sees is the desktop (W x H pixels);
             # fullscreen on the simulated screen is a 1000x500-point window,

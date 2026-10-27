@@ -1,0 +1,517 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index a78d5e6..d192ebf 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -106,6 +106,7 @@ add_library(recomp_runtime SHARED
+   src/runtime/hle/user32_window.cpp
+   src/runtime/hle/gdi32.cpp
+   src/runtime/hle/shell_net.cpp
++  src/runtime/hle/wsock32_socket.cpp
+   src/runtime/hle/com.cpp
+   src/runtime/hle/present.cpp)
+ target_link_libraries(recomp_runtime PUBLIC recomp_image recomp_x87
+diff --git a/src/runtime/hle/wsock32_socket.cpp b/src/runtime/hle/wsock32_socket.cpp
+new file mode 100644
+index 0000000..a8359fd
+--- /dev/null
++++ b/src/runtime/hle/wsock32_socket.cpp
+@@ -0,0 +1,499 @@
++// wsock32 sockets (Winsock 1.1, by ordinal: Wine's wsock32.spec) on BSD
++// sockets: IPv4 only, TCP and UDP. The game polls with select() and
++// non-blocking sockets (no WSAAsyncSelect), so each call maps onto the
++// host's, with Windows' rules where BSD's differ:
++//
++//   - a SOCKET is a handle of this table, not a host descriptor;
++//   - sockaddr_in has no sin_len (a 16-bit family), fd_set is a count and an
++//     array of SOCKETs, timeval two 32-bit fields;
++//   - a non-blocking connect in progress returns WSAEWOULDBLOCK; it
++//     completes in select's write set, and fails in its except set (never
++//     the write set);
++//   - SO_REUSEADDR lets another socket bind the same port (BSD's
++//     SO_REUSEPORT too), and a TCP port with old connections in TIME_WAIT
++//     can always be bound again;
++//   - a datagram larger than the buffer fills it and fails with WSAEMSGSIZE;
++//   - SO_LINGER takes Winsock 1.1's 16-bit linger, SO_SNDTIMEO and
++//     SO_RCVTIMEO milliseconds, and a blocking call that times out fails
++//     with WSAETIMEDOUT (BSD's EAGAIN);
++//   - a socket made by accept() has its listening socket's properties
++//     (non-blocking mode included);
++//   - select() with no socket in any set, and listen() on an unbound
++//     socket, fail with WSAEINVAL; getsockname() of an unbound one too.
++//
++// Errors are Winsock's codes in the thread's last error (WSAGetLastError).
++
++#include <arpa/inet.h>
++#include <fcntl.h>
++#include <netinet/in.h>
++#include <netinet/tcp.h>
++#include <poll.h>
++#include <sys/ioctl.h>
++#include <sys/socket.h>
++#include <unistd.h>
++
++#include <cerrno>
++#include <cstdio>
++#include <cstring>
++#include <map>
++#include <mutex>
++#include <vector>
++
++#include "runtime/hle/hle.h"
++#include "runtime/hle/win32.h"
++#include "runtime/log.h"
++
++namespace recomp::hle {
++namespace {
++
++constexpr uint32_t kInvalidSocket = 0xFFFFFFFF, kSocketError = 0xFFFFFFFF;
++
++// Winsock error codes (winsock.h).
++enum : uint32_t {
++  kWsaEintr = 10004, kWsaEbadf = 10009, kWsaEacces = 10013, kWsaEfault = 10014, kWsaEinval = 10022,
++  kWsaEmfile = 10024, kWsaEwouldblock = 10035, kWsaEinprogress = 10036, kWsaEalready = 10037,
++  kWsaEnotsock = 10038, kWsaEdestaddrreq = 10039, kWsaEmsgsize = 10040, kWsaEprototype = 10041,
++  kWsaEnoprotoopt = 10042, kWsaEprotonosupport = 10043, kWsaEsocktnosupport = 10044,
++  kWsaEopnotsupp = 10045, kWsaEafnosupport = 10047, kWsaEaddrinuse = 10048, kWsaEaddrnotavail = 10049,
++  kWsaEnetdown = 10050, kWsaEnetunreach = 10051, kWsaEnetreset = 10052, kWsaEconnaborted = 10053,
++  kWsaEconnreset = 10054, kWsaEnobufs = 10055, kWsaEisconn = 10056, kWsaEnotconn = 10057,
++  kWsaEshutdown = 10058, kWsaEtimedout = 10060, kWsaEconnrefused = 10061, kWsaEhostdown = 10064,
++  kWsaEhostunreach = 10065,
++};
++
++uint32_t WsaError(int e) {
++  switch (e) {
++    case EINTR: return kWsaEintr;
++    case EBADF: return kWsaEnotsock;
++    case EACCES: return kWsaEacces;
++    case EFAULT: return kWsaEfault;
++    case EINVAL: return kWsaEinval;
++    case EMFILE: case ENFILE: return kWsaEmfile;
++    case EWOULDBLOCK: return kWsaEwouldblock;
++    case EINPROGRESS: return kWsaEinprogress;
++    case EALREADY: return kWsaEalready;
++    case ENOTSOCK: return kWsaEnotsock;
++    case EDESTADDRREQ: return kWsaEdestaddrreq;
++    case EMSGSIZE: return kWsaEmsgsize;
++    case EPROTOTYPE: return kWsaEprototype;
++    case ENOPROTOOPT: return kWsaEnoprotoopt;
++    case EPROTONOSUPPORT: return kWsaEprotonosupport;
++    case EOPNOTSUPP: return kWsaEopnotsupp;
++    case EAFNOSUPPORT: return kWsaEafnosupport;
++    case EADDRINUSE: return kWsaEaddrinuse;
++    case EADDRNOTAVAIL: return kWsaEaddrnotavail;
++    case ENETDOWN: return kWsaEnetdown;
++    case ENETUNREACH: return kWsaEnetunreach;
++    case ENETRESET: return kWsaEnetreset;
++    case ECONNABORTED: return kWsaEconnaborted;
++    case ECONNRESET: case EPIPE: return kWsaEconnreset;
++    case ENOBUFS: return kWsaEnobufs;
++    case EISCONN: return kWsaEisconn;
++    case ENOTCONN: return kWsaEnotconn;
++    case ESHUTDOWN: return kWsaEshutdown;
++    case ETIMEDOUT: return kWsaEtimedout;
++    case ECONNREFUSED: return kWsaEconnrefused;
++    case EHOSTDOWN: return kWsaEhostdown;
++    case EHOSTUNREACH: return kWsaEhostunreach;
++    default: return kWsaEinval;
++  }
++}
++
++uint32_t Fail(uint32_t wsa) {
++  SetLastError(wsa);
++  return kSocketError;
++}
++
++// <ID>_NET_LOG=1: each failing call's host error on stderr (no addresses or data).
++uint32_t FailErrno(const char* call) {
++  int e = errno;
++  static const bool log = Env("NET_LOG") != nullptr;
++  if (log) std::fprintf(stderr, "wsock32: %s: errno %d (%s)\n", call, e, std::strerror(e));
++  return Fail(WsaError(e));
++}
++
++struct Sock {
++  int fd = -1;
++  bool stream = false;
++  bool nonblocking = false;
++  bool connecting = false;   // a non-blocking connect not yet seen complete
++  uint32_t connect_error = 0;  // a failed connect, reported in select's except set
++};
++
++std::mutex g_mu;
++std::map<uint32_t, Sock> g_socks;
++uint32_t g_next = 0x100;
++
++bool Find(uint32_t s, Sock* out) {
++  std::lock_guard<std::mutex> l(g_mu);
++  auto it = g_socks.find(s);
++  if (it == g_socks.end()) return false;
++  *out = it->second;
++  return true;
++}
++
++void Update(uint32_t s, const Sock& v) {
++  std::lock_guard<std::mutex> l(g_mu);
++  auto it = g_socks.find(s);
++  if (it != g_socks.end()) it->second = v;
++}
++
++uint32_t Add(const Sock& v) {
++  std::lock_guard<std::mutex> l(g_mu);
++  uint32_t h = g_next;
++  g_next += 4;
++  g_socks[h] = v;
++  return h;
++}
++
++bool Valid(uint32_t va, uint32_t n) {
++  return va >= 0x10000 && n && g_proc->mem.IsCommitted(va) && g_proc->mem.IsCommitted(va + n - 1);
++}
++
++// Guest sockaddr_in (16 bytes: family, port, address, zero) to the host's.
++bool ToHost(uint32_t va, uint32_t len, sockaddr_in* out, uint32_t* err) {
++  if (!Valid(va, 16) || len < 16) {
++    *err = kWsaEfault;
++    return false;
++  }
++  if (Rd16(va) != 2) {
++    *err = kWsaEafnosupport;
++    return false;
++  }
++  std::memset(out, 0, sizeof *out);
++  out->sin_len = sizeof *out;
++  out->sin_family = AF_INET;
++  std::memcpy(&out->sin_port, GPtr(va + 2), 2);
++  std::memcpy(&out->sin_addr, GPtr(va + 4), 4);
++  return true;
++}
++
++// The host's address to a guest sockaddr_in and its length (*lenp, at least 16).
++bool ToGuest(const sockaddr_in& a, uint32_t va, uint32_t lenp) {
++  if (!Valid(lenp, 4) || Rd32(lenp) < 16 || !Valid(va, 16)) return false;
++  std::memset(GPtr(va), 0, 16);
++  Wr16(va, 2);
++  std::memcpy(GPtr(va + 2), &a.sin_port, 2);
++  std::memcpy(GPtr(va + 4), &a.sin_addr, 4);
++  Wr32(lenp, 16);
++  return true;
++}
++
++int SetOpt(int fd, int level, int name, int v) { return setsockopt(fd, level, name, &v, sizeof v); }
++
++// ---- creating, binding, closing -----------------------------------------------
++
++HLE_NAMED("wsock32.dll", "#23", socket, 3) {  // socket(af, type, protocol)
++  uint32_t af = Arg(c, 0), type = Arg(c, 1), proto = Arg(c, 2);
++  if (af != 2) return SetLastError(kWsaEafnosupport), kInvalidSocket;
++  if (type != 1 && type != 2) return SetLastError(kWsaEsocktnosupport), kInvalidSocket;
++  if (proto != 0 && proto != (type == 1 ? 6u : 17u)) return SetLastError(kWsaEprotonosupport), kInvalidSocket;
++  int fd = ::socket(AF_INET, type == 1 ? SOCK_STREAM : SOCK_DGRAM, 0);
++  if (fd < 0) return SetLastError(WsaError(errno)), kInvalidSocket;
++  fcntl(fd, F_SETFD, FD_CLOEXEC);
++  SetOpt(fd, SOL_SOCKET, SO_NOSIGPIPE, 1);  // a reset peer is an error, not SIGPIPE
++  if (type == 1) SetOpt(fd, SOL_SOCKET, SO_REUSEADDR, 1);  // TIME_WAIT never blocks a bind
++  Sock s;
++  s.fd = fd;
++  s.stream = type == 1;
++  return Add(s);
++}
++
++HLE_NAMED("wsock32.dll", "#3", closesocket, 1) {
++  uint32_t h = Arg(c, 0);
++  int fd;
++  {
++    std::lock_guard<std::mutex> l(g_mu);
++    auto it = g_socks.find(h);
++    if (it == g_socks.end()) return Fail(kWsaEnotsock);
++    fd = it->second.fd;
++    g_socks.erase(it);
++  }
++  ::close(fd);
++  return 0;
++}
++
++HLE_NAMED("wsock32.dll", "#2", bind, 3) {  // bind(s, name, namelen)
++  Sock s;
++  if (!Find(Arg(c, 0), &s)) return Fail(kWsaEnotsock);
++  sockaddr_in a;
++  uint32_t err;
++  if (!ToHost(Arg(c, 1), Arg(c, 2), &a, &err)) return Fail(err);
++  if (::bind(s.fd, reinterpret_cast<sockaddr*>(&a), sizeof a) != 0) return FailErrno("bind");
++  return 0;
++}
++
++uint32_t Name(Ctx& c, bool peer) {  // getsockname / getpeername(s, name, namelen)
++  Sock s;
++  if (!Find(Arg(c, 0), &s)) return Fail(kWsaEnotsock);
++  sockaddr_in a{};
++  socklen_t n = sizeof a;
++  if ((peer ? ::getpeername : ::getsockname)(s.fd, reinterpret_cast<sockaddr*>(&a), &n) != 0) return FailErrno("getsockname/getpeername");
++  if (!peer && a.sin_port == 0 && a.sin_addr.s_addr == 0) return Fail(kWsaEinval);  // not bound
++  if (!ToGuest(a, Arg(c, 1), Arg(c, 2))) return Fail(kWsaEfault);
++  return 0;
++}
++
++HLE_NAMED("wsock32.dll", "#6", getsockname, 3) { return Name(c, false); }
++HLE_NAMED("wsock32.dll", "#5", getpeername, 3) { return Name(c, true); }
++
++// ---- options and modes ------------------------------------------------------------
++
++HLE_NAMED("wsock32.dll", "#21", setsockopt, 5) {  // setsockopt(s, level, optname, optval, optlen)
++  Sock s;
++  if (!Find(Arg(c, 0), &s)) return Fail(kWsaEnotsock);
++  uint32_t level = Arg(c, 1), name = Arg(c, 2), val = Arg(c, 3), len = Arg(c, 4);
++  if (!len || !Valid(val, len)) return Fail(kWsaEfault);
++  int v = len >= 4 ? int(Rd32(val)) : int(GPtr(val)[0]);  // BOOL and int options
++  int r;
++  if (level == 0xFFFF) {  // SOL_SOCKET
++    switch (name) {
++      case 0x4:  // SO_REUSEADDR: Windows lets another socket bind the port
++        r = SetOpt(s.fd, SOL_SOCKET, SO_REUSEADDR, v ? 1 : 0);
++        if (r == 0) r = SetOpt(s.fd, SOL_SOCKET, SO_REUSEPORT, v ? 1 : 0);
++        break;
++      case 0x8: r = SetOpt(s.fd, SOL_SOCKET, SO_KEEPALIVE, v ? 1 : 0); break;
++      case 0x10: r = SetOpt(s.fd, SOL_SOCKET, SO_DONTROUTE, v ? 1 : 0); break;
++      case 0x20: r = SetOpt(s.fd, SOL_SOCKET, SO_BROADCAST, v ? 1 : 0); break;
++      case 0x100: r = SetOpt(s.fd, SOL_SOCKET, SO_OOBINLINE, v ? 1 : 0); break;
++      case 0x80: {  // SO_LINGER: Winsock 1.1's linger { u_short l_onoff, l_linger }
++        if (len < 4) return Fail(kWsaEfault);
++        linger l{Rd16(val) ? 1 : 0, Rd16(val + 2)};
++        r = setsockopt(s.fd, SOL_SOCKET, SO_LINGER_SEC, &l, sizeof l);
++        break;
++      }
++      case 0xFFFFFF7F: {  // SO_DONTLINGER (~SO_LINGER)
++        linger l{v ? 0 : 1, 0};
++        r = setsockopt(s.fd, SOL_SOCKET, SO_LINGER_SEC, &l, sizeof l);
++        break;
++      }
++      case 0x1001: r = SetOpt(s.fd, SOL_SOCKET, SO_SNDBUF, v); break;
++      case 0x1002: r = SetOpt(s.fd, SOL_SOCKET, SO_RCVBUF, v); break;
++      case 0x1005: case 0x1006: {  // SO_SNDTIMEO, SO_RCVTIMEO: milliseconds
++        if (len < 4) return Fail(kWsaEfault);
++        timeval t{v / 1000, (v % 1000) * 1000};
++        r = setsockopt(s.fd, SOL_SOCKET, name == 0x1005 ? SO_SNDTIMEO : SO_RCVTIMEO, &t, sizeof t);
++        break;
++      }
++      default: return Fail(kWsaEnoprotoopt);
++    }
++  } else if (level == 6) {  // IPPROTO_TCP
++    if (name != 1) return Fail(kWsaEnoprotoopt);  // TCP_NODELAY only
++    r = SetOpt(s.fd, IPPROTO_TCP, TCP_NODELAY, v ? 1 : 0);
++  } else {
++    return Fail(kWsaEinval);
++  }
++  return r == 0 ? 0 : FailErrno("setsockopt");
++}
++
++HLE_NAMED("wsock32.dll", "#12", ioctlsocket, 3) {  // ioctlsocket(s, cmd, argp)
++  uint32_t h = Arg(c, 0), cmd = Arg(c, 1), argp = Arg(c, 2);
++  Sock s;
++  if (!Find(h, &s)) return Fail(kWsaEnotsock);
++  if (!Valid(argp, 4)) return Fail(kWsaEfault);
++  switch (cmd) {
++    case 0x8004667E: {  // FIONBIO
++      s.nonblocking = Rd32(argp) != 0;
++      int fl = fcntl(s.fd, F_GETFL);
++      if (fcntl(s.fd, F_SETFL, s.nonblocking ? fl | O_NONBLOCK : fl & ~O_NONBLOCK) != 0) return FailErrno("ioctlsocket");
++      Update(h, s);
++      return 0;
++    }
++    case 0x4004667F: {  // FIONREAD
++      int n = 0;
++      if (ioctl(s.fd, FIONREAD, &n) != 0) return FailErrno("ioctlsocket");
++      Wr32(argp, uint32_t(n));
++      return 0;
++    }
++    case 0x40047307: {  // SIOCATMARK
++      int m = 0;
++      if (ioctl(s.fd, SIOCATMARK, &m) != 0) return FailErrno("ioctlsocket");
++      Wr32(argp, m ? 1 : 0);
++      return 0;
++    }
++    default: return Fail(kWsaEinval);
++  }
++}
++
++// ---- connections ----------------------------------------------------------------------
++
++HLE_NAMED("wsock32.dll", "#13", listen, 2) {  // listen(s, backlog)
++  Sock s;
++  if (!Find(Arg(c, 0), &s)) return Fail(kWsaEnotsock);
++  if (!s.stream) return Fail(kWsaEopnotsupp);
++  sockaddr_in a{};
++  socklen_t n = sizeof a;
++  if (::getsockname(s.fd, reinterpret_cast<sockaddr*>(&a), &n) != 0 || a.sin_port == 0)
++    return Fail(kWsaEinval);  // Windows never binds implicitly here
++  if (::listen(s.fd, int(Arg(c, 1))) != 0) return FailErrno("listen");
++  return 0;
++}
++
++HLE_NAMED("wsock32.dll", "#1", accept, 3) {  // accept(s, addr, addrlen)
++  Sock s;
++  if (!Find(Arg(c, 0), &s)) return SetLastError(kWsaEnotsock), kInvalidSocket;
++  uint32_t addr = Arg(c, 1), lenp = Arg(c, 2);
++  if (addr && (!Valid(lenp, 4) || Rd32(lenp) < 16)) return SetLastError(kWsaEfault), kInvalidSocket;
++  sockaddr_in a{};
++  socklen_t n = sizeof a;
++  int fd = ::accept(s.fd, reinterpret_cast<sockaddr*>(&a), &n);
++  if (fd < 0) return SetLastError(WsaError(errno)), kInvalidSocket;
++  fcntl(fd, F_SETFD, FD_CLOEXEC);
++  SetOpt(fd, SOL_SOCKET, SO_NOSIGPIPE, 1);
++  int fl = fcntl(fd, F_GETFL);
++  fcntl(fd, F_SETFL, s.nonblocking ? fl | O_NONBLOCK : fl & ~O_NONBLOCK);  // the listener's mode
++  Sock t;
++  t.fd = fd;
++  t.stream = true;
++  t.nonblocking = s.nonblocking;
++  if (addr) ToGuest(a, addr, lenp);
++  return Add(t);
++}
++
++HLE_NAMED("wsock32.dll", "#4", connect, 3) {  // connect(s, name, namelen)
++  uint32_t h = Arg(c, 0);
++  Sock s;
++  if (!Find(h, &s)) return Fail(kWsaEnotsock);
++  sockaddr_in a;
++  uint32_t err;
++  if (!ToHost(Arg(c, 1), Arg(c, 2), &a, &err)) return Fail(err);
++  if (::connect(s.fd, reinterpret_cast<sockaddr*>(&a), sizeof a) == 0) return 0;
++  if (errno == EINPROGRESS && s.nonblocking) {  // the outcome comes through select
++    s.connecting = true;
++    Update(h, s);
++    return Fail(kWsaEwouldblock);
++  }
++  return FailErrno("connect");
++}
++
++// ---- data ------------------------------------------------------------------------------
++
++uint32_t Receive(Ctx& c, uint32_t from, uint32_t fromlen) {  // recv / recvfrom
++  Sock s;
++  if (!Find(Arg(c, 0), &s)) return Fail(kWsaEnotsock);
++  uint32_t buf = Arg(c, 1), len = Arg(c, 2), flags = Arg(c, 3);
++  if (flags & ~3u) return Fail(kWsaEopnotsupp);  // MSG_OOB, MSG_PEEK only
++  if (len && !Valid(buf, len)) return Fail(kWsaEfault);
++  if (from && (!Valid(fromlen, 4) || Rd32(fromlen) < 16)) return Fail(kWsaEfault);
++  sockaddr_in a{};
++  iovec iov{len ? GPtr(buf) : nullptr, len};
++  msghdr m{};
++  m.msg_name = &a;
++  m.msg_namelen = sizeof a;
++  m.msg_iov = &iov;
++  m.msg_iovlen = 1;
++  ssize_t n = ::recvmsg(s.fd, &m, int(flags));
++  if (n < 0 && errno == EAGAIN && !s.nonblocking) errno = ETIMEDOUT;  // SO_RCVTIMEO expired
++  if (n < 0) return FailErrno("recv");
++  if (from && !s.stream) ToGuest(a, from, fromlen);
++  if (!s.stream && (m.msg_flags & MSG_TRUNC)) return Fail(kWsaEmsgsize);  // the buffer holds its start
++  return uint32_t(n);
++}
++
++uint32_t Transmit(Ctx& c, uint32_t to, uint32_t tolen) {  // send / sendto
++  Sock s;
++  if (!Find(Arg(c, 0), &s)) return Fail(kWsaEnotsock);
++  uint32_t buf = Arg(c, 1), len = Arg(c, 2), flags = Arg(c, 3);
++  if (flags & ~5u) return Fail(kWsaEopnotsupp);  // MSG_OOB, MSG_DONTROUTE only
++  if (len && !Valid(buf, len)) return Fail(kWsaEfault);
++  ssize_t n;
++  if (to && !s.stream) {
++    sockaddr_in a;
++    uint32_t err;
++    if (!ToHost(to, tolen, &a, &err)) return Fail(err);
++    n = ::sendto(s.fd, len ? GPtr(buf) : nullptr, len, int(flags), reinterpret_cast<sockaddr*>(&a), sizeof a);
++  } else {
++    n = ::send(s.fd, len ? GPtr(buf) : nullptr, len, int(flags));  // a stream ignores the address
++  }
++  if (n < 0 && errno == EAGAIN && !s.nonblocking) errno = ETIMEDOUT;  // SO_SNDTIMEO expired
++  if (n < 0) return FailErrno("send");
++  return uint32_t(n);
++}
++
++HLE_NAMED("wsock32.dll", "#16", recv, 4) { return Receive(c, 0, 0); }
++HLE_NAMED("wsock32.dll", "#17", recvfrom, 6) { return Receive(c, Arg(c, 4), Arg(c, 5)); }
++HLE_NAMED("wsock32.dll", "#19", send, 4) { return Transmit(c, 0, 0); }
++HLE_NAMED("wsock32.dll", "#20", sendto, 6) { return Transmit(c, Arg(c, 4), Arg(c, 5)); }
++
++// ---- select ---------------------------------------------------------------------------
++
++// select(nfds, readfds, writefds, exceptfds, timeout): nfds is ignored; each
++// set is { u_int count; SOCKET array[count] } and keeps only its ready
++// sockets; the result is the number of ready (socket, set) pairs.
++HLE_NAMED("wsock32.dll", "#18", select, 5) {
++  uint32_t sets[3] = {Arg(c, 1), Arg(c, 2), Arg(c, 3)}, tv = Arg(c, 4);
++  std::vector<uint32_t> in[3];
++  for (int k = 0; k < 3; k++) {
++    if (!sets[k]) continue;
++    if (!Valid(sets[k], 4)) return Fail(kWsaEfault);
++    uint32_t n = Rd32(sets[k]);
++    if (n > 1024 || (n && !Valid(sets[k] + 4, 4 * n))) return Fail(kWsaEfault);
++    for (uint32_t i = 0; i < n; i++) in[k].push_back(Rd32(sets[k] + 4 + 4 * i));
++  }
++  if (in[0].empty() && in[1].empty() && in[2].empty()) return Fail(kWsaEinval);
++  int timeout = -1;
++  if (tv) {
++    if (!Valid(tv, 8)) return Fail(kWsaEfault);
++    int64_t ms = int64_t(int32_t(Rd32(tv))) * 1000 + (int32_t(Rd32(tv + 4)) + 999) / 1000;
++    timeout = int(ms < 0 ? 0 : ms > 0x7FFFFFFF ? 0x7FFFFFFF : ms);
++  }
++  // One pollfd per socket; what each set asks of it.
++  std::map<uint32_t, size_t> index;
++  std::vector<pollfd> pf;
++  std::vector<Sock> socks;
++  for (int k = 0; k < 3; k++) {
++    for (uint32_t h : in[k]) {
++      if (!index.count(h)) {
++        Sock s;
++        if (!Find(h, &s)) return Fail(kWsaEnotsock);
++        index[h] = pf.size();
++        pf.push_back({s.fd, 0, 0});
++        socks.push_back(s);
++      }
++      pollfd& p = pf[index[h]];
++      const Sock& s = socks[index[h]];
++      p.events |= k == 0 ? POLLIN : k == 1 ? POLLOUT : (s.connecting ? POLLOUT : POLLPRI);
++    }
++  }
++  // A connect already known to have failed is ready at once.
++  bool ready_now = false;
++  for (const Sock& s : socks) ready_now |= s.connect_error != 0;
++  int r;
++  do {
++    r = ::poll(pf.data(), nfds_t(pf.size()), ready_now ? 0 : timeout);
++  } while (r < 0 && errno == EINTR);
++  if (r < 0) return FailErrno("select");
++  // A connecting socket that polled writable has either connected (write
++  // set) or failed (except set; SO_ERROR says which).
++  for (auto& [h, i] : index) {
++    Sock& s = socks[i];
++    if (s.connecting && (pf[i].revents & (POLLOUT | POLLERR | POLLHUP))) {
++      int e = 0;
++      socklen_t n = sizeof e;
++      getsockopt(s.fd, SOL_SOCKET, SO_ERROR, &e, &n);
++      s.connecting = false;
++      s.connect_error = e ? WsaError(e) : 0;
++      Update(h, s);
++      pf[i].revents = e ? 0 : POLLOUT;
++    }
++  }
++  uint32_t total = 0;
++  for (int k = 0; k < 3; k++) {
++    if (!sets[k]) continue;
++    uint32_t n = 0;
++    for (uint32_t h : in[k]) {
++      size_t i = index[h];
++      short ev = pf[i].revents;
++      bool ready = k == 0 ? (ev & (POLLIN | POLLHUP | POLLERR)) != 0
++                 : k == 1 ? (ev & POLLOUT) != 0 && socks[i].connect_error == 0
++                          : socks[i].connect_error != 0 || (ev & POLLPRI) != 0;
++      if (ready) Wr32(sets[k] + 4 + 4 * n++, h);
++    }
++    Wr32(sets[k], n);
++    total += n;
++  }
++  return total;
++}
++
++}  // namespace
++}  // namespace recomp::hle
