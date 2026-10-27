@@ -101,6 +101,7 @@ export function parseStatus(docsDir, base) {
     })
   const list = (heading) =>
     section(heading)
+      .replace(/\n[ \t]+(?=\S)/g, ' ') // an item's wrapped lines belong to it
       .split('\n')
       .filter((line) => line.startsWith('- '))
       .map((line) => md.renderInline(line.slice(2).trim()))
