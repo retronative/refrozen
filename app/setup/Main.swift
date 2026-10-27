@@ -13,8 +13,14 @@
 //                                 the overall progress for timed lines on stdin, "<seconds> <line>";
 //                                 "<seconds> ?" asks, "<seconds> #stop" stops, "<seconds> #verified"
 //                                 verifies; per line "<shown> <stage> <active> <status>"
-//     sweep <fill>                the progress light over one sweep of a bar filled <fill> points:
+//     sweep <track>               the progress light over one sweep of a <track>-point bar:
 //                                 per 1/60 s "<seconds> <lead> <start> <end>", or "<seconds> -"
+//     sweep-light <fill> <x> [active]   the light's opacity at <x> points on a bar filled <fill>
+//     fill-colors                 the fill's colours, start to edge, as hex
+//     edge <fill> <track>         the edge glow: "<centre> <from> <to>" in points
+//     edge-rays [still]           the edge's rays every 0.25 s for 3 s: "<seconds> <angle> <length>"
+//     bars <dir>                  the progress bar in sample states as one PNG (bars.png)
+//     bar-bench <seconds> <value> the bar sweeping in a window for <seconds>: the CPU time it took
 //     details                     the Show/Hide Details control: "<expanded> <title>|<label>|<value>"
 //     add-map <file>              import a map (never overwrites one)
 //     play                        start the game (the Mini Launcher's Start Game)
@@ -145,17 +151,40 @@ enum SetupCLI {
       }
       return 0
     case ("sweep", 1):
-      guard let fill = Double(rest[0]) else { return 2 }
-      let p = FrostSweep.period(fill: fill)
+      guard let track = Double(rest[0]) else { return 2 }
+      let p = FrostSweep.period(track: track)
       for i in 0..<Int((p * 60).rounded(.up)) {
         let t = Double(i) / 60
-        if let v = FrostSweep.visible(fill: fill, at: t) {
-          print(String(format: "%.4f %.2f %.2f %.2f", t, FrostSweep.lead(fill: fill, at: t), v.lowerBound, v.upperBound))
+        if let v = FrostSweep.visible(track: track, at: t) {
+          print(String(format: "%.4f %.2f %.2f %.2f", t, FrostSweep.lead(track: track, at: t), v.lowerBound, v.upperBound))
         } else {
           print(String(format: "%.4f -", t))
         }
       }
       return 0
+    case ("sweep-light", 2), ("sweep-light", 3):
+      guard let fill = Double(rest[0]), let x = Double(rest[1]) else { return 2 }
+      print(String(format: "%.2f", FrostSweep.opacity(at: x, fill: fill, active: rest.count == 3)))
+      return 0
+    case ("fill-colors", 0):
+      print(FrostFill.colors.map { String(format: "%06X", $0) }.joined(separator: " "))
+      return 0
+    case ("edge", 2):
+      guard let fill = Double(rest[0]), let track = Double(rest[1]) else { return 2 }
+      let e = FrostEdge.extent(fill: fill, track: track)
+      print(String(format: "%.2f %.2f %.2f", FrostEdge.center(fill: fill), e.lowerBound, e.upperBound))
+      return 0
+    case ("edge-rays", 0), ("edge-rays", 1):
+      for i in 0...12 {
+        let t = Double(i) / 4, r = FrostEdge.rays(at: t, reduceMotion: rest.first == "still")
+        print(String(format: "%.2f %.4f %.4f", t, r.angle, r.length))
+      }
+      return 0
+    case ("bars", 1):
+      return MainActor.assumeIsolated { Previews.bars(to: URL(fileURLWithPath: rest[0]), paths: paths) }
+    case ("bar-bench", 2):
+      guard let secs = Double(rest[0]), let value = Double(rest[1]) else { return 2 }
+      return MainActor.assumeIsolated { Previews.benchBar(seconds: secs, value: value) }
     case ("details", 0):
       for expanded in [false, true] {
         print(expanded ? 1 : 0, [DetailsControl.title(expanded: expanded), DetailsControl.accessibilityLabel,
@@ -299,5 +328,79 @@ enum Previews {
       print("rendered \(name).png")
     }
     return 0
+  }
+  // The bar in sample states, one row each, at one moment of the sweep (bars.png).
+  static func bars(to dir: URL, paths: Paths) -> Int32 {
+    Theme.registerFonts(kit: paths.kit)
+    try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    _ = NSApplication.shared
+    let t = 0.55  // the light about a third of the way along a 600-point track
+    let rows: [(String, AnyView)] = [
+      ("3 %, lifting", AnyView(FrostBar(value: 0.03, sweeping: true, frozenAt: t))),
+      ("20 %", AnyView(FrostBar(value: 0.20, sweeping: true, frozenAt: t))),
+      ("50 %", AnyView(FrostBar(value: 0.50, sweeping: true, frozenAt: t))),
+      ("98 %", AnyView(FrostBar(value: 0.98, sweeping: true, frozenAt: t))),
+      ("19 %, held (no measure yet)", AnyView(FrostBar(value: 0.19, active: true, sweeping: true, frozenAt: t))),
+      ("20 %, stopped or failed", AnyView(FrostBar(value: 0.20, frozenAt: t))),
+      ("100 %, done", AnyView(FrostBar(value: 1, frozenAt: t))),
+      ("50 %, reduced motion", AnyView(FrostBar(value: 0.50, sweeping: true, frozenAt: t, stillPreview: true))),
+    ]
+    let sheet = VStack(alignment: .leading, spacing: 18) {
+      ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+        VStack(alignment: .leading, spacing: 8) {
+          Text(row.0).font(Theme.body(12)).foregroundStyle(Theme.ash)
+          HStack(spacing: 10) {
+            row.1.frame(width: 600)
+            Text("…").font(Theme.body(12)).foregroundStyle(Theme.ash).frame(width: 40, alignment: .trailing)
+          }
+        }
+      }
+    }
+    .padding(28)
+    .background(Theme.slab)
+    let host = NSHostingView(rootView: sheet)
+    host.frame = NSRect(x: 0, y: 0, width: 720, height: 520)
+    let window = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+    window.contentView = host
+    window.appearance = NSAppearance(named: .darkAqua)
+    host.layoutSubtreeIfNeeded()
+    RunLoop.main.run(until: Date().addingTimeInterval(0.4))
+    guard let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) else { return 1 }
+    host.cacheDisplay(in: host.bounds, to: rep)
+    try? rep.representation(using: .png, properties: [:])?.write(to: dir.appendingPathComponent("bars.png"))
+    print("rendered bars.png")
+    return 0
+  }
+
+  // The bar sweeping in a window for `seconds`, on the app's own event loop (as the setup runs):
+  // the process's CPU time over that span. Launch it as an app (`open`), so the window is active.
+  static func benchBar(seconds: Double, value: Double) -> Int32 {
+    let app = NSApplication.shared
+    app.setActivationPolicy(.regular)
+    let host = NSHostingView(rootView: FrostBar(value: value, sweeping: true).frame(width: 600).padding(20).background(Theme.slab))
+    host.frame = NSRect(x: 0, y: 0, width: 640, height: 48)
+    let window = NSWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: false)
+    window.contentView = host
+    window.makeKeyAndOrderFront(nil)
+    app.activate(ignoringOtherApps: true)
+    var start = (cpu: 0.0, wall: Date())
+    Timer.scheduledTimer(withTimeInterval: 1, repeats: false) { _ in
+      start = (cpuSeconds(), Date())
+      Timer.scheduledTimer(withTimeInterval: seconds, repeats: false) { _ in
+        app.stop(nil)  // takes effect on the next event: post one
+        app.postEvent(NSEvent.otherEvent(with: .applicationDefined, location: .zero, modifierFlags: [], timestamp: 0,
+                                         windowNumber: 0, context: nil, subtype: 0, data1: 0, data2: 0)!, atStart: true)
+      }
+    }
+    app.run()
+    let c = cpuSeconds() - start.cpu, w = Date().timeIntervalSince(start.wall)
+    print("active \(app.isActive) " + String(format: "cpu %.3f s over %.1f s (%.1f %% of one core)", c, w, 100 * c / w))
+    return 0
+  }
+
+  nonisolated static func cpuSeconds() -> Double {
+    var u = rusage()
+    getrusage(RUSAGE_SELF, &u)
+    return Double(u.ru_utime.tv_sec + u.ru_stime.tv_sec) + Double(u.ru_utime.tv_usec + u.ru_stime.tv_usec) / 1e6
   }
 }
