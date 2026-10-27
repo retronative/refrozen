@@ -22,7 +22,7 @@ milestone passes only when its acceptance criteria have been met and observed.
 | M3 | Runtime initialisation | Passed, signed off | |
 | M4 | Interactive menus and rendering | Passed, sign-off pending | Passed under delegation; final sign-off pending. |
 | M5 | Playable local match (offline) | Passed, sign-off pending | Passed under delegation; final sign-off pending. A full local DotA match plays to the score screen. |
-| M6 | AI bots and long sessions | In progress | Full matches with computer players on DotA AI maps, frame pacing and long-session stability. |
+| M6 | AI bots and long sessions | Passed, signed off | Full DotA AI matches with computer players: three 30-minute runs and one 65-minute match won by the Scourge, with stable frame pacing and memory. An intermittent crash seen in earlier long runs is a known alpha limitation (not fixed). |
 | M7 | LAN and private multiplayer | Future work | Not part of v0.1.0. |
 | M8 | iCCup online | Future work | Only with iCCup's official cooperation. Not part of v0.1.0. |
 

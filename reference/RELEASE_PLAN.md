@@ -373,7 +373,7 @@ approved risk acceptance, unless a reopening trigger occurs; then its fix must l
 - [ ] R1 (alpha, as revised): known-limitation text in the release notes and `docs/status.md`;
       the opt-in diagnostics kept; no reopening trigger has occurred (else root cause VERIFIED,
       fix, regression tests and mutants).
-- [ ] R3: 3–5 clean 25–30-minute AI stress runs, then one clean 65-minute run with every pass
+- [x] R3 (2026-10-27, signed off by the owner): 3–5 clean 25–30-minute AI stress runs, then one clean 65-minute run with every pass
       condition (ROADMAP M6), on the RC build; M6 signed off.
 - [ ] R2: suites, ctest, full mutation registry with focused new mutants, identical lifts, HARD
       PASS, patches reapply, M4 and M5 on the RC build; TEST_COVERAGE.md updated.

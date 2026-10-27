@@ -245,7 +245,14 @@ official cooperation. Nothing network-facing is needed before M7.
     and loads over 10 s or unverified still fail (`scripts/m6_watchdog.py`,
     `tests/test_m6_watchdog.py`). The reason: the AI map's longest load frame takes 4.7–4.9 s on
     an M1 with patch 0020, under 5 s by too little to rely on.
-  - **Status: NOT PASSED.** No run has yet been made under this revised acceptance.
+  - **Status (2026-10-27): passed, signed off by the owner under the revised acceptance**, on the
+    v0.1.0 release candidate `5e1dfc3` (the packaged app's launcher, its game module built by the
+    app's own first-run builder, on the M1 test Mac). Step 1: the crash is accepted as a known
+    alpha limitation (RELEASE_PLAN, revised R1), and no reopening trigger occurred. Step 2: three
+    30-minute runs, each with no FATAL, no watchdog report, every shot saved, and a median frame
+    interval of 5.64, 5.71 and 5.64 ms. Step 3: one 65-minute run passed every condition: Scourge
+    won, 10 players on the score screen, 1:05:09 elapsed, median 5.62 ms, drift x0.92, memory
+    growth x0.98, replay written. The crash is not fixed and its cause is not verified.
 
 ## M7 — LAN and private multiplayer
 - LAN (UDP 6112, W3GS) between two reFrozen instances, then against a Windows 1.26a client
