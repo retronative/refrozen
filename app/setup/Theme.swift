@@ -61,23 +61,42 @@ struct Panel<Content: View>: View {
   }
 }
 
-// The website's loading bar: icy fill in a bronze-tinted iron frame. nil: working, no measure yet.
+// The website's loading bar: icy fill in a bronze-tinted iron frame. `active`:
+// work is going on that has no measure yet, shown by a light sweeping along
+// the bar (a steady brighter edge instead under reduced motion).
 struct FrostBar: View {
   let value: Double?
+  var active = false
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   var body: some View {
     GeometryReader { g in
+      let fill = g.size.width * min(max(value ?? 0, 0), 1)
       ZStack(alignment: .leading) {
         Rectangle().fill(Theme.abyss)
         Rectangle()
           .fill(LinearGradient(colors: [Theme.frostDeep, Theme.frost, Theme.iceCore], startPoint: .leading, endPoint: .trailing))
-          .frame(width: g.size.width * min(max(value ?? 0.08, 0), 1))
+          .frame(width: fill)
           .shadow(color: Theme.glow, radius: 6)
+        if active {
+          if reduceMotion {
+            Rectangle().fill(Theme.iceCore.opacity(0.5)).frame(width: 3).offset(x: max(fill - 3, 0))
+          } else {
+            TimelineView(.animation) { context in
+              let phase = context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 1.6) / 1.6
+              Rectangle()
+                .fill(LinearGradient(colors: [.clear, Theme.iceCore.opacity(0.55), .clear], startPoint: .leading, endPoint: .trailing))
+                .frame(width: 70)
+                .offset(x: -70 + (g.size.width + 70) * phase)
+            }
+          }
+        }
       }
+      .clipped()
       .overlay(Rectangle().stroke(Theme.goldShadow.opacity(0.9), lineWidth: 1))
     }
     .frame(height: 8)
     .accessibilityElement()
-    .accessibilityValue(value.map { "\(Int($0 * 100)) percent" } ?? "working")
+    .accessibilityValue(active ? "working" : value.map { "\(Int($0 * 100)) percent" } ?? "working")
   }
 }
 

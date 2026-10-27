@@ -339,19 +339,140 @@ func buildFailure(_ status: Int32) -> String {
   }
 }
 
-// Progress from the builder's lines: "compiling <n> files", "compiled <file>".
-struct BuildProgress {
-  private(set) var total = 0
-  private(set) var done = 0
-  var fraction: Double? { total > 0 ? Double(done) / Double(total) : nil }
+// One overall progress for the whole setup, from the installer's and the
+// builder's own lines. It never moves back (a retry starts from where the
+// stopped attempt stood) and reaches 100 % only once the built module is
+// verified. Install, Compile and Finish follow completed work. The Lift has
+// no measure of its own (the lifter is silent), so it shows estimated
+// progress instead: from 3 % toward 19 % at a fifth of the speed of the
+// measured average Lift (5 x the estimate to reach 19 %), held at 19 % with
+// an activity shimmer if it takes longer, and 20 % only when it is done.
+struct SetupProgress: Equatable {
+  enum Stage: Int, CaseIterable {
+    case install, lift, compile, finish, done
+  }
 
-  mutating func read(_ line: String) {
-    if line.hasPrefix("compiling "), let n = Int(line.split(separator: " ")[1]) {
-      total = n
-    } else if line.hasPrefix("compiled ") {
-      done += 1
+  static let spans: [Stage: (from: Double, to: Double)] = [
+    .install: (0, 0.03), .lift: (0.03, 0.20), .compile: (0.20, 0.98), .finish: (0.98, 0.995),
+  ]
+  static let liftCap = 0.19  // the estimate never reaches the end of the Lift
+  static let liftSlowdown = 5.0  // the estimate runs at a fifth of the measured speed
+
+  private(set) var stage: Stage
+  private(set) var fraction: Double  // completed work (the Lift's estimate aside)
+  private(set) var determinate = false
+  private(set) var status: String
+  let liftEstimate: TimeInterval  // the measured average Lift on this Mac
+  private(set) var liftStart: Date?
+  private(set) var stoppedAt: Date?
+  private let floor: Double  // where a retried attempt's previous one stopped
+  private var compileTotal = 0, compileDone = 0, installSteps = 0
+
+  // A first run starts at the install; a build after an install where the install ended.
+  init(installing: Bool, liftEstimate: TimeInterval = 60, floor: Double = 0) {
+    stage = installing ? .install : .lift
+    fraction = installing ? 0 : Self.spans[.install]!.to
+    status = installing ? "Installing Warcraft III and patching it to 1.26a" : "Recompiling game code…"
+    self.liftEstimate = max(liftEstimate, 1)
+    self.floor = floor
+  }
+
+  // What the bar shows at `now`: completed work, the Lift's estimate, and
+  // never below the floor; frozen once stopped.
+  func display(at now: Date) -> Double {
+    var shown = max(fraction, floor)
+    if stage == .lift { shown = max(shown, liftEstimated(at: now)) }
+    return shown
+  }
+
+  // The Lift's estimated position alone (no floor).
+  private func liftEstimated(at now: Date) -> Double {
+    guard let start = liftStart else { return fraction }
+    let t = (stoppedAt ?? now).timeIntervalSince(start)
+    let lift = Self.spans[.lift]!
+    return max(fraction, lift.from + (Self.liftCap - lift.from) * min(max(t, 0) / (Self.liftSlowdown * liftEstimate), 1))
+  }
+
+  // The shimmer: work goes on that the bar cannot show (a held Lift, the
+  // finishing steps, an install product, or a retry still below its floor).
+  func active(at now: Date) -> Bool {
+    guard stoppedAt == nil, stage != .done else { return false }
+    if stage == .lift {  // held: at the cap, or at a retry's floor above its own estimate
+      let shown = display(at: now)
+      return shown >= Self.liftCap || shown > liftEstimated(at: now)
+    }
+    return !determinate || fraction < floor
+  }
+
+  func percent(at now: Date) -> Int { Int((display(at: now) * 100).rounded(.down)) }
+
+  mutating func read(_ line: String, at now: Date = Date()) {
+    if line.hasPrefix("install RoC:") || line.hasPrefix("install TFT:") || line.hasPrefix("patch 1.26a:") {
+      installSteps = min(installSteps + 1, 3)
+      enter(.install, determinate: false, ["Installed Reign of Chaos", "Installed The Frozen Throne", "Patched to 1.26a"][installSteps - 1])
+      advance(within: .install, Double(installSteps) / 3)
+    } else if line.hasPrefix("reFrozen game module ") || line.hasPrefix("prepared ") || line == "lifting the game code" {
+      if liftStart == nil { liftStart = now }
+      advance(within: .install, 1)
+      enter(.lift, determinate: false, "Recompiling game code…")
+    } else if line.hasPrefix("compiling "), let n = Int(line.split(separator: " ")[1]) {
+      compileTotal = n
+      compileDone = 0
+      enter(.compile, determinate: true, "Compiling the game: 0 of \(n) files")
+      advance(within: .compile, 0)
+    } else if line.hasPrefix("compiled "), compileTotal > 0 {
+      compileDone = min(compileDone + 1, compileTotal)
+      enter(.compile, determinate: true, "Compiling the game: \(compileDone) of \(compileTotal) files")
+      advance(within: .compile, Double(compileDone) / Double(compileTotal))
+    } else if line == "linking" {
+      enter(.finish, determinate: false, "Linking the game module")
+      advance(within: .finish, 0)
+    } else if line == "signing" {
+      enter(.finish, determinate: false, "Signing the game module")
+      advance(within: .finish, 0.4)
+    } else if line == "installing the module" {
+      enter(.finish, determinate: false, "Installing the game module")
+      advance(within: .finish, 0.7)
+    } else if line.hasPrefix("built: ") {
+      enter(.finish, determinate: false, "Verifying the game module")
+      advance(within: .finish, 1)
     }
   }
+
+  // Cancelled or failed: the bar stays where it stood.
+  mutating func stop(at now: Date = Date()) {
+    if stoppedAt == nil { stoppedAt = now }
+  }
+
+  // Only once the installed module is checked (its stamp matches this app).
+  mutating func verified() {
+    stage = .done
+    determinate = true
+    fraction = 1
+    status = "Ready"
+  }
+
+  private mutating func enter(_ s: Stage, determinate d: Bool, _ text: String) {
+    if s.rawValue >= stage.rawValue { stage = s }
+    determinate = d
+    status = text
+  }
+
+  private mutating func advance(within s: Stage, _ part: Double) {
+    let span = Self.spans[s]!
+    fraction = max(fraction, span.from + (span.to - span.from) * min(max(part, 0), 1))
+  }
+}
+
+// The measured average Lift on this Mac (the builder logs "lift <n>s"), or 60 s.
+func measuredLiftEstimate(_ paths: Paths) -> TimeInterval {
+  let logs = (try? FileManager.default.contentsOfDirectory(at: paths.logs, includingPropertiesForKeys: nil)) ?? []
+  let times = logs.filter { $0.lastPathComponent.hasPrefix("build-") }.compactMap { url -> Double? in
+    guard let text = try? String(contentsOf: url, encoding: .utf8),
+          let r = text.range(of: #"; lift (\d+)s,"#, options: .regularExpression) else { return nil }
+    return Double(text[r].filter(\.isNumber))
+  }
+  return times.isEmpty ? 60 : times.reduce(0, +) / Double(times.count)
 }
 
 // MARK: - Maps
