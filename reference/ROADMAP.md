@@ -320,7 +320,13 @@ official cooperation. Nothing network-facing is needed before M7.
   code, data, keys or maps (an automated content check); the offline and LAN acceptance tests pass
   on the packaged build.
 
-### Next release: installer progress bar refinements *(planned 2026-10-27; not in v0.1.0)*
+### Next release: installer progress bar refinements *(implemented 2026-10-27 for the release after v0.1.0; not in v0.1.0)*
+**Implemented** (`fbbcb81`): all three refinements below, as specified. Previews reviewed by the user
+(`reFrozen --setup bars <dir>`); 19 new setup checks and mutants R-V1–R-V8, all killed (R-U1–R-U3
+retired with the v0.1.0 rule they guarded); CPU while animating about the same as v0.1.0's
+(`reFrozen --setup bar-bench`, launched as an app: 6.8–7.4 % of one core against 6.3–7.1 %).
+Published v0.1.0 is unchanged; this ships with the next release.
+
 The user deferred these to the release after v0.1.0, which stays on release candidate 3 (`57a0db5`)
 and final human verification. They change only how the first-run setup draws its progress bar:
 `FrostBar` and `FrostSweep` in `app/setup`. The progress model (`SetupProgress`), the builder and the
