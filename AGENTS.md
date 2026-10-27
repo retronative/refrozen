@@ -13,7 +13,7 @@ ReCarbon (`../recarbon`); reusable lessons are in `../game-port-knowledge`.
 | `../DOTA/` | The player's own game installers, client pack and maps | **Read-only.** Never commit anything from it. |
 | `game/` | Extracted tomes, 1.26a oracle binaries (`oracle-1.26a/`), Ghidra project, symbols, generated code, launch logs (`attempts/`), reports | git-ignored, proprietary-derived |
 | `tools/` | x86recomp (pinned + patches), Wine (dev oracle only) | git-ignored |
-| `patches/x86recomp/` | Our x86recomp patches 0001–0022, applied in order by `scripts/setup_tools.sh` | Each with tests that fail under mutation: lifter patches in `tests/test_lifter_patches.py` (hand-computed) and x86recomp's `lift_atomic_test`; runtime/loader/HLE patches in `tests/test_loader.py` and `tests/test_win32.py`. A patch is a diff against the tree with the earlier ones applied. |
+| `patches/x86recomp/` | Our x86recomp patches 0001–0024, applied in order by `scripts/setup_tools.sh` | Each with tests that fail under mutation: lifter patches in `tests/test_lifter_patches.py` (hand-computed) and x86recomp's `lift_atomic_test`; runtime/loader/HLE patches in `tests/test_loader.py` and `tests/test_win32.py`. A patch is a diff against the tree with the earlier ones applied. |
 | `CMakeLists.txt`, `src/` | The game project: `refrozen` = lifted code + x86recomp runtime (`GameConfig` in `src/main.cpp`) | Lifted DLLs listed in dependency order. Win32 functions are added to the runtime (a patch), never stubbed to succeed. |
 | `config/` | Lifter manifests per module (`<module>.manifest`), `unreachable.tsv`, `jumptable_corrections.tsv`, and the pinned lift input `symbols/<module>/functions.tsv`, `jumptables.tsv` | Addresses, flags and evidence only, no game bytes. Every manifest entry and correction says why. Refresh `symbols/` only deliberately (Ghidra varies between runs) and record the new lift hash. |
 | `scripts/` | Install/patch (incl. the CD-key step, `font_keydata.py`), lift (`lift.sh`, `jumptable_corrections.py`), audit (`validate_lift.py`), import coverage (`import_coverage.py`), launches (`run_attempt.sh`, `m3_accept.sh`, `m4_accept.sh`), Wine oracle (`oracle_menus.sh`, `oracle_keys.c`, `m4_compare.sh`, `wine_loadtest.sh`), Ghidra scripts (`ghidra/`), map checks | |
@@ -27,7 +27,7 @@ scripts/setup_tools.sh   # x86recomp (refrozen branch) + build/mpq_extract, bnup
 ctest --test-dir tools/x86recomp/out/build/debug   # "pacing" is a known timing flake (FEASIBILITY §7)
 /opt/homebrew/bin/python3 -I tests/test_lifter_patches.py
 /opt/homebrew/bin/python3 -I tests/test_loader.py
-/opt/homebrew/bin/python3 -I tests/test_win32.py
+/opt/homebrew/bin/python3 -I tests/test_win32.py              # mode N broadcasts on the LAN: run attached
 /opt/homebrew/bin/python3 -I tests/test_gl_context.py         # x86recomp's gl_fog/gl_texture tests
 /opt/homebrew/bin/python3 -I tests/test_font_keydata.py       # needs game/wine-oracle + the readme
 /opt/homebrew/bin/python3 -I tests/test_jumptable_corrections.py
