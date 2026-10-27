@@ -1,0 +1,102 @@
+diff --git a/src/runtime/platform.cpp b/src/runtime/platform.cpp
+index 6facc89..455d45a 100644
+--- a/src/runtime/platform.cpp
++++ b/src/runtime/platform.cpp
+@@ -12,6 +12,7 @@
+ 
+ #include <errno.h>
+ #include <signal.h>
++#include <string.h>
+ #include <time.h>
+ #include <ucontext.h>
+ 
+@@ -32,10 +33,16 @@ ucontext_t g_caller_ctx, g_stack_ctx;
+ 
+ #pragma clang diagnostic push
+ #pragma clang diagnostic ignored "-Wdeprecated-declarations"
++// makecontext starts the frame-pointer chain at the very top of the stack it
++// is given. The top 16 bytes stay out of it as a zeroed frame record, so a
++// stack walk (backtrace(), which Metal calls when the game creates its
++// device) ends there instead of reading past the end of the stack.
+ void RunOnStack(void* stack, size_t size, void (*fn)()) {
++  constexpr size_t kEndFrame = 16;
++  memset(static_cast<char*>(stack) + size - kEndFrame, 0, kEndFrame);
+   getcontext(&g_stack_ctx);
+   g_stack_ctx.uc_stack.ss_sp = stack;
+-  g_stack_ctx.uc_stack.ss_size = size;
++  g_stack_ctx.uc_stack.ss_size = size - kEndFrame;
+   g_stack_ctx.uc_link = &g_caller_ctx;  // resume here on return
+   makecontext(&g_stack_ctx, fn, 0);
+   swapcontext(&g_caller_ctx, &g_stack_ctx);
+diff --git a/tests/run_on_stack_test.cpp b/tests/run_on_stack_test.cpp
+new file mode 100644
+index 0000000..8d07090
+--- /dev/null
++++ b/tests/run_on_stack_test.cpp
+@@ -0,0 +1,66 @@
++// RunOnStack's stack ends in a frame record that stops a stack walk inside
++// the stack (patch 0022). AAPCS64 and the x86-64 ABI chain frames through the
++// frame pointer and end the chain with a null one; backtrace() follows it.
++//
++// The stack is filled with stale frame pointers (as a reused stack would hold:
++// each word the address of the unmapped page above the stack), so a walk that
++// does not end on a zeroed record inside the stack, or reads past its end,
++// faults (the launch crash this fixes: Metal calls backtrace() when the
++// game creates its device on the main guest stack). Prints a FAIL line per
++// failing check; exit 0 iff all pass.
++#include "runtime/platform.h"
++
++#include <execinfo.h>
++#include <signal.h>
++#include <sys/mman.h>
++#include <unistd.h>
++
++#include <cstdint>
++#include <cstdio>
++
++namespace {
++
++int g_frames = -1;
++bool g_ran = false;
++
++void OnFault(int) {
++  const char m[] = "FAIL a stack walk on the switched stack stays inside it (it read past the stack's end)\n";
++  (void)!write(1, m, sizeof m - 1);
++  _exit(1);
++}
++
++void WalkHere() {
++  g_ran = true;
++  void* frames[4096];
++  g_frames = backtrace(frames, 4096);
++}
++
++}  // namespace
++
++int main() {
++  const size_t page = size_t(sysconf(_SC_PAGESIZE)), size = 64 * page;
++  char* p = static_cast<char*>(mmap(nullptr, size + page, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0));
++  if (p == MAP_FAILED || munmap(p + size, page) != 0) {
++    std::printf("FAIL the test stack and its unmapped page above\n");
++    return 1;
++  }
++  for (size_t i = 0; i < size / sizeof(uintptr_t); i++)
++    reinterpret_cast<uintptr_t*>(p)[i] = reinterpret_cast<uintptr_t>(p + size);
++  struct sigaction sa{};
++  sa.sa_handler = OnFault;
++  sigaction(SIGSEGV, &sa, nullptr);
++  sigaction(SIGBUS, &sa, nullptr);
++
++  void* warm[2];
++  backtrace(warm, 2);  // loads the unwinder before the stack switch
++  recomp::platform::RunOnStack(p, size, WalkHere);
++
++  int fails = 0;
++  auto check = [&](const char* name, bool ok) {
++    std::printf("%s %s\n", ok ? "ok  " : "FAIL", name);
++    fails += !ok;
++  };
++  check("the function runs on the switched stack and RunOnStack returns", g_ran);
++  check("a stack walk on the switched stack stays inside it and ends", g_frames > 0 && g_frames < 4096);
++  return fails ? 1 : 0;
++}

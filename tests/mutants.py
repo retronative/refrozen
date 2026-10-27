@@ -21,6 +21,7 @@ TESTS = {
     "watchdog": "test_m6_watchdog.py",
     "builder": "test_builder_poc.py",
     "setup": "test_first_run_setup.py",
+    "stack": "test_run_on_stack.py",
 }
 
 K32 = "tools/x86recomp/src/runtime/hle/kernel32.cpp"
@@ -34,6 +35,7 @@ WIN = "tools/x86recomp/src/runtime/hle/user32_window.cpp"
 WAVE = "tools/x86recomp/src/runtime/hle/winmm_wave.cpp"
 GLC = "tools/x86recomp/src/runtime/gl/context.cpp"
 OGL = "tools/x86recomp/src/runtime/hle/opengl32.cpp"
+PLAT = "tools/x86recomp/src/runtime/platform.cpp"
 SIMD = "tools/x86recomp/src/runtime/simd64.h"
 SSEH = "tools/x86recomp/src/runtime/sse.h"
 EMIT = "tools/x86recomp/tools/lifter/emit.cpp"
@@ -1014,6 +1016,14 @@ MUTANTS = [
          fault="a retry starts below where the stopped attempt stood",
          old="    var shown = max(fraction, floor)", new="    var shown = fraction",
          expect="progress: a retry starts where the stopped attempt stood"),
+    dict(id="R-K1", milestone="R", area="launch", file=PLAT, test="stack",
+         fault="the main guest stack hands makecontext its last 16 bytes (the launch crash, exit 4)",
+         old="  g_stack_ctx.uc_stack.ss_size = size - kEndFrame;", new="  g_stack_ctx.uc_stack.ss_size = size;",
+         expect="a stack walk on the switched stack stays inside it"),
+    dict(id="R-K2", milestone="R", area="launch", file=PLAT, test="stack",
+         fault="the main guest stack's end frame record is left as whatever the memory held",
+         old="  memset(static_cast<char*>(stack) + size - kEndFrame, 0, kEndFrame);", new="",
+         expect="a stack walk on the switched stack stays inside it"),
     dict(id="M6-O1", milestone="M6", area="observation", file=OBS, test="observe",
          fault="one row label taken as an expanded scoreboard",
          old='    if sum(1 for line in lines if BOARD_ROWS.search(line)) >= 2:',
