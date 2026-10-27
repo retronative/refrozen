@@ -1,5 +1,12 @@
 # reFrozen v0.1.0 — release plan (public alpha, offline only)
 
+**Published 2026-10-27, with the user's approval (R8):** tag `v0.1.0` on `57a0db5` (release
+candidate 3), GitHub pre-release with `reFrozen-0.1.0.dmg` (SHA-256
+`0658af0ad31185e83b5b6af14e6eec7589a6c3a5739b394b759098eff4e46153`) and `SHA256SUMS`, verified by
+downloading them back; the website updated and deployed. Gate outcomes are in the release
+checklist below. Release candidates 1 and 2 were not published: release candidate 3 fixed an
+intermittent launch failure found in R6 (x86recomp patch 0022) and added the installer UX.
+
 **Approved framework, 2026-10-26.** The user accepted the R1–R8 gates and the revised M6 acceptance
 below. Nothing is implemented, tagged, published or pushed by this plan: each implementation step
 (the first-run builder prototype included) and the publication itself need the user's separate
@@ -368,25 +375,31 @@ approved risk acceptance, unless a reopening trigger occurs; then its fix must l
 - Free disk and memory as measured in the proof-of-concept and R5.
 
 ## Release checklist
-- [ ] Approvals: proof-of-concept start; builder design; signing outcome (R7a); reFrozen's licence;
-      any unresolved redistribution question; publication.
-- [ ] R1 (alpha, as revised): known-limitation text in the release notes and `docs/status.md`;
-      the opt-in diagnostics kept; no reopening trigger has occurred (else root cause VERIFIED,
-      fix, regression tests and mutants).
+Outcomes for v0.1.0 (release candidate 3, `57a0db5`), recorded 2026-10-27:
+- [x] Approvals by the owner, recorded with the gates: R3, R5 (as partial), R6, R7a and R8.
+- [x] R1 (alpha, as revised): the intermittent crash in long AI matches is a known limitation in the
+      release notes and `docs/status.md`; the opt-in diagnostics are kept; no reopening trigger occurred.
 - [x] R3 (2026-10-27, signed off by the owner): 3–5 clean 25–30-minute AI stress runs, then one clean 65-minute run with every pass
       condition (ROADMAP M6), on the RC build; M6 signed off.
-- [ ] R2: suites, ctest, full mutation registry with focused new mutants, identical lifts, HARD
-      PASS, patches reapply, M4 and M5 on the RC build; TEST_COVERAGE.md updated.
-- [ ] R4: RC from a clean checkout; every step PASS; content gate; dmg round trip; checksums.
-- [ ] R5: fresh account, browser download, first run to the main menu, negative cases, uninstall,
-      disk and time recorded; Gatekeeper steps captured exactly.
-- [ ] R7a: ad hoc only if R5's Gatekeeper experience worked and is documented; else Developer ID.
-- [ ] R6: the human session on the R4 build; no "blocks play" defect open.
-- [ ] R7b: licence file, notices, LGPL obligations if any, history audit, trademarks; open
-      questions put to the user.
-- [ ] Disclosure review of every public document and of the release notes.
-- [ ] Release notes: scope, requirements, known issues, non-goals (M7, M8), no legal-clearance claim.
-- [ ] R8 on approval: push, tag, GitHub pre-release, artifacts verified, `docs/status.md` and site.
+- [x] R2: suites, ctest, the full mutation registry on release candidate 1 (239 mutants: 238 killed,
+      1 equivalent) and every new mutant of release candidate 3 killed, identical lifts, HARD PASS,
+      patches reapply, M4 3/3 and M5 3/3 on release candidate 3; TEST_COVERAGE.md updated.
+- [x] R4: release candidate from a clean checkout, offline, against source-built dependencies; all
+      release checks pass; the dmg read back; checksums and manifest.
+- [x] R5 (accepted as partial by the owner): the packaged setup's install identical to the
+      reference, no CD key in logs, cancel and retry, maps, disk and build time recorded; the
+      browser download and the Gatekeeper steps on the owner's Mac. Tested in a fresh data folder,
+      not a fresh macOS account; uninstall documented, not run on a fresh account.
+- [x] R7a (approved by the owner): ad hoc signing, with the Gatekeeper experience tested and the
+      exact "Open Anyway" steps documented (macOS 27.0.1).
+- [x] R6 (signed off by the owner): the human session; no "blocks play" defect open. A launch
+      failure found on release candidate 2 was fixed in release candidate 3 and verified. Saved
+      games of the DotA v6.83d AI map can't be loaded: a known limitation, not a gate.
+- [x] R7b: licence file, notices, no LGPL component shipped, history audit, trademarks.
+- [x] Disclosure review of the published changes and the release notes (no addresses, keys or private files).
+- [x] Release notes: scope, requirements, known issues, non-goals (M7, M8), no legal-clearance claim.
+- [x] R8 (approved by the owner): push, tag, GitHub pre-release, artifacts verified, `docs/status.md`
+      and the site.
 
 **R6 session (30–60 minutes, packaged app):** launch from Applications; menus; Custom Game with a
 player-supplied DotA map; an AI match on the DotA AI map for at least 30 minutes; a hero picked by

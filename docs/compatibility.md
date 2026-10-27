@@ -23,7 +23,7 @@ will not work.
 | Map family | Status |
 |---|---|
 | Pure-JASS DotA maps, e.g. the 6.85-series LoD builds | Works: a full local match has been played to the score screen |
-| DotA AI builds, e.g. the 6.83d AI maps | Load and play; full AI matches are covered by M6 ([status](status.md#milestones)) |
+| DotA AI builds, e.g. the 6.83d AI maps | Works: full matches with computer players, tested with the 6.83d AI map up to 65 minutes. Its saved games can't be loaded (a known limitation) |
 | iCCup native-plugin builds (6.83s, 6.83se, 6.85.308) | Not supported |
 
 The iCCup builds load a native plugin through iCCup's own Windows loader. They are not supported.
@@ -49,7 +49,7 @@ scaled to the window with its 4:3 shape preserved. Borderless fullscreen toggles
 | Mode | Status |
 |---|---|
 | Single player, Custom Game | Supported (verified) |
-| AI opponents and allies on DotA AI maps | Covered by M6; see [status](status.md#milestones) |
+| AI opponents and allies on DotA AI maps | Supported (verified: full matches up to 65 minutes) |
 | Replays | Written after each match and played back in the game (verified) |
 | Saved games | Saving and loading on standard maps (verified). Saved games of the DotA v6.83d AI map can't be loaded: the game reports an error, then crashes (a known limitation) |
 | LAN and private servers | Not supported yet (M7); not in v0.1.0 |

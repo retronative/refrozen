@@ -35,7 +35,7 @@ reFrozen builds on open-source work, including:
 reFrozen is free software under the GNU General Public License, version 3 or (at your option) any
 later version. Its third-party components and their licences are listed in
 [THIRD_PARTY_NOTICES.md](https://github.com/retronative/refrozen/blob/main/THIRD_PARTY_NOTICES.md),
-and a release will carry them too.
+and the release carries them too, inside the app.
 
 ### This website
 

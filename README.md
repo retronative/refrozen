@@ -19,16 +19,26 @@ Native recompilation of Warcraft III: The Frozen Throne (1.26a) for Apple Silico
 
 ## Status
 
-**M5 complete (pending sign-off):** the recompiled Warcraft III 1.26a runs natively on Apple Silicon from an install made natively from your own installers, and plays a local DotA match to the end: menus, Start Game, an in-game hero, the enemy base destroyed, the score screen and a saved replay, with Miles audio, in a Retina-aware window or borderless fullscreen (Ctrl+Cmd+F). AI opponents and long sessions are next (M6). Offline target: DotA 6.85oz LoD. Milestones and their gates are in
-[reference/ROADMAP.md](reference/ROADMAP.md); open questions are in
+**[reFrozen 0.1.0 (alpha)](https://github.com/retronative/refrozen/releases/tag/v0.1.0) is available**, an offline-only pre-release for Apple silicon
+Macs (macOS 14 or later). It installs Warcraft III 1.26a from your own installers, builds the game
+for your Mac, and plays offline custom games, including full DotA matches with computer players,
+with audio, Retina displays and borderless fullscreen (Ctrl+Cmd+F). To install it, follow
+[Getting started](docs/getting-started.md); the [release notes](https://github.com/retronative/refrozen/releases/tag/v0.1.0) list its known
+limitations. LAN, iCCup and Battle.net are not part of it.
+
+The public status of each milestone is in [docs/status.md](docs/status.md). Milestones and their
+gates are in [reference/ROADMAP.md](reference/ROADMAP.md), the release's gates in
+[reference/RELEASE_PLAN.md](reference/RELEASE_PLAN.md), and open questions in
 [reference/FEASIBILITY.md](reference/FEASIBILITY.md).
 
-## Approach (proposed)
+## Approach
 
-Statically recompile the game's executable codefor arm64, and run it on a native runtime that 
-reimplements the platform it was written for. Here the guest is **x86 Win32** (`war3.exe` + 
-`Game.dll` 1.26a and their DLLs), not an Xbox 360, so the runtime replaces Win32, Direct3D 8/9, 
-DirectSound and Storm instead of an Xbox kernel. M0 decides whether this is feasible.
+reFrozen statically recompiles the game's executable code for arm64 and runs it on a native
+runtime that reimplements the platform it was written for. Here the guest is **x86 Win32**
+(`war3.exe` + `Game.dll` 1.26a and their DLLs), so the runtime replaces Win32, Direct3D 8/9,
+DirectSound and Storm. The release ships only reFrozen's own tools (the recompiler, the runtime and
+the native installer): the game is installed and recompiled on your Mac, from your own copy. See
+[How it works](docs/how-it-works.md).
 
 ## Contributing and security
 

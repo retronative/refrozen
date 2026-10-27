@@ -27,7 +27,7 @@ your Mac from that copy.
 
 ## Will it work online, on iCCup or on Battle.net?
 
-Not in the first release, which is offline-only. LAN and private servers that players run
+Not in v0.1.0, which is offline-only. LAN and private servers that players run
 themselves are a later milestone (M7). iCCup support (M8) would only ever happen with iCCup's
 official cooperation and within its anti-cheat requirements; nothing is bypassed. Battle.net is not
 supported. See [Status and releases](status.md).
