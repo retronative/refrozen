@@ -61,17 +61,32 @@ before the session). The M1 had none.
 
 ## Open issues
 
-- **Local Network permission asks again after every build (ISSUE).** macOS asks the game
-  launcher (the app replaces itself with it to start the game), named "refrozen", and records the
-  answer for its signing identifier and path. The launcher is signed ad hoc, so each build has a
-  new identifier: the patch 0025 build asked again on both Macs, and until the prompt was
-  answered the first join failed ("Unable to join the specified game"). Planned: a stable
-  signing identifier and an Info.plist with a usage description embedded in the launcher, tested
-  for persistence across rebuilds and moved paths before release.
-- **Hang reports during a custom map's load (ISSUE).** When Castle Fight loaded, both Macs wrote
-  a hang report (the main thread had not pumped window events for about 5.5 s), at the same
-  moment; the game then continued normally (play, chat, matching replays). Under investigation:
-  a long load or a real event-loop stall.
+- **Local Network permission across builds (ISSUE, non-blocking for v0.2.0).** macOS asks the
+  game launcher (the app replaces itself with it to start the game), named "refrozen", and
+  recorded the answer for its signing identifier and path. The launcher was signed ad hoc, so each
+  build had a new identifier: the patch 0025 build asked again on both Macs, and until the prompt
+  was answered the first join failed ("Unable to join the specified game"). The launcher now
+  carries an embedded Info.plist (reFrozen, the usage description) and a stable signing
+  identifier, `org.retronative.refrozen.game`; the app's Info.plist has the description too.
+  **Persistence is not verified.** A/B experiment on m1-air (2026-10-28), **inconclusive**: the
+  first launch of a build with the new identity showed no prompt, failed no network call and
+  hosted a game, and macOS added no permission record for it (the earlier builds each got their
+  own); that a second Mac could see its game was not checked, and the update and moved-app cases
+  were not run (time-boxed). The ad hoc signature's designated requirement is still the build's
+  code hash. The second-Mac check (prompt, discovery) is part of the next planned LAN session;
+  the experiment's build and evidence are kept until then.
+- **Hang reports during a custom map's load (observed; the M6 watchdog behaviour kept).** When
+  Castle Fight loaded in the two-Mac session, both Macs wrote one hang report each (the main
+  thread had not pumped window events for 5.3 and 5.5 s), at the same moment; the game then
+  continued normally (play, chat, matching replays). Measured on m1-air alone (single player,
+  the stall recorder): the first frame drawn after the stall is the map's loading screen, so the
+  stall is the map load; the main thread is busy in the game's own loading code (about 4.5 s of
+  guest code, 30 ms of waits, negligible file reads), not waiting, and each run wrote at most one
+  report. In 12 runs the longest frame took 4.57–4.63 s, under the watchdog's 5 s, with no
+  report; the multiplayer load is somewhat longer and crossed it. One earlier run's load frame
+  took **17.3 s, unexplained**: a prior visit to the campaign screen and a launch detached from
+  the ssh session were ruled out (both 4.6 s). The M6 rule stands: one report during the map
+  load, with that frame verified at most 10 s; no fix is proposed.
 - **Map checker tool (tooling).** `scripts/map_check.py` stops with an exception on Castle Fight's
   MPQ header; the game itself lists and plays the map. Not a player-facing issue.
 - **Not yet tested:** Wi-Fi-off disconnect recovery; the 30+ minute DotA session; Windows
