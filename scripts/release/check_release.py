@@ -12,7 +12,7 @@ actually contains.
   (HM3W, .w3x/.w3m), game data name, CD-key-shaped string or lifted-function
   symbol (f_<8 hex digits>) anywhere in the bundle;
 - reFrozen's licence, the third-party notices and licence texts, and the fonts'
-  licences are in the bundle; Info.plist names version 0.1.0, macOS 14 and
+  licences are in the bundle; Info.plist names the version in VERSION, macOS 14 and
   the games category, and has the local network usage description;
 - the game launcher (kit/bin/refrozen) carries an embedded Info.plist naming
   reFrozen with the same description, and is signed as
@@ -123,7 +123,9 @@ dep_licences = [n for n in ("SDL3", "StormLib", "glslang", "SPIRV-Tools", "SPIRV
 check("each shipped or linked dependency's licence is in the bundle", not dep_licences, ", ".join(dep_licences))
 
 info = plistlib.load(open(os.path.join(APP, "Contents", "Info.plist"), "rb"))
-check("Info.plist: version 0.1.0", info.get("CFBundleShortVersionString") == "0.1.0", str(info.get("CFBundleShortVersionString")))
+VERSION = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "VERSION")).read().strip()
+check(f"Info.plist: version {VERSION}", info.get("CFBundleShortVersionString") == VERSION,
+      str(info.get("CFBundleShortVersionString")))
 check("Info.plist: macOS 14 minimum", info.get("LSMinimumSystemVersion") == "14.0")
 check("Info.plist: games category (Game Mode)", info.get("LSApplicationCategoryType") == "public.app-category.games")
 LAN_USAGE = ("reFrozen uses your local network to find, host and join Warcraft III LAN games "
