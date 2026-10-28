@@ -52,7 +52,7 @@ scaled to the window with its 4:3 shape preserved. Borderless fullscreen toggles
 | AI opponents and allies on DotA AI maps | Supported (verified: full matches up to 65 minutes) |
 | Replays | Written after each match and played back in the game (verified) |
 | Saved games | Saving and loading verified on Booty Bay (melee) and DotA v6.78c AI 1.4e. One map version, DotA v6.83d AI (PMV 1.42 EN), saves but its saves can't be loaded: the game reports an error, then crashes (a known limitation, specific to that version; not yet compared with the original client) |
-| The Frozen Throne campaigns (v0.2.0 Beta) | The Founding of Durotar starts and its opening sequence plays (the rest of it is not verified). Terror of the Tides stops the game when you start it: the game paints a full-screen window with a Windows drawing call (GDI's FillRect) that reFrozen does not implement yet; a known limitation, planned for after v0.2.0. The other campaigns are not verified yet |
+| The Frozen Throne campaigns (v0.2.0 Beta) | The Founding of Durotar starts and its opening sequence plays (the rest of it is not verified). Terror of the Tides stops the game when you start it: the game plays its opening cinematic through DirectShow, which reFrozen does not provide, and does not recover when that fails; a known limitation, planned for after v0.2.0. The other campaigns are not verified yet |
 | LAN and private servers | Not supported yet (M7); not in v0.1.0 |
 | iCCup online | Not supported (M8), only ever with iCCup's official cooperation |
 | Battle.net | Not supported |
