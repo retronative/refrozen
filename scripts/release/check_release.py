@@ -13,7 +13,11 @@ actually contains.
   symbol (f_<8 hex digits>) anywhere in the bundle;
 - reFrozen's licence, the third-party notices and licence texts, and the fonts'
   licences are in the bundle; Info.plist names version 0.1.0, macOS 14 and
-  the games category.
+  the games category, and has the local network usage description;
+- the game launcher (kit/bin/refrozen) carries an embedded Info.plist naming
+  reFrozen with the same description, and is signed as
+  org.retronative.refrozen.game (macOS keys local network permission to the
+  launcher, which the app replaces itself with).
 Prints one ok/FAIL line per check; exit 1 if any fails.
 """
 import os
@@ -122,6 +126,27 @@ info = plistlib.load(open(os.path.join(APP, "Contents", "Info.plist"), "rb"))
 check("Info.plist: version 0.1.0", info.get("CFBundleShortVersionString") == "0.1.0", str(info.get("CFBundleShortVersionString")))
 check("Info.plist: macOS 14 minimum", info.get("LSMinimumSystemVersion") == "14.0")
 check("Info.plist: games category (Game Mode)", info.get("LSApplicationCategoryType") == "public.app-category.games")
+LAN_USAGE = ("reFrozen uses your local network to find, host and join Warcraft III LAN games "
+             "with other Macs on the same network.")
+check("Info.plist: local network usage description", info.get("NSLocalNetworkUsageDescription") == LAN_USAGE)
+
+launcher = os.path.join(APP, "Contents", "Resources", "kit", "bin", "refrozen")
+sect = run("otool", "-s", "__TEXT", "__info_plist", "-V", launcher).stdout
+embedded = {}
+if "<plist" in sect:
+    try:
+        embedded = plistlib.loads(sect[sect.index("<?xml"):sect.rindex("</plist>") + 8].encode())
+    except (ValueError, plistlib.InvalidFileException):
+        embedded = {}
+check("launcher: embedded Info.plist", bool(embedded), sect[:200])
+check("launcher: Info.plist names reFrozen", embedded.get("CFBundleName") == "reFrozen", str(embedded.get("CFBundleName")))
+check("launcher: Info.plist identifier org.retronative.refrozen.game",
+      embedded.get("CFBundleIdentifier") == "org.retronative.refrozen.game", str(embedded.get("CFBundleIdentifier")))
+check("launcher: local network usage description", embedded.get("NSLocalNetworkUsageDescription") == LAN_USAGE)
+sig = run("codesign", "-dv", launcher).stderr
+check("launcher: signed as org.retronative.refrozen.game",
+      "Identifier=org.retronative.refrozen.game\n" in sig, sig.strip()[:300])
+check("launcher: the signature binds the Info.plist", "Info.plist entries=" in sig, sig.strip()[:300])
 
 print("ALL PASS" if not fails else f"{fails} FAILED")
 sys.exit(1 if fails else 0)

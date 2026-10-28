@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Embedded in the game launcher (kit/bin/refrozen, section __TEXT,__info_plist):
+     the app replaces itself with the launcher (execv) to start the game, so macOS
+     asks the launcher, not the app, for local network access. This names it,
+     gives it a stable identity across builds and explains the request. -->
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key><string>org.retronative.refrozen.game</string>
+  <key>CFBundleName</key><string>reFrozen</string>
+  <key>CFBundleDisplayName</key><string>reFrozen</string>
+  <key>CFBundleExecutable</key><string>refrozen</string>
+  <key>CFBundleVersion</key><string>@REFROZEN_MODULE_STAMP@</string>
+  <key>NSLocalNetworkUsageDescription</key><string>reFrozen uses your local network to find, host and join Warcraft III LAN games with other Macs on the same network.</string>
+</dict>
+</plist>
