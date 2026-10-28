@@ -6,7 +6,7 @@ and recomp_opengl, and run once per mode.
   /opt/homebrew/bin/python3 -I tests/test_win32.py [--modes A,N,...] [--cache DIR]
 
 --modes runs only the named groups' checks (the mutation gate's focused
-runs): A W V O N Q F (with FF) X S T M D L P, and stops (the numbered modes). Without
+runs): A W V O N Q B (with R) F (with FF) X S T M D L P, and stops (the numbered modes). Without
 it every mode runs; a subset run says so in its last line. --cache DIR reuses
 the linked test program from DIR when every input of its compile is unchanged
 (the mutation gate's runs; see link_key).
@@ -35,6 +35,11 @@ Modes (the command line's last character):
      pending writes and reads at the OVERLAPPED's offset with their packets,
      append, end of file, hEvent's no-packet bit, a synchronous handle given
      an OVERLAPPED. One 1/0 flag per check.
+  B  LAN discovery broadcasts (patch 0025): a datagram to
+     255.255.255.255:6112 arrives at 0.0.0.0:6112 on this host; R: the same
+     with 255.255.255.255 refused (<ID>_TEST_NO_LIMITED_BROADCAST, a VPN as
+     the primary service): it still arrives, and a broadcast to another port
+     is refused. One 1/0 flag per check.
   D  painting (M4): update regions, WM_PAINT synthesis and order,
      UpdateWindow, BeginPaint's PAINTSTRUCT and WM_ERASEBKGND, invalidation
      by show and resize, DefWindowProc's WM_PAINT. One 1/0 flag per check.
@@ -763,6 +768,49 @@ def build_text(g):
     g.n_code = n
     g.n_names, g.names = g.names[first_n:], g.names[:first_n]
 
+    # modes B and R: Warcraft III's LAN discovery broadcast (patch 0025). A
+    # datagram to 255.255.255.255:6112 goes to each local network's broadcast
+    # address and arrives at a socket bound to 0.0.0.0:6112 on this host (a
+    # broadcast is delivered to the sender's own sockets too: BSD's and
+    # Windows' IP). Mode R runs with 255.255.255.255 refused
+    # (<ID>_TEST_NO_LIMITED_BROADCAST), as macOS refuses it when a VPN is the
+    # primary service (EADDRNOTAVAIL): the 6112 broadcast still arrives, and
+    # one to another port, which is not rewritten, fails with
+    # WSAEADDRNOTAVAIL (MSDN's sendto). The receiver reads up to 8 datagrams
+    # for its own: another host may be announcing a game.
+    def lan_mode(prefix, refused):
+        bv = {k: g.d.put(b"\0" * 4) for k in ("rb", "s", "len", "one", "x", "n")}
+        bsa, bdst, bfrom, bbuf = (g.d.put(b"\0" * 16) for _ in range(4))
+        V = lambda k: f"dword ptr [{bv[k]:#x}]"
+        SAB = lambda va, port_be, addr: (f"  mov word ptr [{va:#x}], 2{NL}  mov word ptr [{va + 2:#x}], {port_be:#x}{NL}"
+                                         f"  mov dword ptr [{va + 4:#x}], {addr:#x}{NL}")
+        first = len(g.names)
+        b = g.call(23, 2, 2, 0) + f"  mov {V('rb')}, eax{NL}"
+        b += f"  mov dword ptr [{bv['one']:#x}], 1{NL}" + g.call(21, V("rb"), 0xFFFF, 0x4, bv["one"], 4)
+        b += SAB(bsa, 0xE017, 0) + g.call(2, V("rb"), bsa, 16) + g.chk(f"{prefix}: bind 0.0.0.0:6112", g.eq(0))
+        b += f"  mov dword ptr [{bv['x']:#x}], 1000{NL}" + g.call(21, V("rb"), 0xFFFF, 0x1006, bv["x"], 4)
+        b += g.call(23, 2, 2, 0) + f"  mov {V('s')}, eax{NL}" + g.call(21, V("s"), 0xFFFF, 0x20, bv["one"], 4)
+        b += SAB(bdst, 0xE017, 0xFFFFFFFF) + g.call(20, V("s"), g.str("B25!"), 4, 0, bdst, 16)
+        b += g.chk(f"{prefix}: sendto 255.255.255.255:6112 sends the datagram", g.eq(4))
+        b += f"  mov dword ptr [{bv['n']:#x}], 8{NL}9:{NL}  mov dword ptr [{bv['len']:#x}], 16{NL}"
+        b += g.call(17, V("rb"), bbuf, 64, 0, bfrom, bv["len"])
+        b += (f"  cmp eax, 4{NL}  jne 8f{NL}  cmp dword ptr [{bbuf:#x}], 0x21353242{NL}  je 7f{NL}"
+              f"8:{NL}  cmp eax, -1{NL}  je 6f{NL}  dec dword ptr [{bv['n']:#x}]{NL}  jnz 9b{NL}"
+              f"6:{NL}  xor eax, eax{NL}  jmp 5f{NL}7:{NL}  mov eax, 1{NL}5:{NL}")
+        b += g.chk(f"{prefix}: ... and arrives at 0.0.0.0:6112 on this host", g.eq(1))
+        b += SAB(bdst, 0xE117, 0xFFFFFFFF) + g.call(20, V("s"), g.str("x"), 1, 0, bdst, 16)
+        if refused:
+            b += g.chk("R: a broadcast to another port is not rewritten: refused", g.eq(-1))
+            b += g.call(111) + g.chk("R: ... with WSAEADDRNOTAVAIL", g.eq(10049))
+        else:
+            b += g.chk("B: a broadcast to another port is sent as before", g.eq(1))
+        b += g.call(3, V("s")) + g.call(3, V("rb"))
+        names, g.names = g.names[first:], g.names[:first]
+        return b, names
+
+    g.b_code, g.b_names = lan_mode("B", False)
+    g.r_code, g.r_names = lan_mode("R", True)
+
     # mode Q: completion ports on sockets (patch 0024), as the game hosts and
     # joins: mswsock's AcceptEx and GetAcceptExSockaddrs, sockets associated
     # with a port, overlapped ReadFile, and closing with operations pending.
@@ -1159,6 +1207,10 @@ main:
   je mode_n
   cmp eax, 0x51
   je mode_q
+  cmp eax, 0x42
+  je mode_b
+  cmp eax, 0x52
+  je mode_r
   cmp eax, 0x56
   je mode_v
   cmp eax, 0x46
@@ -1180,6 +1232,10 @@ mode_n:
 {g.n_code}{finish}
 mode_q:
 {g.q_code}{finish}
+mode_b:
+{g.b_code}{finish}
+mode_r:
+{g.r_code}{finish}
 mode_v:
 {g.v_code}{finish}
 mode_f:
@@ -1405,7 +1461,7 @@ def sizes(log):
     return [m for m in log if m[0] in keep]
 
 
-MODE_GROUPS = ("A", "W", "V", "O", "N", "Q", "F", "X", "S", "T", "M", "D", "L", "P", "stops")
+MODE_GROUPS = ("A", "W", "V", "O", "N", "Q", "B", "F", "X", "S", "T", "M", "D", "L", "P", "stops")
 SELECTED = None  # None: every group
 CACHE = None  # --cache DIR
 
@@ -1500,6 +1556,18 @@ def main():
                 flags(g.q_names, out, "Q")
                 if failures > before:
                     print("".join(l + "\n" for l in run.stderr.splitlines() if l.startswith("wsock32:")), end="")
+
+            if selected("B"):
+                # Modes B and R: LAN discovery broadcasts (patch 0025); a LAN
+                # broadcast again, so the same precondition.
+                check("B: precondition: this process may broadcast on the LAN (run attached, not detached from ssh)",
+                      lan_broadcast_errno(), None)
+                code, out, fatal = run(tmp, binp, "B", NET_LOG="1")
+                check("B: runs to the end", (code, fatal), (0, None))
+                flags(g.b_names, out, "B")
+                code, out, fatal = run(tmp, binp, "R", NET_LOG="1", TEST_NO_LIMITED_BROADCAST="1")
+                check("R: runs to the end", (code, fatal), (0, None))
+                flags(g.r_names, out, "R")
 
             if selected("F"):
                 # Mode F: the screen the game sees is the desktop (W x H pixels);

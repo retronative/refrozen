@@ -1,0 +1,358 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index d192ebf..fc709d5 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -107,6 +107,7 @@ add_library(recomp_runtime SHARED
+   src/runtime/hle/gdi32.cpp
+   src/runtime/hle/shell_net.cpp
+   src/runtime/hle/wsock32_socket.cpp
++  src/runtime/hle/lan_broadcast.cpp
+   src/runtime/hle/com.cpp
+   src/runtime/hle/present.cpp)
+ target_link_libraries(recomp_runtime PUBLIC recomp_image recomp_x87
+diff --git a/src/runtime/hle/lan_broadcast.cpp b/src/runtime/hle/lan_broadcast.cpp
+new file mode 100644
+index 0000000..af329e4
+--- /dev/null
++++ b/src/runtime/hle/lan_broadcast.cpp
+@@ -0,0 +1,50 @@
++#include "runtime/hle/lan_broadcast.h"
++
++#include <arpa/inet.h>
++#include <net/if.h>
++#include <netinet/in.h>
++
++#include <algorithm>
++#include <cerrno>
++
++namespace recomp {
++namespace hle {
++
++bool IsLanDiscovery(uint32_t addr, uint16_t port) {
++  return addr == htonl(INADDR_BROADCAST) && port == htons(kLanDiscoveryPort);
++}
++
++std::vector<uint32_t> LanBroadcastTargets(const ifaddrs* list) {
++  std::vector<uint32_t> out;
++  for (const ifaddrs* i = list; i; i = i->ifa_next) {
++    const unsigned f = i->ifa_flags;
++    if (!(f & IFF_UP) || !(f & IFF_RUNNING) || !(f & IFF_BROADCAST)) continue;
++    if (f & (IFF_LOOPBACK | IFF_POINTOPOINT)) continue;
++    if (!i->ifa_addr || i->ifa_addr->sa_family != AF_INET) continue;
++    // ifa_broadaddr is ifa_dstaddr: the broadcast address with IFF_BROADCAST.
++    if (!i->ifa_broadaddr || i->ifa_broadaddr->sa_family != AF_INET) continue;
++    const uint32_t b = reinterpret_cast<const sockaddr_in*>(i->ifa_broadaddr)->sin_addr.s_addr;
++    if (b == htonl(INADDR_ANY) || b == htonl(INADDR_BROADCAST)) continue;
++    if (std::find(out.begin(), out.end(), b) == out.end()) out.push_back(b);
++  }
++  return out;
++}
++
++ssize_t SendLanBroadcast(const std::vector<uint32_t>& targets, size_t len,
++                         const std::function<ssize_t(uint32_t)>& send_to) {
++  if (targets.empty()) return send_to(htonl(INADDR_BROADCAST));
++  bool sent = false;
++  int first_error = 0;
++  for (uint32_t t : targets) {
++    if (send_to(t) >= 0)
++      sent = true;
++    else if (!first_error)
++      first_error = errno;
++  }
++  if (sent) return ssize_t(len);
++  errno = first_error;
++  return -1;
++}
++
++}  // namespace hle
++}  // namespace recomp
+diff --git a/src/runtime/hle/lan_broadcast.h b/src/runtime/hle/lan_broadcast.h
+new file mode 100644
+index 0000000..c111a53
+--- /dev/null
++++ b/src/runtime/hle/lan_broadcast.h
+@@ -0,0 +1,38 @@
++#pragma once
++// Warcraft III's LAN discovery broadcasts on UDP 6112 go to 255.255.255.255,
++// which macOS routes by the primary service: with a VPN there, into its
++// tunnel, which refuses them (EADDRNOTAVAIL), and no game is seen. Such a
++// datagram goes instead to the broadcast address of each local network;
++// receivers bound to INADDR_ANY take it alike (they do on Windows too).
++// Kept apart from the socket layer so the decisions can be tested alone.
++
++#include <ifaddrs.h>
++#include <sys/types.h>
++
++#include <cstddef>
++#include <cstdint>
++#include <functional>
++#include <vector>
++
++namespace recomp {
++namespace hle {
++
++inline constexpr uint16_t kLanDiscoveryPort = 6112;
++
++// A datagram to 255.255.255.255:6112 (port and address in network order).
++bool IsLanDiscovery(uint32_t addr, uint16_t port);
++
++// The broadcast address (network order) of each IPv4 interface in `list`
++// (getifaddrs) that is up and running, broadcast-capable, neither loopback
++// nor point-to-point, and has a broadcast address other than 0.0.0.0 and
++// 255.255.255.255; each address once, in list order.
++std::vector<uint32_t> LanBroadcastTargets(const ifaddrs* list);
++
++// Sends a `len`-byte datagram to each target with send_to(address); with no
++// target, to 255.255.255.255. Returns len if one send did, else -1 with
++// errno the first failure's.
++ssize_t SendLanBroadcast(const std::vector<uint32_t>& targets, size_t len,
++                         const std::function<ssize_t(uint32_t)>& send_to);
++
++}  // namespace hle
++}  // namespace recomp
+diff --git a/src/runtime/hle/wsock32_socket.cpp b/src/runtime/hle/wsock32_socket.cpp
+index bfdf04f..cc20781 100644
+--- a/src/runtime/hle/wsock32_socket.cpp
++++ b/src/runtime/hle/wsock32_socket.cpp
+@@ -29,6 +29,7 @@
+ 
+ #include <arpa/inet.h>
+ #include <fcntl.h>
++#include <ifaddrs.h>
+ #include <netinet/in.h>
+ #include <netinet/tcp.h>
+ #include <poll.h>
+@@ -48,6 +49,7 @@
+ 
+ #include "runtime/hle/hle.h"
+ #include "runtime/hle/kernel32_state.h"
++#include "runtime/hle/lan_broadcast.h"
+ #include "runtime/hle/win32.h"
+ #include "runtime/lazy_mem.h"
+ #include "runtime/log.h"
+@@ -414,6 +416,29 @@ uint32_t Receive(Ctx& c, uint32_t from, uint32_t fromlen) {  // recv / recvfrom
+   return uint32_t(n);
+ }
+ 
++// One datagram to `addr`. <ID>_TEST_NO_LIMITED_BROADCAST=1 (test aid) refuses
++// 255.255.255.255 as macOS does when a VPN is the primary service.
++ssize_t SendTo(int fd, const void* data, size_t len, int flags, sockaddr_in a, uint32_t addr) {
++  static const bool refuse_limited = Env("TEST_NO_LIMITED_BROADCAST") != nullptr;
++  if (refuse_limited && addr == htonl(INADDR_BROADCAST)) {
++    errno = EADDRNOTAVAIL;
++    return -1;
++  }
++  a.sin_addr.s_addr = addr;
++  return ::sendto(fd, data, len, flags, reinterpret_cast<sockaddr*>(&a), sizeof a);
++}
++
++// A LAN discovery broadcast (lan_broadcast.h) goes to each local network's
++// broadcast address.
++ssize_t SendLanDiscovery(int fd, const void* data, size_t len, int flags, const sockaddr_in& a) {
++  std::vector<uint32_t> targets;
++  if (ifaddrs* list = nullptr; getifaddrs(&list) == 0) {
++    targets = LanBroadcastTargets(list);
++    freeifaddrs(list);
++  }
++  return SendLanBroadcast(targets, len, [&](uint32_t addr) { return SendTo(fd, data, len, flags, a, addr); });
++}
++
+ uint32_t Transmit(Ctx& c, uint32_t to, uint32_t tolen) {  // send / sendto
+   Sock s;
+   if (!Find(Arg(c, 0), &s)) return Fail(kWsaEnotsock);
+@@ -425,7 +450,9 @@ uint32_t Transmit(Ctx& c, uint32_t to, uint32_t tolen) {  // send / sendto
+     sockaddr_in a;
+     uint32_t err;
+     if (!ToHost(to, tolen, &a, &err)) return Fail(err);
+-    n = ::sendto(s.fd, len ? GPtr(buf) : nullptr, len, int(flags), reinterpret_cast<sockaddr*>(&a), sizeof a);
++    const void* data = len ? GPtr(buf) : nullptr;
++    n = IsLanDiscovery(a.sin_addr.s_addr, a.sin_port) ? SendLanDiscovery(s.fd, data, len, int(flags), a)
++                                                       : SendTo(s.fd, data, len, int(flags), a, a.sin_addr.s_addr);
+   } else {
+     n = ::send(s.fd, len ? GPtr(buf) : nullptr, len, int(flags));  // a stream ignores the address
+   }
+diff --git a/tests/lan_broadcast_test.cpp b/tests/lan_broadcast_test.cpp
+new file mode 100644
+index 0000000..c6c3b48
+--- /dev/null
++++ b/tests/lan_broadcast_test.cpp
+@@ -0,0 +1,179 @@
++// lan_broadcast (reFrozen patch 0025): which interfaces a LAN discovery
++// broadcast goes out on, and what the send reports. Interface lists are
++// built as getifaddrs(3) returns them: flags from net/if.h (netintro(4)),
++// the IPv4 address in ifa_addr and, for IFF_BROADCAST, the broadcast
++// address in ifa_dstaddr (ifa_broadaddr). Prints "ok"/"FAIL" per check.
++#include "runtime/hle/lan_broadcast.h"
++
++#include <arpa/inet.h>
++#include <net/if.h>
++#include <netinet/in.h>
++
++#include <cerrno>
++#include <cstdio>
++#include <deque>
++#include <string>
++#include <vector>
++
++using recomp::hle::IsLanDiscovery;
++using recomp::hle::LanBroadcastTargets;
++using recomp::hle::SendLanBroadcast;
++
++namespace {
++
++int failures = 0;
++
++void Check(const char* name, bool ok) {
++  failures += !ok;
++  std::printf("%s %s\n", ok ? "ok  " : "FAIL", name);
++}
++
++uint32_t A(const char* dotted) { return inet_addr(dotted); }
++
++// An interface list; nodes and addresses live as long as the List.
++struct List {
++  std::deque<ifaddrs> nodes;
++  std::deque<sockaddr_in> v4;
++  std::deque<sockaddr_in6> v6;
++  std::deque<std::string> names;
++
++  sockaddr* V4(const char* dotted) {
++    sockaddr_in a{};
++    a.sin_len = sizeof a;
++    a.sin_family = AF_INET;
++    a.sin_addr.s_addr = A(dotted);
++    v4.push_back(a);
++    return reinterpret_cast<sockaddr*>(&v4.back());
++  }
++  void Add(const char* name, unsigned flags, const char* addr, const char* dst) {
++    names.emplace_back(name);
++    ifaddrs n{};
++    n.ifa_name = names.back().data();
++    n.ifa_flags = flags;
++    n.ifa_addr = addr ? V4(addr) : nullptr;
++    n.ifa_dstaddr = dst ? V4(dst) : nullptr;
++    Link(n);
++  }
++  void AddV6(const char* name, unsigned flags) {
++    names.emplace_back(name);
++    sockaddr_in6 a{};
++    a.sin6_len = sizeof a;
++    a.sin6_family = AF_INET6;
++    v6.push_back(a);
++    ifaddrs n{};
++    n.ifa_name = names.back().data();
++    n.ifa_flags = flags;
++    n.ifa_addr = reinterpret_cast<sockaddr*>(&v6.back());
++    n.ifa_dstaddr = reinterpret_cast<sockaddr*>(&v6.back());
++    Link(n);
++  }
++  void Link(const ifaddrs& n) {
++    nodes.push_back(n);
++    if (nodes.size() > 1) nodes[nodes.size() - 2].ifa_next = &nodes.back();
++  }
++  const ifaddrs* Head() const { return nodes.empty() ? nullptr : &nodes.front(); }
++};
++
++constexpr unsigned kLan = IFF_UP | IFF_RUNNING | IFF_BROADCAST | IFF_SIMPLEX | IFF_MULTICAST;
++
++std::vector<uint32_t> Targets(const List& l) { return LanBroadcastTargets(l.Head()); }
++
++}  // namespace
++
++int main() {
++  // -- which datagrams are LAN discovery.
++  const uint16_t p6112 = htons(6112);
++  Check("discovery: 255.255.255.255:6112", IsLanDiscovery(A("255.255.255.255"), p6112));
++  Check("discovery: not 255.255.255.255 on another port", !IsLanDiscovery(A("255.255.255.255"), htons(6113)));
++  Check("discovery: not a subnet broadcast on 6112", !IsLanDiscovery(A("192.168.1.255"), p6112));
++  Check("discovery: not a unicast address on 6112", !IsLanDiscovery(A("192.168.1.34"), p6112));
++  Check("discovery: the port in network order (6112 in host order is another port)",
++        !IsLanDiscovery(A("255.255.255.255"), 6112));
++
++  // -- the interfaces of a Mac on Wi-Fi with a VPN as its primary service.
++  {
++    List l;
++    l.Add("lo0", IFF_UP | IFF_RUNNING | IFF_LOOPBACK | IFF_MULTICAST, "127.0.0.1", nullptr);
++    l.Add("en0", kLan, "192.168.1.35", "192.168.1.255");
++    l.AddV6("en0", kLan);
++    l.Add("utun10", IFF_UP | IFF_RUNNING | IFF_POINTOPOINT | IFF_MULTICAST, "172.16.9.1", "172.16.9.1");
++    Check("vpn: only the Wi-Fi network's broadcast address", Targets(l) == std::vector<uint32_t>{A("192.168.1.255")});
++  }
++  // -- each excluded property alone, next to a qualifying interface.
++  auto only_en0 = [](const char* name, unsigned flags, const char* addr, const char* dst) {
++    List l;
++    l.Add("en0", kLan, "192.168.1.35", "192.168.1.255");
++    l.Add("x0", flags, addr, dst);
++    Check(name, Targets(l) == std::vector<uint32_t>{A("192.168.1.255")});
++  };
++  only_en0("excluded: an interface that is down", kLan & ~IFF_UP, "10.0.0.2", "10.0.0.255");
++  only_en0("excluded: an interface that is up but not running (no link)", kLan & ~IFF_RUNNING, "10.0.0.2", "10.0.0.255");
++  only_en0("excluded: an interface without IFF_BROADCAST", kLan & ~IFF_BROADCAST, "10.0.0.2", "10.0.0.255");
++  only_en0("excluded: loopback, even marked broadcast-capable", kLan | IFF_LOOPBACK, "127.0.0.1", "127.255.255.255");
++  only_en0("excluded: point-to-point, even marked broadcast-capable", kLan | IFF_POINTOPOINT, "10.8.0.2", "10.8.0.1");
++  only_en0("excluded: no address", kLan, nullptr, "10.0.0.255");
++  only_en0("excluded: no broadcast address", kLan, "10.0.0.2", nullptr);
++  only_en0("excluded: a broadcast address of 255.255.255.255", kLan, "10.0.0.2", "255.255.255.255");
++  only_en0("excluded: a broadcast address of 0.0.0.0", kLan, "10.0.0.2", "0.0.0.0");
++  {
++    List l;
++    l.Add("en0", kLan, "192.168.1.35", "192.168.1.255");
++    l.AddV6("en5", kLan);
++    Check("excluded: an IPv6 address", Targets(l) == std::vector<uint32_t>{A("192.168.1.255")});
++  }
++  // -- several networks; one network on two interfaces; none.
++  {
++    List l;
++    l.Add("en0", kLan, "192.168.1.35", "192.168.1.255");
++    l.Add("en7", kLan, "10.1.0.5", "10.1.255.255");
++    l.Add("en8", kLan, "192.168.1.40", "192.168.1.255");
++    l.Add("bridge0", kLan, "192.168.2.1", "192.168.2.255");
++    Check("networks: each broadcast address once, in list order",
++          Targets(l) == std::vector<uint32_t>{A("192.168.1.255"), A("10.1.255.255"), A("192.168.2.255")});
++  }
++  {
++    List l;
++    l.Add("lo0", IFF_UP | IFF_RUNNING | IFF_LOOPBACK, "127.0.0.1", nullptr);
++    Check("networks: none (loopback only)", Targets(l).empty());
++    Check("networks: none (an empty list)", LanBroadcastTargets(nullptr).empty());
++  }
++
++  // -- the send: every target tried; one success is success; all failing
++  //    is the first failure; no target is 255.255.255.255 as before.
++  {
++    std::vector<uint32_t> seen;
++    auto ok = [&](uint32_t a) { seen.push_back(a); return ssize_t(16); };
++    ssize_t n = SendLanBroadcast({A("192.168.1.255"), A("10.1.255.255")}, 16, ok);
++    Check("send: the length when every send succeeds", n == 16);
++    Check("send: to each target, in order", seen == std::vector<uint32_t>{A("192.168.1.255"), A("10.1.255.255")});
++  }
++  {
++    std::vector<uint32_t> seen;
++    auto first_fails = [&](uint32_t a) {
++      seen.push_back(a);
++      if (seen.size() == 1) { errno = ENETDOWN; return ssize_t(-1); }
++      return ssize_t(16);
++    };
++    ssize_t n = SendLanBroadcast({A("192.168.1.255"), A("10.1.255.255")}, 16, first_fails);
++    Check("send: one failure among successes is success", n == 16);
++    Check("send: ... and the targets after a failure are still tried", seen.size() == 2);
++  }
++  {
++    int calls = 0;
++    auto all_fail = [&](uint32_t) { errno = ++calls == 1 ? EHOSTUNREACH : ENETDOWN; return ssize_t(-1); };
++    errno = 0;
++    ssize_t n = SendLanBroadcast({A("192.168.1.255"), A("10.1.255.255")}, 16, all_fail);
++    Check("send: all failing is -1", n == -1);
++    Check("send: ... with the first failure's errno (a denied permission stays EHOSTUNREACH)", errno == EHOSTUNREACH);
++  }
++  {
++    std::vector<uint32_t> seen;
++    auto refused = [&](uint32_t a) { seen.push_back(a); errno = EADDRNOTAVAIL; return ssize_t(-1); };
++    ssize_t n = SendLanBroadcast({}, 16, refused);
++    Check("send: no target: to 255.255.255.255, as before", seen == std::vector<uint32_t>{A("255.255.255.255")});
++    Check("send: ... with its result and errno", n == -1 && errno == EADDRNOTAVAIL);
++  }
++
++  std::printf(failures ? "%d FAILED\n" : "ALL PASS\n", failures);
++  return failures ? 1 : 0;
++}

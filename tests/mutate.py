@@ -37,8 +37,8 @@ whole test. A focused run counts only when it is KILLED by the expected check:
 any other outcome (survived, another check, a timeout, a crash) is decided by
 the whole test, and the result says so.
 
---changed REF: only the mutants that the changes since REF (committed or
-not) can affect: those in changed files (a changed patches/x86recomp patch
+--changed REF: only the mutants that the changes since REF (committed, not
+yet committed, or in new files not yet added) can affect: those in changed files (a changed patches/x86recomp patch
 counts as the files it changes), those of changed tests and of the tests that
 import them, those changed in mutants.py, and CHANGE_SCOPE's rules.
 
@@ -276,6 +276,7 @@ def git(*args):
 
 def changed_mutants(ref, mutants):
     names = set(git("diff", "--name-only", ref).split())
+    names |= set(git("ls-files", "--others", "--exclude-standard").split())  # new, not yet added
     files = set(names)
     for n in names:
         if n.startswith("patches/x86recomp/") and n.endswith(".patch"):
