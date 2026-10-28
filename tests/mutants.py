@@ -289,9 +289,10 @@ MUTANTS = [
          expect="iocp: FIFO bytes"),
     dict(id="M3-C3", milestone="M3", area="threading", file=SYNC, test="win32",
          fault="a post does not wake waiting threads",
-         # (re-expressed in M5, when posts and I/O packets went through PostCompletion)
-         old="    static_cast<CompletionPort*>(port)->queue.push_back({bytes, key, overlapped});\n  }\n  SignalChanged();",
-         new="    static_cast<CompletionPort*>(port)->queue.push_back({bytes, key, overlapped});\n  }",
+         # (re-expressed in M5, when posts and I/O packets went through PostCompletion,
+         # and in M7, when packets carry a status)
+         old="    static_cast<CompletionPort*>(port)->queue.push_back({bytes, key, overlapped, status});\n  }\n  SignalChanged();",
+         new="    static_cast<CompletionPort*>(port)->queue.push_back({bytes, key, overlapped, status});\n  }",
          expect="iocp: a post wakes a thread blocked"),
     dict(id="M3-C4", milestone="M3", area="error handling", file=SYNC, test="win32",
          fault="CreateIoCompletionPort(INVALID_HANDLE_VALUE, port) makes a new port",
