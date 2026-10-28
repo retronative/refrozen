@@ -91,3 +91,42 @@ before the session). The M1 had none.
   MPQ header; the game itself lists and plays the map. Not a player-facing issue.
 - **Not yet tested:** Wi-Fi-off disconnect recovery; the 30+ minute DotA session; Windows
   interoperability (outside v0.2.0).
+
+## Remaining acceptance plan (prepared 2026-10-28; nothing started)
+
+Order: the release candidate first, so the long sessions run on the build that ships.
+
+1. **Version 0.2.0 in the release scripts (needs approval).** `make_release_app.sh`,
+   `release_candidate.sh` and `check_release.py` name 0.1.0 (Info.plist, dmg name, manifest,
+   check): one version setting for all three, then release candidate 1 of v0.2.0 from a clean
+   checkout (R4: release checks, content gate, dmg round trip, checksums, manifest).
+2. **Automated regression on that build, on m1-air (no GUI from the owner; CPU-heavy, nothing
+   else on m1-air meanwhile; network tests attached):** suites and ctest; the full mutation gate
+   (the default runner, the release-level verification; about 2.5 h for 321 mutants); patches
+   reapply; two lifts identical; `validate_lift.py` HARD PASS; M4 3/3 and M5 3/3 on the RC's own
+   module. M6 on the RC: the owner's choice between v0.1.0's R3 (3–5 runs of 25–30 minutes, then
+   one of 65 minutes, about 4 h) and one 30-minute run, the runtime changes since v0.1.0 being the
+   network layer.
+3. **Session A, two Macs (GUI; needs the owner's approval and darkBook): the 30+ minute DotA
+   LAN session**, on the RC build in fresh isolated test folders, combined with checks that do not
+   disturb it:
+   - the first launch of the new launcher identity on each Mac: whether a Local Network prompt
+     appears, its exact wording (name, description), and that each Mac sees the other's game
+     (the deferred second-Mac permission and discovery check; the experiment's build A is kept);
+   - the multiplayer load frame measured (`REFROZEN_STALL=1000`, low overhead), against the
+     watchdog observation above;
+   - DotA v6.83d AI (PMV 1.42 EN), on both test installs; the M5 hosts (VPN as the owner chooses),
+     the M1 joins; the owner plays a hero; computer players fill the other slots so the match stays
+     active while the scripted M1 player idles; at least 30 minutes, then a normal exit;
+   - pass: no desync dialog, both replays identical turn for turn over the whole match, both exit
+     cleanly, no crash; hang reports only as the M6 rule allows (one, during the map load).
+   Known risk: the intermittent crash in long AI matches (v0.1.0's known limitation R1) may occur;
+   a crash is recorded with its report and fails the session.
+4. **Session B, two Macs: Wi-Fi disconnect and recovery (separate approval; disruptive).** A short
+   game (Booty Bay); the owner turns Wi-Fi off on one Mac for about 30 s, then on: the other Mac
+   drops the player and plays on, no hang or crash; the disconnected Mac leaves the game cleanly
+   and, with Wi-Fi back, both host and join again. Each Mac disconnects once. Turning Wi-Fi off
+   on m1-air also cuts its ssh: its scripted input runs on, and the results are read afterwards.
+5. **Release verification:** R5 (clean install from a browser download), R6 (the human session),
+   R7a/R7b, then the release notes, compatibility pages and site (requirement 6), and R8 with the
+   owner's approval.
