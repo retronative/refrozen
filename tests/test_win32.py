@@ -47,6 +47,7 @@ Needs scripts/setup_tools.sh (tools/x86recomp built) and Homebrew LLVM.
 """
 import os
 import re
+import socket
 import struct
 import subprocess
 import sys
@@ -58,7 +59,7 @@ import test_loader as tl  # noqa: E402  (PE writer, assembler, paths)
 
 EXE = 0x00400000
 TEXT = EXE + 0x1000
-DATA_RVA, DATA_SIZE = 0x4000, 0x4000  # .text may use 0x1000-0x3FFF
+DATA_RVA, DATA_SIZE = 0x8000, 0x4000  # .text may use 0x1000-0x7FFF
 failures = 0
 
 
@@ -104,12 +105,14 @@ IMPORTS = [
                       "GetQueuedCompletionStatus", "CreateThread", "Sleep", "WaitForSingleObject",
                       "InitializeCriticalSection", "TryEnterCriticalSection", "LeaveCriticalSection",
                       "CreateFileA", "ReadFile", "WriteFile", "CloseHandle", "SetFilePointer",
-                      "SetLastError", "GetCurrentThreadId", "GetTickCount"]),
+                      "SetLastError", "GetCurrentThreadId", "GetTickCount", "LoadLibraryA",
+                      "GetProcAddress"]),
     # Winsock 1.1 by ordinal (Wine's wsock32.spec): htonl, htons, inet_addr,
     # inet_ntoa, ntohl, ntohs, WSAGetLastError; mode N's sockets: accept, bind,
     # closesocket, connect, getpeername, getsockname, ioctlsocket, listen,
     # recv, recvfrom, select, send, sendto, setsockopt, socket.
     ("wsock32.dll", [8, 9, 10, 11, 14, 15, 111, 1, 2, 3, 4, 5, 6, 12, 13, 16, 17, 18, 19, 20, 21, 23]),
+    ("mswsock.dll", ["AcceptEx", "GetAcceptExSockaddrs"]),
     ("user32.dll", ["EnumDisplayDevicesA", "EnumDisplaySettingsA", "ChangeDisplaySettingsExA",
                     "RegisterClassA", "CreateWindowExA", "DefWindowProcA", "ShowWindow", "GetDC",
                     "wsprintfA", "SystemParametersInfoA", "InvalidateRect", "UpdateWindow", "BeginPaint",
@@ -168,6 +171,15 @@ class Guest:
         self.nsa1, self.nsa2, self.nsa3, self.nsa4, self.nsa5, self.nfrom, self.nbc = (self.d.put(b"\0" * 16)
                                                                                      for _ in range(7))
         self.nbuf = self.d.put(b"\0" * 64)
+        # mode Q: handles and results, OVERLAPPEDs, AcceptEx's two 32-byte
+        # address areas, addresses, and read buffers filled with ABh.
+        self.qv = {k: self.d.put(b"\0" * 4) for k in
+                   ("mod", "ev", "e2", "S", "port", "L", "L2", "A1", "A2", "A3", "A4", "A5", "C", "C3", "acc",
+                    "bytes", "key", "ovl", "ret", "abytes", "pl", "ll", "pr", "rl", "lin", "lg", "i", "good")}
+        self.qovl = [self.d.put(b"\0" * 20) for _ in range(13)]
+        self.qab = self.d.put(b"\xEE" * 64)
+        self.qsaL, self.qsaC, self.qsa2, self.qsaL2 = (self.d.put(b"\0" * 16) for _ in range(4))
+        self.qbuf = [self.d.put(b"\xAB" * 64) for _ in range(7)]
         self.nfr, self.nfw, self.nfe = (self.d.put(b"\0" * 20) for _ in range(3))  # fd_set: count + 4 SOCKETs
         self.ntv1, self.ntv0 = self.d.put(struct.pack("<ii", 1, 0)), self.d.put(struct.pack("<ii", 0, 0))
         self.oport, self.ofile, self.obytes, self.okey, self.opovl, self.oev = (self.d.put(b"\0" * 4)
@@ -743,6 +755,187 @@ def build_text(g):
     g.n_code = n
     g.n_names, g.names = g.names[first_n:], g.names[:first_n]
 
+    # mode Q: completion ports on sockets (patch 0024), as the game hosts and
+    # joins: mswsock's AcceptEx and GetAcceptExSockaddrs, sockets associated
+    # with a port, overlapped ReadFile, and closing with operations pending.
+    # Expected values: Wine's conformance tests, which run on Windows
+    # (ws2_32/tests/sock.c: test_completion_port, test_AcceptEx), and MSDN:
+    # AcceptEx returns FALSE with ERROR_IO_PENDING and OVERLAPPED.Internal
+    # STATUS_PENDING; its checks fail with WSA_INVALID_PARAMETER (no
+    # OVERLAPPED), WSAEINVAL (the listening socket is not listening),
+    # WSAENOTSOCK (no accepting socket); the remote address it reports is the
+    # connecting socket's name; a completion carries the association's key,
+    # the OVERLAPPED and the byte count, and Internal/InternalHigh the status
+    # and count; a graceful close completes a read with 0 bytes and TRUE; a
+    # reset one with FALSE, ERROR_NETNAME_DELETED; closing a socket ends its
+    # pending operations (and an AcceptEx's on its accepting socket) with
+    # FALSE, ERROR_OPERATION_ABORTED, Internal STATUS_CANCELLED, exactly once;
+    # a wait that times out is FALSE, WAIT_TIMEOUT, *overlapped NULL, bytes
+    # and key untouched; an event with its low bit set gets no packet.
+    # GetAcceptExSockaddrs: each area is the address's length (an int) then
+    # the address (Wine's layout and pointer calculation).
+    first_q = len(g.names)
+    QW = lambda k: f"dword ptr [{g.qv[k]:#x}]"
+    ST = lambda k: f"  mov {QW(k)}, eax{NL}"
+    OV = g.qovl
+    NOTERR = "  cmp eax, -1\n  setne al\n  cmp al, 1\n"
+    WERR = lambda name, code: g.call(111) + g.chk(name, g.eq(code))
+    SOCKQ = lambda k: g.call(23, 2, 1, 0) + ST(k)
+    LOOP = lambda va: (f"  mov word ptr [{va:#x}], 2{NL}  mov word ptr [{va + 2:#x}], 0{NL}"
+                       f"  mov dword ptr [{va + 4:#x}], 0x0100007F{NL}")
+    NAME = lambda k, va: f"  mov {QW('lin')}, 16{NL}" + g.call(6, QW(k), va, g.qv["lin"])
+    PORTEQ = lambda a, b: f"  mov ax, word ptr [{a:#x}]{NL}  cmp ax, word ptr [{b:#x}]{NL}"
+    ASSOC = lambda k, key: g.call("CreateIoCompletionPort", QW(k), QW("port"), key, 0)
+    AE = lambda l, a, ovl: g.call("AcceptEx", l, a, g.qab, 0, 32, 32, g.qv["abytes"], ovl)
+    RF = lambda k, buf, n, ovl: g.call("ReadFile", QW(k), buf, n, 0, ovl)
+
+    def GQ(t):
+        return (f"  mov {QW('bytes')}, 0xDEADBEEF{NL}  mov {QW('key')}, 0xDEADBEEF{NL}"
+                f"  mov {QW('ovl')}, 0xDEADBEEF{NL}"
+                + g.call("GetQueuedCompletionStatus", QW("port"), g.qv["bytes"], g.qv["key"], g.qv["ovl"], t))
+
+    def PACKET(name, ok, key, ovl, nbytes, err=None):  # after GQ
+        r = g.chk(f"{name}: {'TRUE' if ok else 'FALSE'}", g.eq(1 if ok else 0))
+        if err is not None:
+            r += g.gle(f"{name}: error {err}", err)
+        return (r + g.chk(f"{name}: key {key:X}h", g.mem(g.qv["key"], key))
+                + g.chk(f"{name}: its OVERLAPPED", g.mem(g.qv["ovl"], ovl))
+                + g.chk(f"{name}: {nbytes} bytes", g.mem(g.qv["bytes"], nbytes)))
+
+    def NONE(name):
+        return (GQ(200) + g.chk(f"{name}: no packet", g.eq(0)) + g.gle(f"{name}: ... WAIT_TIMEOUT", 258)
+                + g.chk(f"{name}: ... *overlapped NULL", g.mem(g.qv["ovl"], 0))
+                + g.chk(f"{name}: ... bytes untouched", g.mem(g.qv["bytes"], 0xDEADBEEF))
+                + g.chk(f"{name}: ... key untouched", g.mem(g.qv["key"], 0xDEADBEEF)))
+
+    def STATUS(name, ovl, status, nbytes):
+        return (g.chk(f"{name}: Internal {status:08X}h", g.mem(ovl, status))
+                + g.chk(f"{name}: InternalHigh {nbytes}", g.mem(ovl + 4, nbytes)))
+
+    q = ""
+    # -- mswsock.dll through the loader, as the game finds it.
+    q += g.call("LoadLibraryA", g.str("mswsock.dll")) + ST("mod") + g.chk("Q: LoadLibraryA(mswsock.dll)", g.nonzero())
+    for fn in ("AcceptEx", "GetAcceptExSockaddrs"):
+        q += g.call("GetProcAddress", QW("mod"), g.str(fn))
+        q += g.chk(f"Q: GetProcAddress({fn}) is the imported {fn}",
+                   f"  cmp eax, dword ptr [{g.iat[('mswsock.dll', fn)]:#x}]{NL}")
+    # -- one handle namespace: a socket is a kernel handle.
+    q += g.call("CreateEventA", 0, 1, 0, 0) + ST("e2") + g.call(23, 2, 2, 0) + ST("S") + g.chk("Q: socket", NOTERR)
+    q += g.chk("Q: a socket's handle is not an event's", f"  mov eax, {QW('S')}{NL}  cmp eax, {QW('e2')}{NL}  setne al{NL}  cmp al, 1{NL}")
+    q += LOOP(g.qsa2) + g.call(2, QW("S"), g.qsa2, 16) + NAME("S", g.qsa2)
+    q += g.call("CloseHandle", QW("e2")) + NAME("S", g.qsa2) + g.chk("Q: closing the event leaves the socket", g.eq(0))
+    q += g.call("CloseHandle", QW("S")) + g.chk("Q: CloseHandle closes a socket", g.eq(1))
+    q += g.call(3, QW("S")) + g.chk("Q: ... closesocket then fails", g.eq(-1)) + WERR("Q: ... WSAENOTSOCK", 10038)
+    q += g.call(23, 2, 2, 0) + ST("S") + g.call(2, QW("S"), g.qsa2, 16)
+    q += g.chk("Q: ... and its UDP port is free again", g.eq(0)) + g.call(3, QW("S"))
+    # -- a listening socket on a port.
+    q += g.call("CreateIoCompletionPort", 0xFFFFFFFF, 0, 0, 0) + ST("port")
+    q += SOCKQ("L") + LOOP(g.qsaL) + g.call(2, QW("L"), g.qsaL, 16) + g.call(13, QW("L"), 5) + NAME("L", g.qsaL)
+    q += ASSOC("L", 0x11) + g.chk("Q: CreateIoCompletionPort(listening socket, port, 11h)", f"  cmp eax, {QW('port')}{NL}")
+    q += ASSOC("L", 0x12) + g.chk("Q: a second association fails", g.eq(0)) + g.gle("Q: ... ERROR_INVALID_PARAMETER", 87)
+    # -- AcceptEx's own checks.
+    q += SOCKQ("A1") + SOCKQ("A2")
+    q += AE(QW("L"), QW("A1"), 0) + g.chk("Q: AcceptEx without an OVERLAPPED fails", g.eq(0))
+    q += WERR("Q: ... WSA_INVALID_PARAMETER", 87)
+    q += AE(QW("A2"), QW("A1"), OV[12]) + g.chk("Q: AcceptEx on a socket not listening fails", g.eq(0))
+    q += WERR("Q: ... WSAEINVAL", 10022) + STATUS("Q: ... OVERLAPPED", OV[12], 0x103, 0)
+    q += AE(QW("L"), 0xDEAD, OV[12]) + g.chk("Q: AcceptEx with no accepting socket fails", g.eq(0))
+    q += WERR("Q: ... WSAENOTSOCK", 10038)
+    # -- a pending AcceptEx, completed by a connection.
+    q += f"  mov {QW('abytes')}, 0xDEADBEEF{NL}" + AE(QW("L"), QW("A1"), OV[0])
+    q += g.chk("Q: AcceptEx: FALSE", g.eq(0)) + g.gle("Q: ... ERROR_IO_PENDING", 997)
+    q += STATUS("Q: ... pending", OV[0], 0x103, 0) + g.chk("Q: ... bytes received 0", g.mem(g.qv["abytes"], 0))
+    q += AE(QW("L"), QW("A1"), OV[1]) + g.chk("Q: the accepting socket of a pending AcceptEx is refused", g.eq(0))
+    q += WERR("Q: ... WSAEINVAL, not pending", 10022)
+    q += NONE("Q: before a connection")
+    q += SOCKQ("C") + g.call(4, QW("C"), g.qsaL, 16) + g.chk("Q: connect", g.eq(0)) + NAME("C", g.qsaC)
+    q += GQ(2000) + PACKET("Q: the connection", True, 0x11, OV[0], 0) + STATUS("Q: the connection", OV[0], 0, 0)
+    # the next AcceptEx stays pending through the reads below, as the game's do
+    q += AE(QW("L"), QW("A2"), OV[8]) + g.gle("Q: AcceptEx again: ERROR_IO_PENDING", 997)
+    # -- GetAcceptExSockaddrs.
+    q += g.call("GetAcceptExSockaddrs", g.qab, 0, 32, 32, g.qv["pl"], g.qv["ll"], g.qv["pr"], g.qv["rl"])
+    q += g.chk("Q: local address at buffer + 4", g.mem(g.qv["pl"], g.qab + 4))
+    q += g.chk("Q: ... length 16", g.mem(g.qv["ll"], 16))
+    q += g.chk("Q: remote address at buffer + 32 + 4", g.mem(g.qv["pr"], g.qab + 36))
+    q += g.chk("Q: ... length 16", g.mem(g.qv["rl"], 16))
+    q += g.chk("Q: remote: AF_INET", g.mem(g.qab + 36, 2, "word")) + g.chk("Q: remote: the connecting socket's port", PORTEQ(g.qab + 38, g.qsaC + 2))
+    q += g.chk("Q: remote: 127.0.0.1", g.mem(g.qab + 40, 0x0100007F))
+    q += g.chk("Q: local: AF_INET", g.mem(g.qab + 4, 2, "word")) + g.chk("Q: local: the listening port", PORTEQ(g.qab + 6, g.qsaL + 2))
+    q += g.chk("Q: local: 127.0.0.1", g.mem(g.qab + 8, 0x0100007F))
+    q += g.chk("Q: local area zero after the address", g.mem(g.qab + 20, 0)) + g.chk("Q: remote area zero after the address", g.mem(g.qab + 52, 0))
+    # -- the accepted socket.
+    q += f"  mov {QW('lin')}, 16{NL}" + g.call(5, QW("A1"), g.qsa2, g.qv["lin"]) + g.chk("Q: getpeername(accepted)", g.eq(0))
+    q += g.chk("Q: ... the connecting socket", PORTEQ(g.qsa2 + 2, g.qsaC + 2))
+    q += g.call(21, QW("A1"), 0xFFFF, 0x700B, g.qv["L"], 4) + g.chk("Q: setsockopt(SO_UPDATE_ACCEPT_CONTEXT)", g.eq(0))
+    q += ASSOC("A1", 0x22) + g.chk("Q: associate the accepted socket (22h)", f"  cmp eax, {QW('port')}{NL}")
+    # -- overlapped reads.
+    q += RF("A1", g.qbuf[0], 64, OV[2]) + g.chk("Q: ReadFile: FALSE", g.eq(0)) + g.gle("Q: ReadFile: ERROR_IO_PENDING", 997)
+    q += STATUS("Q: ReadFile pending", OV[2], 0x103, 0) + NONE("Q: nothing sent yet")
+    q += g.call(19, QW("C"), g.str("hello"), 5, 0) + g.chk("Q: send 5", g.eq(5))
+    q += GQ(2000) + PACKET("Q: the data", True, 0x22, OV[2], 5) + STATUS("Q: the data", OV[2], 0, 5)
+    q += g.chk("Q: ... hell", g.mem(g.qbuf[0], 0x6C6C6568)) + g.chk("Q: ... o", g.mem(g.qbuf[0] + 4, 0x6F, "byte"))
+    q += g.chk("Q: ... nothing after it written", g.mem(g.qbuf[0] + 5, 0xAB, "byte"))
+    # two reads pending complete in order
+    q += RF("A1", g.qbuf[1], 3, OV[3]) + RF("A1", g.qbuf[2], 64, OV[4])
+    q += g.call(19, QW("C"), g.str("abcdefg"), 7, 0)
+    q += GQ(2000) + PACKET("Q: the first of two reads", True, 0x22, OV[3], 3)
+    q += GQ(2000) + PACKET("Q: the second", True, 0x22, OV[4], 4)
+    q += g.chk("Q: ... abc", g.mem(g.qbuf[1], 0xAB636261)) + g.chk("Q: ... defg", g.mem(g.qbuf[2], 0x67666564))
+    # an event with its low bit set: the event, no packet
+    q += g.call("CreateEventA", 0, 1, 0, 0) + ST("ev") + f"  or eax, 1{NL}  mov dword ptr [{OV[5] + 16:#x}], eax{NL}"
+    q += RF("A1", g.qbuf[3], 64, OV[5]) + g.call(19, QW("C"), g.str("z"), 1, 0)
+    q += g.call("WaitForSingleObject", QW("ev"), 2000) + g.chk("Q: an event with its low bit set is set", g.eq(0))
+    q += STATUS("Q: ... its OVERLAPPED", OV[5], 0, 1) + NONE("Q: ... and no packet")
+    # the peer's close: 0 bytes, TRUE
+    q += RF("A1", g.qbuf[3], 64, OV[6]) + g.call(3, QW("C")) + g.chk("Q: closesocket(peer)", g.eq(0))
+    q += GQ(2000) + PACKET("Q: the peer's close", True, 0x22, OV[6], 0)
+    # closesocket with a read pending: cancelled once, buffer untouched
+    q += RF("A1", g.qbuf[4], 64, OV[7]) + g.call(3, QW("A1")) + g.chk("Q: closesocket with a read pending", g.eq(0))
+    q += GQ(2000) + PACKET("Q: the cancelled read", False, 0x22, OV[7], 0, 995) + STATUS("Q: the cancelled read", OV[7], 0xC0000120, 0)
+    q += NONE("Q: exactly one packet") + g.chk("Q: its buffer untouched", g.mem(g.qbuf[4], 0xABABABAB))
+    q += ASSOC("A1", 0x23) + g.chk("Q: associating a closed socket fails", g.eq(0)) + g.gle("Q: ... ERROR_INVALID_HANDLE", 6)
+    # a reset connection (SO_LINGER 0), on a second AcceptEx
+    q += SOCKQ("C3") + g.call(4, QW("C3"), g.qsaL, 16)
+    q += GQ(2000) + PACKET("Q: the second connection", True, 0x11, OV[8], 0)
+    q += ASSOC("A2", 0x33) + RF("A2", g.qbuf[5], 64, OV[9])
+    q += f"  mov {QW('lg')}, 1{NL}" + g.call(21, QW("C3"), 0xFFFF, 0x80, g.qv["lg"], 4) + g.call(3, QW("C3"))
+    q += GQ(2000) + PACKET("Q: the reset connection", False, 0x33, OV[9], 0, 64) + STATUS("Q: the reset connection", OV[9], 0xC000020D, 0)
+    q += g.call(3, QW("A2")) + g.chk("Q: closesocket after its read ended", g.eq(0)) + NONE("Q: ... no packet")
+    # AcceptEx cancelled by closing its accepting socket
+    q += SOCKQ("A3") + AE(QW("L"), QW("A3"), OV[10]) + g.call(3, QW("A3"))
+    q += GQ(2000) + PACKET("Q: AcceptEx, its accepting socket closed", False, 0x11, OV[10], 0, 995)
+    q += STATUS("Q: ... cancelled", OV[10], 0xC0000120, 0) + NONE("Q: ... once")
+    # ... and by closing the listening socket: both, in order, once each
+    q += SOCKQ("A4") + SOCKQ("A5") + AE(QW("L"), QW("A4"), OV[10]) + AE(QW("L"), QW("A5"), OV[11])
+    q += g.call(3, QW("L")) + g.chk("Q: closesocket(listening) with two AcceptEx pending", g.eq(0))
+    q += GQ(2000) + PACKET("Q: the first AcceptEx", False, 0x11, OV[10], 0, 995)
+    q += GQ(2000) + PACKET("Q: the second AcceptEx", False, 0x11, OV[11], 0, 995) + NONE("Q: ... once each")
+    q += g.call(3, QW("A4")) + g.chk("Q: their accepting sockets still close", g.eq(0)) + g.call(3, QW("A5"))
+    q += NONE("Q: ... with no packet")
+    # -- closing a socket while its read completes, 50 times: exactly one
+    # packet each time, either the data (TRUE, 1 byte, written) or the
+    # cancellation (FALSE, ERROR_OPERATION_ABORTED, buffer untouched).
+    q += SOCKQ("L2") + LOOP(g.qsaL2) + g.call(2, QW("L2"), g.qsaL2, 16) + g.call(13, QW("L2"), 5) + NAME("L2", g.qsaL2)
+    q += f"  mov {QW('i')}, 50{NL}  mov {QW('good')}, 0{NL}q_race:{NL}"
+    q += f"  mov byte ptr [{g.qbuf[6]:#x}], 0xAB{NL}  mov dword ptr [{OV[12] + 16:#x}], 0{NL}"
+    q += SOCKQ("C") + g.call(4, QW("C"), g.qsaL2, 16) + g.call(1, QW("L2"), 0, 0) + ST("acc")
+    q += ASSOC("acc", 0x44) + g.call(19, QW("C"), g.str("x"), 1, 0)
+    q += RF("acc", g.qbuf[6], 64, OV[12]) + g.call(3, QW("acc"))
+    q += GQ(2000) + ST("ret")
+    q += f"  cmp {QW('ovl')}, {OV[12]:#x}{NL}  jne q_bad{NL}  cmp {QW('key')}, 0x44{NL}  jne q_bad{NL}"
+    q += f"  cmp {QW('ret')}, 1{NL}  jne q_cancelled{NL}"
+    q += f"  cmp {QW('bytes')}, 1{NL}  jne q_bad{NL}  cmp dword ptr [{OV[12]:#x}], 0{NL}  jne q_bad{NL}"
+    q += f"  cmp byte ptr [{g.qbuf[6]:#x}], 0x78{NL}  jne q_bad{NL}  jmp q_once{NL}q_cancelled:{NL}"
+    q += g.call("GetLastError") + f"  cmp eax, 995{NL}  jne q_bad{NL}  cmp {QW('bytes')}, 0{NL}  jne q_bad{NL}"
+    q += f"  cmp dword ptr [{OV[12]:#x}], 0xC0000120{NL}  jne q_bad{NL}  cmp byte ptr [{g.qbuf[6]:#x}], 0xAB{NL}  jne q_bad{NL}"
+    q += f"q_once:{NL}" + GQ(0) + f"  test eax, eax{NL}  jnz q_bad{NL}"
+    q += g.call("GetLastError") + f"  cmp eax, 258{NL}  jne q_bad{NL}  inc {QW('good')}{NL}q_bad:{NL}"
+    q += g.call(3, QW("C")) + f"  dec {QW('i')}{NL}  jnz q_race{NL}"
+    q += g.chk("Q: close racing a completion: one consistent packet, 50 of 50", g.mem(g.qv["good"], 50))
+    q += g.call(3, QW("L2"))
+    g.q_code = q
+    g.q_names, g.names = g.names[first_q:], g.names[:first_q]
+
     # mode M: a shown (active) popup minimized and restored, by ShowWindow
     # and by the system commands; the log is printed as in mode W.
     m = mkclass + win("n", 0x90000000, 10, 20, 100, 50) + f"  mov dword ptr [{v['hover']:#x}], eax{NL}"
@@ -838,6 +1031,9 @@ def build_text(g):
         g.call("InvalidateRect", 0, 0, 1),
         g.call("RegisterClassA", g.wc4) + g.call("CreateWindowExA", 0, g.str("T4"), g.str("b"), 0x90000000,
                                                 0, 0, 64, 64, 0, 0, EXE, 0) + pump(),
+        g.call(23, 2, 1, 0) + g.call("WriteFile", "eax", g.tmp, 1, g.n, g.ovl),
+        g.call(23, 2, 1, 0) + g.call("ReadFile", "eax", g.tmp, 1, g.n, 0),
+        g.call("AcceptEx", 0, 0, g.tmp, 4, 32, 32, 0, g.ovl),
     ]
     g.stop_modes = "".join(f"  cmp eax, {0x31 + i:#x}\n  je stop_{i}\n" for i in range(len(stops)))
     g.stop_code = "".join(f"stop_{i}:\n{code}" + g.call("ExitProcess", 9) for i, code in enumerate(stops))
@@ -953,6 +1149,8 @@ main:
   je mode_o
   cmp eax, 0x4E
   je mode_n
+  cmp eax, 0x51
+  je mode_q
   cmp eax, 0x56
   je mode_v
   cmp eax, 0x46
@@ -972,6 +1170,8 @@ mode_o:
 {g.o_code}{finish}
 mode_n:
 {g.n_code}{finish}
+mode_q:
+{g.q_code}{finish}
 mode_v:
 {g.v_code}{finish}
 mode_f:
@@ -1131,6 +1331,23 @@ def fit_point(sw, sh, dw, dh, x, y):
     return (min(max(int(fx // 1), 0), sw - 1), min(max(int(fy // 1), 0), sh - 1))
 
 
+def lan_broadcast_errno():
+    """errno of one UDP broadcast from this process (None: sent). Mode N's
+    broadcast check needs a process allowed on the LAN; macOS answers
+    EHOSTUNREACH to one that is not, e.g. a process left running after its
+    ssh session ended (OBSERVED 2026-10-28: such a process failed 499 of 500
+    broadcasts, the same program run attached 0 of 500)."""
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        s.sendto(b"x", ("255.255.255.255", 6112))
+        return None
+    except OSError as e:
+        return e.errno
+    finally:
+        s.close()
+
+
 def flags(names, out, prefix):
     got = out[0] if out else ""
     check(f"{prefix}: one flag per check", len(got), len(names))
@@ -1193,12 +1410,23 @@ def main():
             check("O: runs to the end", (code, fatal), (0, None))
             flags(g.o_names, out, "O")
 
-            # Mode N: Winsock 1.1 sockets on loopback (patch 0023).
+            # Mode N: Winsock 1.1 sockets on loopback (patch 0023), and one
+            # broadcast on the LAN, which needs this process to be allowed there.
+            check("N: precondition: this process may broadcast on the LAN (run attached, not detached from ssh)",
+                  lan_broadcast_errno(), None)
             code, out, fatal = run(tmp, binp, "N", NET_LOG="1")
             check("N: runs to the end", (code, fatal), (0, None))
             before = failures
             flags(g.n_names, out, "N")
             if failures > before:  # the host errors behind them (<ID>_NET_LOG)
+                print("".join(l + "\n" for l in run.stderr.splitlines() if l.startswith("wsock32:")), end="")
+
+            # Mode Q: completion ports on sockets (patch 0024).
+            code, out, fatal = run(tmp, binp, "Q", NET_LOG="1")
+            check("Q: runs to the end", (code, fatal), (0, None))
+            before = failures
+            flags(g.q_names, out, "Q")
+            if failures > before:
                 print("".join(l + "\n" for l in run.stderr.splitlines() if l.startswith("wsock32:")), end="")
 
             # Mode F: the screen the game sees is the desktop (W x H pixels);
@@ -1458,8 +1686,11 @@ def main():
                     'DrawTextA(hdc 00D00001, "hi", format 00000025): GDI drawing is not implemented',
                     "InvalidateRect(NULL, ...): invalidating the whole desktop is not implemented",
                     "DefWindowProc(WM_ERASEBKGND): erasing with class brush 00E00004 is GDI drawing, "
-                    "which is not implemented"]):
-                code, out, fatal = run(tmp, binp, str(i + 1))
+                    "which is not implemented",
+                    "WriteFile on a socket is not implemented",
+                    "ReadFile on a socket without an OVERLAPPED is not implemented",
+                    "AcceptEx receiving data with the connection is not implemented"]):
+                code, out, fatal = run(tmp, binp, chr(0x31 + i))
                 check(f"stop {i + 1}: an unimplemented form stops the process", code != 0 and code != 9, True)
                 check(f"stop {i + 1}: diagnostic", fatal, want)
     print("ALL PASS" if not failures else f"{failures} FAILED")

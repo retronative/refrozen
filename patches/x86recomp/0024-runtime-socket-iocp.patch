@@ -1,0 +1,599 @@
+diff --git a/src/runtime/hle/hle.cpp b/src/runtime/hle/hle.cpp
+index 53dbc45..baa3952 100644
+--- a/src/runtime/hle/hle.cpp
++++ b/src/runtime/hle/hle.cpp
+@@ -61,7 +61,8 @@ const std::vector<std::string>& KnownDlls() {
+       "kernel32.dll", "user32.dll",  "gdi32.dll",    "advapi32.dll",
+       "ole32.dll",    "version.dll", "winmm.dll",    "wsock32.dll",
+       "ddraw.dll",    "mss32.dll",   "binkw32.dll",  "dbghelp.dll",
+-      "imm32.dll",    "shfolder.dll", "ntdll.dll",   "opengl32.dll"};
++      "imm32.dll",    "shfolder.dll", "ntdll.dll",   "opengl32.dll",
++      "mswsock.dll"};
+   return dlls;
+ }
+ 
+diff --git a/src/runtime/hle/kernel32_file.cpp b/src/runtime/hle/kernel32_file.cpp
+index d59f19c..f2984c1 100644
+--- a/src/runtime/hle/kernel32_file.cpp
++++ b/src/runtime/hle/kernel32_file.cpp
+@@ -231,6 +231,7 @@ bool AssociateFileWithPort(uint32_t file, std::shared_ptr<KObject> port, uint32_
+     *error = win32::kErrorInvalidHandle;
+     return false;
+   }
++  if (o->type == KObject::Type::Socket) return AssociateSocketWithPort(o.get(), std::move(port), key, error);
+   auto f = std::dynamic_pointer_cast<FileObject>(o);
+   if (!f)
+     FatalF("CreateIoCompletionPort: associating a handle that is not a file is not implemented");
+@@ -313,6 +314,7 @@ HLE("kernel32.dll", GetFileType, 1) {
+ }
+ 
+ HLE("kernel32.dll", CloseHandle, 1) {
++  if (CloseSocketHandle(Arg(c, 0))) return 1;  // closesocket's semantics
+   if (!CloseHandleValue(Arg(c, 0))) {
+     SetLastError(kErrorInvalidHandle);
+     return 0;
+@@ -425,7 +427,13 @@ uint32_t OverlappedIo(uint32_t h, bool write, uint32_t buf, uint32_t n, uint32_t
+   return 1;
+ }
+ 
++bool IsSocket(uint32_t h) {
++  auto o = GetHandle(h);
++  return o && o->type == KObject::Type::Socket;
++}
++
+ HLE("kernel32.dll", ReadFile, 5) {
++  if (IsSocket(Arg(c, 0))) return SocketReadFile(Arg(c, 0), Arg(c, 1), Arg(c, 2), Arg(c, 4));
+   int fd = FdOf(Arg(c, 0));
+   uint32_t buf = Arg(c, 1), n = Arg(c, 2), out = Arg(c, 3);
+   if (fd < 0) {
+@@ -445,6 +453,7 @@ HLE("kernel32.dll", ReadFile, 5) {
+ }
+ 
+ HLE("kernel32.dll", WriteFile, 5) {
++  if (IsSocket(Arg(c, 0))) FatalF("WriteFile on a socket is not implemented");
+   int fd = FdOf(Arg(c, 0));
+   uint32_t buf = Arg(c, 1), n = Arg(c, 2), out = Arg(c, 3);
+   if (fd < 0) {
+diff --git a/src/runtime/hle/kernel32_state.h b/src/runtime/hle/kernel32_state.h
+index 4b7e3a8..cda22d3 100644
+--- a/src/runtime/hle/kernel32_state.h
++++ b/src/runtime/hle/kernel32_state.h
+@@ -37,7 +37,7 @@ GuestHeap* FindHeap(uint32_t handle);
+ 
+ // Kernel object handles. Values are small multiples of 4, as on Windows.
+ struct KObject {
+-  enum class Type { File, Event, Mutex, Thread, Mapping, Find, StdIo, CompletionPort };
++  enum class Type { File, Event, Mutex, Thread, Mapping, Find, StdIo, CompletionPort, Socket };
+   explicit KObject(Type t) : type(t) {}
+   virtual ~KObject() = default;
+   Type type;
+@@ -49,11 +49,20 @@ uint32_t NewHandle(std::shared_ptr<KObject> obj);
+ // for a handle that is not open or is already associated.
+ bool AssociateFileWithPort(uint32_t file, std::shared_ptr<KObject> port, uint32_t key, uint32_t* error);
+ // Queues a completion packet on `port` (a completion port) and wakes waiters.
+-void PostCompletion(KObject* port, uint32_t bytes, uint32_t key, uint32_t overlapped);
++// `status` is the operation's NTSTATUS: GetQueuedCompletionStatus returns
++// FALSE for a packet whose status is an error.
++void PostCompletion(KObject* port, uint32_t bytes, uint32_t key, uint32_t overlapped, uint32_t status = 0);
+ int FileFd(KObject* o);  // host fd of a File/StdIo object, or -1
+ std::shared_ptr<KObject> GetHandle(uint32_t h);
+ bool CloseHandleValue(uint32_t h);
+ 
++// Sockets (wsock32_socket.cpp) are kernel objects: a SOCKET is a handle of
++// the kernel table, as on Windows. AssociateFileWithPort, ReadFile and
++// CloseHandle hand socket handles to these.
++bool AssociateSocketWithPort(KObject* sock, std::shared_ptr<KObject> port, uint32_t key, uint32_t* error);
++uint32_t SocketReadFile(uint32_t h, uint32_t buf, uint32_t n, uint32_t ovl);  // overlapped only
++bool CloseSocketHandle(uint32_t h);  // false: not an open socket
++
+ // Guest path (absolute, e.g. below GameConfig::guest_dir, or relative to
+ // the guest current directory) to a host path, resolving case-insensitively
+ // against what exists on disk. Paths outside known roots map below the
+diff --git a/src/runtime/hle/kernel32_sync.cpp b/src/runtime/hle/kernel32_sync.cpp
+index 9779129..18d3b95 100644
+--- a/src/runtime/hle/kernel32_sync.cpp
++++ b/src/runtime/hle/kernel32_sync.cpp
+@@ -161,17 +161,17 @@ void SignalChanged() { g_wait_cv.notify_all(); }
+ struct CompletionPort : KObject {
+   CompletionPort() : KObject(Type::CompletionPort) {}
+   struct Packet {
+-    uint32_t bytes, key, overlapped;
++    uint32_t bytes, key, overlapped, status;
+   };
+   std::deque<Packet> queue;  // under g_wait_mu
+ };
+ 
+ }  // namespace
+ 
+-void PostCompletion(KObject* port, uint32_t bytes, uint32_t key, uint32_t overlapped) {
++void PostCompletion(KObject* port, uint32_t bytes, uint32_t key, uint32_t overlapped, uint32_t status) {
+   {
+     std::lock_guard<std::mutex> l(g_wait_mu);
+-    static_cast<CompletionPort*>(port)->queue.push_back({bytes, key, overlapped});
++    static_cast<CompletionPort*>(port)->queue.push_back({bytes, key, overlapped, status});
+   }
+   SignalChanged();
+ }
+@@ -337,10 +337,10 @@ HLE("kernel32.dll", WaitForMultipleObjects, 4) {
+ }
+ 
+ // ---- I/O completion ports ------------------------------------------------------
+-// Packets posted with PostQueuedCompletionStatus, dequeued first in, first
+-// out. Associating files or sockets (overlapped I/O) is not implemented,
+-// nor the concurrency limit (a scheduling hint: every waiting thread may
+-// take a packet).
++// Packets posted with PostQueuedCompletionStatus or by overlapped I/O on
++// associated files and sockets, dequeued first in, first out. The
++// concurrency limit is not implemented (a scheduling hint: every waiting
++// thread may take a packet).
+ 
+ 
+ constexpr uint32_t kInvalidHandleValue = 0xFFFFFFFF;
+@@ -388,8 +388,24 @@ HLE("kernel32.dll", PostQueuedCompletionStatus, 4) {
+   return 1;
+ }
+ 
++// The Win32 error of a failed operation's NTSTATUS (RtlNtStatusToDosError),
++// for the statuses overlapped socket I/O completes with.
++uint32_t CompletionError(uint32_t status) {
++  switch (status) {
++    case 0xC0000120: return 995;    // STATUS_CANCELLED: ERROR_OPERATION_ABORTED
++    case 0xC000020D: return 64;     // STATUS_CONNECTION_RESET: ERROR_NETNAME_DELETED
++    case 0xC0000241: return 1236;   // STATUS_CONNECTION_ABORTED: ERROR_CONNECTION_ABORTED
++    case 0xC00000B5: return 121;    // STATUS_IO_TIMEOUT: ERROR_SEM_TIMEOUT
++    case 0xC000023C: return 1231;   // STATUS_NETWORK_UNREACHABLE: ERROR_NETWORK_UNREACHABLE
++    case 0xC000023D: return 1232;   // STATUS_HOST_UNREACHABLE: ERROR_HOST_UNREACHABLE
++    case 0xC0000001: return 31;     // STATUS_UNSUCCESSFUL: ERROR_GEN_FAILURE
++    default: FatalF("GetQueuedCompletionStatus: no Win32 error for status %08X", status);
++  }
++}
++
+ // (port, &bytes, &key, &overlapped, timeout): TRUE with the oldest packet;
+-// on timeout FALSE, *overlapped = NULL and WAIT_TIMEOUT.
++// FALSE with it, and its error, if its operation failed; on timeout FALSE,
++// *overlapped = NULL (bytes and key untouched) and WAIT_TIMEOUT.
+ HLE("kernel32.dll", GetQueuedCompletionStatus, 5) {
+   GuestSyncPoint sync;
+   uint32_t bytes = Arg(c, 1), key = Arg(c, 2), ovl = Arg(c, 3), timeout = Arg(c, 4);
+@@ -416,6 +432,10 @@ HLE("kernel32.dll", GetQueuedCompletionStatus, 5) {
+   Wr32(bytes, p.bytes);
+   Wr32(key, p.key);
+   Wr32(ovl, p.overlapped);
++  if (p.status) {
++    SetLastError(CompletionError(p.status));
++    return 0;
++  }
+   return 1;
+ }
+ 
+diff --git a/src/runtime/hle/wsock32_socket.cpp b/src/runtime/hle/wsock32_socket.cpp
+index a8359fd..bfdf04f 100644
+--- a/src/runtime/hle/wsock32_socket.cpp
++++ b/src/runtime/hle/wsock32_socket.cpp
+@@ -3,7 +3,7 @@
+ // non-blocking sockets (no WSAAsyncSelect), so each call maps onto the
+ // host's, with Windows' rules where BSD's differ:
+ //
+-//   - a SOCKET is a handle of this table, not a host descriptor;
++//   - a SOCKET is a kernel handle (kernel32_state.h), not a host descriptor;
+ //   - sockaddr_in has no sin_len (a 16-bit family), fd_set is a count and an
+ //     array of SOCKETs, timeval two 32-bit fields;
+ //   - a non-blocking connect in progress returns WSAEWOULDBLOCK; it
+@@ -22,12 +22,17 @@
+ //     socket, fail with WSAEINVAL; getsockname() of an unbound one too.
+ //
+ // Errors are Winsock's codes in the thread's last error (WSAGetLastError).
++//
++// Hosting and joining also use completion ports (see "completion ports"
++// below): AcceptEx and GetAcceptExSockaddrs from mswsock.dll, and
++// overlapped ReadFile on connected sockets.
+ 
+ #include <arpa/inet.h>
+ #include <fcntl.h>
+ #include <netinet/in.h>
+ #include <netinet/tcp.h>
+ #include <poll.h>
++#include <sys/event.h>
+ #include <sys/ioctl.h>
+ #include <sys/socket.h>
+ #include <unistd.h>
+@@ -35,15 +40,20 @@
+ #include <cerrno>
+ #include <cstdio>
+ #include <cstring>
++#include <list>
+ #include <map>
+ #include <mutex>
++#include <thread>
+ #include <vector>
+ 
+ #include "runtime/hle/hle.h"
++#include "runtime/hle/kernel32_state.h"
+ #include "runtime/hle/win32.h"
++#include "runtime/lazy_mem.h"
+ #include "runtime/log.h"
+ 
+-namespace recomp::hle {
++namespace recomp {
++namespace hle {
+ namespace {
+ 
+ constexpr uint32_t kInvalidSocket = 0xFFFFFFFF, kSocketError = 0xFFFFFFFF;
+@@ -117,35 +127,56 @@ struct Sock {
+   bool stream = false;
+   bool nonblocking = false;
+   bool connecting = false;   // a non-blocking connect not yet seen complete
++  bool listening = false;    // listen() succeeded (macOS has no SO_ACCEPTCONN to read back)
+   uint32_t connect_error = 0;  // a failed connect, reported in select's except set
+ };
+ 
++// A socket is a kernel object; its state is under g_mu. `id` names it to
++// the I/O thread: never reused, unlike handles' host descriptors.
++struct SocketObject : KObject {
++  SocketObject() : KObject(Type::Socket) {}
++  Sock s;
++  uint64_t id = 0;
++  bool closed = false;            // closesocket/CloseHandle ran; s.fd is closed
++  std::shared_ptr<KObject> port;  // the completion port it is associated with
++  uint32_t key = 0;               // that association's completion key
++};
++
+ std::mutex g_mu;
+-std::map<uint32_t, Sock> g_socks;
+-uint32_t g_next = 0x100;
++uint64_t g_next_id = 1;  // under g_mu
++
++std::shared_ptr<SocketObject> SocketOf(uint32_t h) {
++  return std::dynamic_pointer_cast<SocketObject>(GetHandle(h));
++}
+ 
+-bool Find(uint32_t s, Sock* out) {
++bool Find(uint32_t h, Sock* out) {
++  auto o = SocketOf(h);
++  if (!o) return false;
+   std::lock_guard<std::mutex> l(g_mu);
+-  auto it = g_socks.find(s);
+-  if (it == g_socks.end()) return false;
+-  *out = it->second;
++  if (o->closed) return false;
++  *out = o->s;
+   return true;
+ }
+ 
+-void Update(uint32_t s, const Sock& v) {
++void Update(uint32_t h, const Sock& v) {
++  auto o = SocketOf(h);
++  if (!o) return;
+   std::lock_guard<std::mutex> l(g_mu);
+-  auto it = g_socks.find(s);
+-  if (it != g_socks.end()) it->second = v;
++  if (!o->closed) o->s = v;
+ }
+ 
+ uint32_t Add(const Sock& v) {
+-  std::lock_guard<std::mutex> l(g_mu);
+-  uint32_t h = g_next;
+-  g_next += 4;
+-  g_socks[h] = v;
+-  return h;
++  auto o = std::make_shared<SocketObject>();
++  o->s = v;
++  {
++    std::lock_guard<std::mutex> l(g_mu);
++    o->id = g_next_id++;
++  }
++  return NewHandle(o);
+ }
+ 
++bool CloseSocket(uint32_t h);  // completion ports, below
++
+ bool Valid(uint32_t va, uint32_t n) {
+   return va >= 0x10000 && n && g_proc->mem.IsCommitted(va) && g_proc->mem.IsCommitted(va + n - 1);
+ }
+@@ -200,17 +231,7 @@ HLE_NAMED("wsock32.dll", "#23", socket, 3) {  // socket(af, type, protocol)
+ }
+ 
+ HLE_NAMED("wsock32.dll", "#3", closesocket, 1) {
+-  uint32_t h = Arg(c, 0);
+-  int fd;
+-  {
+-    std::lock_guard<std::mutex> l(g_mu);
+-    auto it = g_socks.find(h);
+-    if (it == g_socks.end()) return Fail(kWsaEnotsock);
+-    fd = it->second.fd;
+-    g_socks.erase(it);
+-  }
+-  ::close(fd);
+-  return 0;
++  return CloseSocket(Arg(c, 0)) ? 0 : Fail(kWsaEnotsock);
+ }
+ 
+ HLE_NAMED("wsock32.dll", "#2", bind, 3) {  // bind(s, name, namelen)
+@@ -269,6 +290,7 @@ HLE_NAMED("wsock32.dll", "#21", setsockopt, 5) {  // setsockopt(s, level, optnam
+       }
+       case 0x1001: r = SetOpt(s.fd, SOL_SOCKET, SO_SNDBUF, v); break;
+       case 0x1002: r = SetOpt(s.fd, SOL_SOCKET, SO_RCVBUF, v); break;
++      case 0x700B: return 0;  // SO_UPDATE_ACCEPT_CONTEXT: an accepted socket is ordinary here (Wine too)
+       case 0x1005: case 0x1006: {  // SO_SNDTIMEO, SO_RCVTIMEO: milliseconds
+         if (len < 4) return Fail(kWsaEfault);
+         timeval t{v / 1000, (v % 1000) * 1000};
+@@ -326,6 +348,8 @@ HLE_NAMED("wsock32.dll", "#13", listen, 2) {  // listen(s, backlog)
+   if (::getsockname(s.fd, reinterpret_cast<sockaddr*>(&a), &n) != 0 || a.sin_port == 0)
+     return Fail(kWsaEinval);  // Windows never binds implicitly here
+   if (::listen(s.fd, int(Arg(c, 1))) != 0) return FailErrno("listen");
++  s.listening = true;
++  Update(Arg(c, 0), s);
+   return 0;
+ }
+ 
+@@ -495,5 +519,269 @@ HLE_NAMED("wsock32.dll", "#18", select, 5) {
+   return total;
+ }
+ 
++
++// ---- completion ports ------------------------------------------------------------------
++// Overlapped operations on sockets, as the game hosts and joins: AcceptEx on
++// a listening socket and ReadFile on a connected one, each on a socket
++// associated with a completion port. They always pend (Windows allows any
++// overlapped operation to) and complete on one I/O thread, which waits on
++// a kqueue for the sockets with operations pending, in issue order per
++// socket.
++//
++// Each operation ends exactly once, under g_mu: done, failed, or cancelled
++// (STATUS_CANCELLED) when its socket, or AcceptEx's accepting socket, is
++// closed. Its OVERLAPPED gets the status and byte count, its event (if any)
++// is set and, unless the event's low bit is set, a packet with the status
++// goes to the port. Its buffer is written only while it is pending, under
++// g_mu, never after it ends. kqueue events name sockets by id: one for a
++// socket closed since, whose descriptor may be reused, finds no operation.
++//
++// Expected behaviour: Wine's conformance tests (ws2_32/tests/sock.c,
++// test_completion_port, test_AcceptEx), which run against Windows.
++
++constexpr uint32_t kStatusPending = 0x103, kStatusCancelled = 0xC0000120;
++
++struct Op {
++  bool accept;                           // AcceptEx; else ReadFile
++  std::shared_ptr<SocketObject> sock;    // issued on (AcceptEx: the listening socket)
++  std::shared_ptr<SocketObject> target;  // AcceptEx: the accepting socket
++  std::shared_ptr<KObject> port;
++  uint32_t key, ovl, buf, len, local_len, remote_len;
++};
++std::list<Op> g_ops;  // pending, in issue order; under g_mu
++int g_kq = -1;        // under g_mu
++
++// A failed socket operation's NTSTATUS.
++uint32_t StatusOf(int e) {
++  switch (e) {
++    case ECONNRESET: case EPIPE: return 0xC000020D;           // STATUS_CONNECTION_RESET
++    case ECONNABORTED: return 0xC0000241;                     // STATUS_CONNECTION_ABORTED
++    case ETIMEDOUT: return 0xC00000B5;                        // STATUS_IO_TIMEOUT
++    case ENETDOWN: case ENETUNREACH: return 0xC000023C;       // STATUS_NETWORK_UNREACHABLE
++    case EHOSTDOWN: case EHOSTUNREACH: return 0xC000023D;     // STATUS_HOST_UNREACHABLE
++    default: return 0xC0000001;                               // STATUS_UNSUCCESSFUL
++  }
++}
++
++// Wakes the I/O thread once when `o` is readable (or closed by its peer).
++void Arm(const SocketObject& o) {
++  struct kevent ev;
++  EV_SET(&ev, o.s.fd, EVFILT_READ, EV_ADD | EV_ENABLE | EV_DISPATCH, 0, 0,
++         reinterpret_cast<void*>(uintptr_t(o.id)));
++  if (kevent(g_kq, &ev, 1, nullptr, 0, nullptr) != 0)
++    FatalF("socket I/O: kevent: %s", std::strerror(errno));
++}
++
++std::list<Op>::iterator End(std::list<Op>::iterator it, uint32_t status, uint32_t bytes) {
++  const Op& op = *it;
++  Wr32(op.ovl, status);  // Internal, InternalHigh
++  Wr32(op.ovl + 4, bytes);
++  uint32_t event = Rd32(op.ovl + 16);
++  if (event & ~1u) SignalEventHandle(event & ~1u, false);
++  if (!(event & 1)) PostCompletion(op.port.get(), bytes, op.key, op.ovl, status);
++  return g_ops.erase(it);
++}
++
++bool TryRead(const Op& op, uint32_t* status, uint32_t* bytes) {
++  if (op.len) lazy::Touch(op.buf, op.len);  // the kernel does not fault on lazy pages
++  ssize_t r = ::recv(op.sock->s.fd, op.len ? GPtr(op.buf) : nullptr, op.len, MSG_DONTWAIT);
++  if (r < 0 && (errno == EAGAIN || errno == EINTR)) return false;
++  if (r < 0) {
++    static const bool log = Env("NET_LOG") != nullptr;
++    if (log) std::fprintf(stderr, "wsock32: ReadFile: errno %d (%s)\n", errno, std::strerror(errno));
++  }
++  *status = r < 0 ? StatusOf(errno) : 0;  // 0 bytes: the peer closed its side
++  *bytes = r < 0 ? 0 : uint32_t(r);
++  return true;
++}
++
++// An AcceptEx address area, as Wine lays it out and GetAcceptExSockaddrs
++// reads it: the address's length (an int), the address, zeros to the end.
++void PutAcceptAddress(uint32_t va, uint32_t area, const sockaddr_in& a) {
++  std::memset(GPtr(va), 0, area);
++  Wr32(va, 16);
++  Wr16(va + 4, 2);
++  std::memcpy(GPtr(va + 6), &a.sin_port, 2);
++  std::memcpy(GPtr(va + 8), &a.sin_addr, 4);
++}
++
++bool TryAccept(const Op& op, uint32_t* status, uint32_t* bytes) {
++  int lfd = op.sock->s.fd;
++  if (!op.sock->s.nonblocking) {  // never wait here (another thread may take the connection)
++    pollfd p{lfd, POLLIN, 0};
++    if (::poll(&p, 1, 0) <= 0) return false;
++  }
++  sockaddr_in peer{};
++  socklen_t n = sizeof peer;
++  int fd = ::accept(lfd, reinterpret_cast<sockaddr*>(&peer), &n);
++  if (fd < 0 && (errno == EAGAIN || errno == EINTR || errno == ECONNABORTED)) return false;  // wait for the next
++  *bytes = 0;
++  if (fd < 0) {
++    *status = StatusOf(errno);
++    return true;
++  }
++  // The connection takes over the accepting socket's descriptor, in its mode.
++  SetOpt(fd, SOL_SOCKET, SO_NOSIGPIPE, 1);
++  int fl = fcntl(fd, F_GETFL);
++  fcntl(fd, F_SETFL, op.target->s.nonblocking ? fl | O_NONBLOCK : fl & ~O_NONBLOCK);
++  int tfd = op.target->s.fd;
++  dup2(fd, tfd);
++  ::close(fd);
++  fcntl(tfd, F_SETFD, FD_CLOEXEC);
++  sockaddr_in me{};
++  n = sizeof me;
++  ::getsockname(tfd, reinterpret_cast<sockaddr*>(&me), &n);
++  PutAcceptAddress(op.buf + op.len, op.local_len, me);
++  PutAcceptAddress(op.buf + op.len + op.local_len, op.remote_len, peer);
++  *status = 0;
++  return true;
++}
++
++// Completes what it can of socket `id`'s operations, in order; waits again
++// for the rest.
++void Service(uint64_t id) {
++  for (auto it = g_ops.begin(); it != g_ops.end();) {
++    if (it->sock->id != id) {
++      ++it;
++      continue;
++    }
++    uint32_t status = 0, bytes = 0;
++    if (!(it->accept ? TryAccept(*it, &status, &bytes) : TryRead(*it, &status, &bytes))) {
++      Arm(*it->sock);
++      return;
++    }
++    it = End(it, status, bytes);
++  }
++}
++
++void IoThread(int kq) {
++  for (;;) {
++    struct kevent ev[32];
++    int n = kevent(kq, nullptr, 0, ev, 32, nullptr);
++    if (n < 0 && errno == EINTR) continue;
++    if (n < 0) FatalF("socket I/O: kevent: %s", std::strerror(errno));
++    std::lock_guard<std::mutex> l(g_mu);
++    for (int i = 0; i < n; i++) Service(uint64_t(uintptr_t(ev[i].udata)));
++  }
++}
++
++// Under g_mu: `op` pends from now on.
++void Queue(Op op) {
++  if (g_kq < 0) {
++    g_kq = kqueue();
++    if (g_kq < 0) FatalF("socket I/O: kqueue: %s", std::strerror(errno));
++    std::thread(IoThread, g_kq).detach();
++  }
++  g_ops.push_back(std::move(op));
++  Arm(*g_ops.back().sock);
++}
++
++bool CloseSocket(uint32_t h) {
++  auto o = SocketOf(h);
++  if (!o) return false;
++  {
++    std::lock_guard<std::mutex> l(g_mu);
++    if (o->closed) return false;
++    o->closed = true;
++    for (auto it = g_ops.begin(); it != g_ops.end();)
++      it = it->sock == o || it->target == o ? End(it, kStatusCancelled, 0) : std::next(it);
++    ::close(o->s.fd);  // also drops its kqueue registration
++    o->s.fd = -1;
++  }
++  CloseHandleValue(h);
++  return true;
++}
++
++// AcceptEx(listening, accepting, buffer, receive length, local and remote
++// address area sizes, &bytes, overlapped): FALSE with ERROR_IO_PENDING, the
++// connection arriving as a completion on the listening socket's port. Its
++// checks in Wine's order; the accepting socket must not be connected (nor
++// another AcceptEx's).
++HLE_NAMED("mswsock.dll", "AcceptEx", AcceptEx, 8) {
++  uint32_t ls = Arg(c, 0), as = Arg(c, 1), buf = Arg(c, 2), rl = Arg(c, 3), ll = Arg(c, 4),
++           rml = Arg(c, 5), out = Arg(c, 6), ovl = Arg(c, 7);
++  if (!ovl || !Valid(ovl, 20)) return SetLastError(87), 0;  // WSA_INVALID_PARAMETER
++  Wr32(ovl, kStatusPending);
++  Wr32(ovl + 4, 0);
++  if (!buf) return SetLastError(kWsaEinval), 0;
++  if (!rml) return SetLastError(kWsaEfault), 0;
++  if (rl) FatalF("AcceptEx receiving data with the connection is not implemented");
++  if (ll < 32 || rml < 32) FatalF("AcceptEx with an address area under 32 bytes is not implemented");
++  if (!Valid(buf, ll + rml)) return SetLastError(kWsaEfault), 0;
++  auto l = SocketOf(ls), a = SocketOf(as);
++  std::lock_guard<std::mutex> lock(g_mu);
++  if (!l || l->closed) return SetLastError(kWsaEnotsock), 0;
++  if (!l->s.listening) return SetLastError(kWsaEinval), 0;
++  if (!a || a->closed) return SetLastError(kWsaEnotsock), 0;
++  sockaddr_in peer;
++  socklen_t n = sizeof peer;
++  bool taken = false;
++  for (const Op& op : g_ops) taken |= op.target == a;
++  if (!a->s.stream || taken || ::getpeername(a->s.fd, reinterpret_cast<sockaddr*>(&peer), &n) == 0)
++    return SetLastError(kWsaEinval), 0;
++  if (!l->port) FatalF("AcceptEx on a socket with no completion port is not implemented");
++  if (out) Wr32(out, 0);
++  Queue({true, l, a, l->port, l->key, ovl, buf, rl, ll, rml});
++  SetLastError(win32::kErrorIoPending);
++  return 0;
++}
++
++// GetAcceptExSockaddrs(buffer, receive length, local and remote area sizes,
++// &local, &local length, &remote, &remote length): pointers into AcceptEx's
++// areas (Wine's calculation).
++HLE_NAMED("mswsock.dll", "GetAcceptExSockaddrs", GetAcceptExSockaddrs, 8) {
++  uint32_t area = Arg(c, 0) + Arg(c, 1);
++  Wr32(Arg(c, 5), Rd32(area));
++  Wr32(Arg(c, 4), area + 4);
++  area += Arg(c, 2);
++  Wr32(Arg(c, 7), Rd32(area));
++  Wr32(Arg(c, 6), area + 4);
++  return 0;
++}
++
+ }  // namespace
+-}  // namespace recomp::hle
++}  // namespace hle
++
++bool AssociateSocketWithPort(KObject* k, std::shared_ptr<KObject> port, uint32_t key, uint32_t* error) {
++  auto* o = static_cast<hle::SocketObject*>(k);
++  std::lock_guard<std::mutex> l(hle::g_mu);
++  if (o->closed) {
++    *error = win32::kErrorInvalidHandle;
++    return false;
++  }
++  if (o->port) {  // one association per handle
++    *error = win32::kErrorInvalidParameter;
++    return false;
++  }
++  o->port = std::move(port);
++  o->key = key;
++  return true;
++}
++
++// ReadFile(socket, buffer, length, -, overlapped) on a connected socket
++// associated with a completion port: FALSE with ERROR_IO_PENDING; the data,
++// or 0 bytes when the peer has closed its side, arrive as a completion.
++uint32_t SocketReadFile(uint32_t h, uint32_t buf, uint32_t n, uint32_t ovl) {
++  if (!ovl) FatalF("ReadFile on a socket without an OVERLAPPED is not implemented");
++  auto o = hle::SocketOf(h);
++  std::lock_guard<std::mutex> l(hle::g_mu);
++  if (!o || o->closed) {
++    hle::SetLastError(win32::kErrorInvalidHandle);
++    return 0;
++  }
++  if (!o->s.stream) FatalF("ReadFile on a datagram socket is not implemented");
++  if (!o->port) FatalF("overlapped ReadFile on a socket with no completion port is not implemented");
++  if ((n && !hle::Valid(buf, n)) || !hle::Valid(ovl, 20)) {
++    hle::SetLastError(998);  // ERROR_NOACCESS
++    return 0;
++  }
++  Wr32(ovl, hle::kStatusPending);
++  Wr32(ovl + 4, 0);
++  hle::Queue({false, o, nullptr, o->port, o->key, ovl, buf, n, 0, 0});
++  hle::SetLastError(win32::kErrorIoPending);
++  return 0;
++}
++
++bool CloseSocketHandle(uint32_t h) { return hle::CloseSocket(h); }
++
++}  // namespace recomp
