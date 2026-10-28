@@ -93,8 +93,13 @@ its own tests, written from the Winsock 1.1 specification and Wine's behaviour, 
 
 - **Local Network privacy.** Recent macOS asks the user before an app talks on the local network
   (broadcast and LAN connections). The app needs `NSLocalNetworkUsageDescription` in `Info.plist`.
-  The prompt has to come from reFrozen.app, the game process being exec'd from it; to be confirmed
-  on macOS 27 with an ad hoc signed app.
+  OBSERVED (2026-10-28, macOS 27): the prompt comes from the game launcher the app replaces itself
+  with (`kit/bin/refrozen`), named by its file ("refrozen"); macOS records the answer for its
+  signing identifier and path, and an ad hoc identifier changes with every build, so each build
+  asked again (and a join made while the prompt was open failed). The launcher now carries an
+  embedded Info.plist (reFrozen, the usage description) and is signed as
+  `org.retronative.refrozen.game`; the app's Info.plist has the description too. Whether that
+  keeps the permission across updates and moved apps is tested on m1-air before release.
 - **Firewall.** With the macOS firewall on, hosting a game (incoming TCP) needs the app allowed. To
   be documented, with the exact dialog, as for Gatekeeper.
 - **Sleep and network changes.** Wi-Fi changes mid-game must end the game cleanly, as on Windows,
