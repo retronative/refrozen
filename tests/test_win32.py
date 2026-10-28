@@ -15,7 +15,7 @@ Modes (the command line's last character):
   A  Win32 functions: REG_DWORD seeding, GetProfileStringA, the system
      language, named events/mutexes, I/O completion ports (with a worker
      thread woken by a post), waveOutOpen, EnumDisplayDevicesA,
-     ChangeDisplaySettingsExA. One 1/0 flag per check.
+     ChangeDisplaySettingsExA, GetConsoleMode (no console). One 1/0 flag per check.
   W  window messages: the WM_NCCREATE/WM_CREATE/WM_SIZE/WM_MOVE a wndproc
      sees for a popup, a WS_MAXIMIZE popup, an overlapped window and its
      first ShowWindow.
@@ -122,7 +122,7 @@ IMPORTS = [
                       "InitializeCriticalSection", "TryEnterCriticalSection", "LeaveCriticalSection",
                       "CreateFileA", "ReadFile", "WriteFile", "CloseHandle", "SetFilePointer",
                       "SetLastError", "GetCurrentThreadId", "GetTickCount", "LoadLibraryA",
-                      "GetProcAddress"]),
+                      "GetProcAddress", "GetStdHandle", "GetConsoleMode"]),
     # Winsock 1.1 by ordinal (Wine's wsock32.spec): htonl, htons, inet_addr,
     # inet_ntoa, ntohl, ntohs, WSAGetLastError; mode N's sockets: accept, bind,
     # closesocket, connect, getpeername, getsockname, ioctlsocket, listen,
@@ -372,6 +372,11 @@ def build_text(g):
     a += g.chk("display: restore on the adapter succeeds", g.eq(0))
     a += g.call("ChangeDisplaySettingsExA", g.str("\\\\.\\DISPLAY9"), 0, 0, 0, 0)
     a += g.chk("display: unknown device is DISP_CHANGE_BADPARAM", g.eq(0xFFFFFFFB))
+    # No console (patch 0027): GetConsoleMode on a standard handle fails with
+    # ERROR_INVALID_HANDLE (MSDN GetConsoleMode: the handle is not a console's).
+    a += g.call("GetStdHandle", 0xFFFFFFF5) + g.call("GetConsoleMode", "eax", g.tmp)
+    a += g.chk("console: GetConsoleMode on a standard handle fails (no console)", g.eq(0))
+    a += g.gle("console: ... ERROR_INVALID_HANDLE", 6)
 
     # mode W: wndproc log of four windows (see the test for the sequences)
     wc = struct.pack("<IIIIIIIIII", 0, TEXT + WNDPROC, 0, 0, EXE, 0, 0, 0, 0, g.str("T"))

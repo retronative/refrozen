@@ -1683,4 +1683,9 @@ MUTANTS = [
          old='  if (w.gdi_w != cw || w.gdi_h != ch) {\n',
          new='  if (w.gdi_px.empty()) {\n',
          expect='D: fill: after a resize the surface has the new size (110,10 is a pixel, black)'),
+    dict(id="R-C1", milestone="R", area="console", file=K32F, test="win32",
+         fault='GetConsoleMode succeeds for a standard handle (a console that is not there)',
+         old='HLE("kernel32.dll", GetConsoleMode, 2) {\n  SetLastError(kErrorInvalidHandle);\n  return 0;\n}',
+         new='HLE("kernel32.dll", GetConsoleMode, 2) {\n  Wr32(Arg(c, 1), 3);\n  return 1;\n}',
+         expect='console: GetConsoleMode on a standard handle fails (no console)'),
 ]

@@ -1,0 +1,19 @@
+diff --git a/src/runtime/hle/kernel32_file.cpp b/src/runtime/hle/kernel32_file.cpp
+index f2984c1..4f6bddb 100644
+--- a/src/runtime/hle/kernel32_file.cpp
++++ b/src/runtime/hle/kernel32_file.cpp
+@@ -312,6 +312,14 @@ HLE("kernel32.dll", GetFileType, 1) {
+   }
+   return o->type == KObject::Type::StdIo ? 2 : 1;  // CHAR : DISK
+ }
++// There is no console here: the standard handles are the process's own
++// files or pipes. GetConsoleMode on them fails as on Windows for a handle
++// that is not a console's (FALSE, ERROR_INVALID_HANDLE); the CRT's write
++// path then uses WriteFile, which the standard handles support.
++HLE("kernel32.dll", GetConsoleMode, 2) {
++  SetLastError(kErrorInvalidHandle);
++  return 0;
++}
+ 
+ HLE("kernel32.dll", CloseHandle, 1) {
+   if (CloseSocketHandle(Arg(c, 0))) return 1;  // closesocket's semantics
