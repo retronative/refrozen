@@ -1,0 +1,22 @@
+name: Feature request
+description: Suggest an improvement to reFrozen.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        reFrozen's plans are in [docs/status.md](https://github.com/retronative/refrozen/blob/main/docs/status.md). Requests that bypass CD-key,
+        anti-cheat or client-integrity checks, or that target online services, won't be accepted.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What would you like to do?
+      description: What you're trying to do, and what stops you today.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Your suggestion
+    validations:
+      required: false

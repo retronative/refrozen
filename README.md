@@ -26,7 +26,7 @@ with audio, Retina displays and borderless fullscreen (Ctrl+Cmd+F). To install i
 [Getting started](docs/getting-started.md); the [release notes](https://github.com/retronative/refrozen/releases/tag/v0.1.0) list its known
 limitations. LAN, iCCup and Battle.net are not part of it.
 
-The public status of each milestone is in [docs/status.md](docs/status.md). Milestones and their
+Changes by release are in [CHANGELOG.md](CHANGELOG.md). The public status of each milestone is in [docs/status.md](docs/status.md). Milestones and their
 gates are in [reference/ROADMAP.md](reference/ROADMAP.md), the release's gates in
 [reference/RELEASE_PLAN.md](reference/RELEASE_PLAN.md), and open questions in
 [reference/FEASIBILITY.md](reference/FEASIBILITY.md).
