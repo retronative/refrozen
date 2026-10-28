@@ -87,6 +87,14 @@ before the session). The M1 had none.
   took **17.3 s, unexplained**: a prior visit to the campaign screen and a launch detached from
   the ssh session were ruled out (both 4.6 s). The M6 rule stands: one report during the map
   load, with that frame verified at most 10 s; no fix is proposed.
+- **The Frozen Throne campaigns (known issue, non-blocking for v0.2.0).** Reproduced on m1-air
+  with RC1 (2026-10-28, a fresh profile, file opens traced): starting Terror of the Tides creates a
+  full-screen window whose paint handler calls `FillRect`, a GDI drawing call the runtime stops on
+  by design ("GDI drawing is not implemented"); no game file was missing (the movies and campaign
+  folders are identical to the reference install). The Founding of Durotar loaded and played its
+  opening sequence with no error; the rest of it, and the other campaigns, were not tested. Listed
+  in the release notes' known issues and on the compatibility page; the GDI fill is deferred until
+  after v0.2.0. Not a v0.2.0 regression: the stop dates from M4 (v0.1.0 was not re-run to confirm).
 - **Map checker tool (tooling).** `scripts/map_check.py` stops with an exception on Castle Fight's
   MPQ header; the game itself lists and plays the map. Not a player-facing issue.
 - **Not yet tested:** Wi-Fi-off disconnect recovery; the 30+ minute DotA session; Windows
