@@ -1633,4 +1633,9 @@ MUTANTS = [
          old='    targets = LanBroadcastTargets(list);\n',
          new='',
          expect='R: ... and arrives at 0.0.0.0:6112 on this host'),
+    dict(id="R-G11", milestone="R", area="gate", file="tests/mutate.py", test="mutate",
+         fault='--changed: new files not yet added are not seen',
+         old='    names |= set(git("ls-files", "--others", "--exclude-standard").split())  # new, not yet added\n',
+         new='',
+         expect='changed: a new patch not yet added selects the mutants in the files it changes'),
 ]

@@ -124,7 +124,9 @@ def changed(tmp):
 
     def git(*args):
         if args[0] == "diff":
-            return "\n".join(names)
+            return "\n".join(n for n in names if not n.startswith("new:"))
+        if args[0] == "ls-files":
+            return "\n".join(n[4:] for n in names if n.startswith("new:"))
         if args[0] == "ls-tree":
             return "x" if args[2] == "tests/mutants.py" else ""
         if args[0] == "show":
@@ -139,6 +141,7 @@ def changed(tmp):
                 (["tools/x86recomp/src/runtime/log.h"], ["C1", "C2"], "a runtime header selects every runtime mutant"),
                 (["tests/test_loader.py"], ["C1", "C2"], "a changed test_loader.py selects test_win32's mutants"),
                 (["tests/mutants.py"], ["C3"], "a changed registry entry is selected"),
+                (["new:patches/x86recomp/0099-t.patch"], ["C1"], "a new patch not yet added selects the mutants in the files it changes"),
                 (["README.md"], [], "an unrelated change selects nothing")):
             names[:] = paths
             check(f"changed: {what}", [m["id"] for m in mutate.changed_mutants("REF", ms)], want)
