@@ -3,7 +3,13 @@
 data: a guest EXE (assembled with llvm-mc) is lifted, linked with the runtime
 and recomp_opengl, and run once per mode.
 
-  /opt/homebrew/bin/python3 -I tests/test_win32.py
+  /opt/homebrew/bin/python3 -I tests/test_win32.py [--modes A,N,...] [--cache DIR]
+
+--modes runs only the named groups' checks (the mutation gate's focused
+runs): A W V O N Q F (with FF) X S T M D L P, and stops (the numbered modes). Without
+it every mode runs; a subset run says so in its last line. --cache DIR reuses
+the linked test program from DIR when every input of its compile is unchanged
+(the mutation gate's runs; see link_key).
 
 Modes (the command line's last character):
   A  Win32 functions: REG_DWORD seeding, GetProfileStringA, the system
@@ -45,7 +51,9 @@ GL 1.1 specification; each check says which.
 
 Needs scripts/setup_tools.sh (tools/x86recomp built) and Homebrew LLVM.
 """
+import hashlib
 import os
+import shutil
 import re
 import socket
 import struct
@@ -1257,17 +1265,53 @@ def build_and_link(tmp):
         f.write(harness)
     binp = os.path.join(tmp, "win32test")
     srcs = [os.path.join(gen, n) for n in sorted(os.listdir(gen)) if n.endswith(".cpp")]
-    cc = subprocess.run([tl.CXX, "-std=c++20", "-O1", "-w", "-fno-strict-aliasing", "-fnon-call-exceptions",
-                         "-ffp-contract=off", "-fno-omit-frame-pointer", "-I", os.path.join(tl.X86, "src"),
-                         os.path.join(tmp, "harness.cpp"), *srcs,
-                         os.path.join(tl.X86, "src", "runtime", "lifted_table.cpp"),
-                         "-L", tl.BUILD, "-lrecomp_runtime", "-lrecomp_opengl", "-lrecomp_x87", "-lrecomp_image",
-                         "-Wl,-rpath," + tl.BUILD, "-o", binp], capture_output=True, text=True)
+    cmd = [tl.CXX, "-std=c++20", "-O1", "-w", "-fno-strict-aliasing", "-fnon-call-exceptions",
+           "-ffp-contract=off", "-fno-omit-frame-pointer", "-I", os.path.join(tl.X86, "src"),
+           os.path.join(tmp, "harness.cpp"), *srcs,
+           os.path.join(tl.X86, "src", "runtime", "lifted_table.cpp"),
+           "-L", tl.BUILD, "-lrecomp_runtime", "-lrecomp_opengl", "-lrecomp_x87", "-lrecomp_image",
+           "-Wl,-rpath," + tl.BUILD, "-o", binp]
+    cached = CACHE and os.path.join(CACHE, link_key(cmd, tmp))
+    if cached and os.path.exists(cached):
+        shutil.copy2(cached, binp)
+        cc = subprocess.CompletedProcess(cmd, 0, "", "")
+    else:
+        cc = subprocess.run(cmd, capture_output=True, text=True)
+        if cached and cc.returncode == 0:
+            os.makedirs(CACHE, exist_ok=True)
+            shutil.copy2(binp, cached + ".tmp")
+            os.replace(cached + ".tmp", cached)
     check("links with the runtime and recomp_opengl", cc.returncode, 0)
     if cc.returncode:
         print(cc.stderr[:3000])
         return None, g
     return binp, g
+
+
+def link_key(cmd, tmp):
+    """Every input of the test program's compile and link: the compiler (its
+    real path names its version), the command with this run's temporary paths
+    made relative, the sources it names, every header below x86recomp/src, and
+    the symbols the four runtime libraries export. Equal keys: the same
+    program."""
+    h = hashlib.sha256(os.path.realpath(tl.CXX).encode())
+    for a in cmd:
+        h.update(b"\0" + (os.path.relpath(a, tmp) if a.startswith(tmp + os.sep) else a).encode())
+        if a.endswith(".cpp"):
+            with open(a, "rb") as f:
+                h.update(f.read())
+    src = os.path.join(tl.X86, "src")
+    for d, subdirs, files in sorted(os.walk(src)):
+        subdirs.sort()
+        for n in sorted(files):
+            if n.endswith((".h", ".hpp", ".inc", ".def")):
+                with open(os.path.join(d, n), "rb") as f:
+                    h.update(b"\0" + os.path.relpath(os.path.join(d, n), src).encode() + b"\0" + f.read())
+    for lib in ("runtime", "opengl", "x87", "image"):
+        r = subprocess.run(["nm", "-gUj", os.path.join(tl.BUILD, f"librecomp_{lib}.dylib")],
+                           capture_output=True, check=True)
+        h.update(b"\0" + r.stdout)
+    return h.hexdigest()
 
 
 def run(tmp, binp, mode, during=None, **extra):
@@ -1361,339 +1405,377 @@ def sizes(log):
     return [m for m in log if m[0] in keep]
 
 
+MODE_GROUPS = ("A", "W", "V", "O", "N", "Q", "F", "X", "S", "T", "M", "D", "L", "P", "stops")
+SELECTED = None  # None: every group
+CACHE = None  # --cache DIR
+
+
+def selected(group):
+    return SELECTED is None or group in SELECTED
+
+
 def main():
+    global SELECTED, CACHE
+    args = sys.argv[1:]
+    while args:
+        if args[0] == "--modes" and len(args) > 1:
+            SELECTED = set(args[1].split(","))
+            unknown = SELECTED - set(MODE_GROUPS)
+            if unknown or not SELECTED:
+                sys.exit(f"--modes: unknown group(s) {sorted(unknown)}; groups: {' '.join(MODE_GROUPS)}")
+        elif args[0] == "--cache" and len(args) > 1:
+            CACHE = os.path.abspath(args[1])
+        else:
+            sys.exit("usage: test_win32.py [--modes A,N,...] [--cache DIR]")
+        args = args[2:]
     with tempfile.TemporaryDirectory() as tmp:
         binp, g = build_and_link(tmp)
         if binp:
-            code, out, fatal = run(tmp, binp, "A")
-            check("A: runs to the end", (code, fatal), (0, None))
-            flags(g.names, out, "A")
+            if selected("A"):
+                code, out, fatal = run(tmp, binp, "A")
+                check("A: runs to the end", (code, fatal), (0, None))
+                flags(g.names, out, "A")
 
-            code, out, fatal = run(tmp, binp, "W")
-            check("W: runs to the end", (code, fatal), (0, None))
-            m = re.match(r"R([0-9A-F]+),([0-9A-F]+) S([0-9A-F]+),([0-9A-F]+),([0-9A-F]+),([0-9A-F]+):(.*)",
-                         out[0] if out else "")
-            check("W: log printed", bool(m), True)
-            if m:
-                work_w, work_h = int(m.group(1), 16), int(m.group(2), 16)
-                cuts = [0] + [int(x, 16) for x in m.groups()[2:6]]
-                log = [tuple(int(x, 16) for x in e.split("/")) for e in m.group(7).split()]
-                segs = [sizes(log[cuts[i]:cuts[i + 1]]) for i in range(4)]
-                mk = lambda lo, hi: lo | (hi << 16)
-                # Wine msg.c WmCreateChildSeq / WmCreateMaxPopupSeq /
-                # WmCreateOverlappedSeq, verified there on Windows. The
-                # maximized popup takes the work area (SPI_GETWORKAREA: the
-                # runtime's screen), at its origin.
-                s0 = segs[0]
-                check("W: popup: NCCREATE, CREATE, SIZE(RESTORED), MOVE",
-                      [(x[0], x[1]) for x in s0], [(0x81, 0), (0x01, 0), (0x05, 0), (0x03, 0)])
-                check("W: popup: WM_SIZE is the 100x50 client", s0[2][2] if len(s0) > 2 else None, mk(100, 50))
-                check("W: popup: WM_MOVE is the client origin (10,20)", s0[3][2] if len(s0) > 3 else None,
-                      mk(10, 20))
-                s1 = segs[1]
-                check("W: maximized popup: ... SIZE(RESTORED), MOVE, then MOVE, SIZE(MAXIMIZED)",
-                      [(x[0], x[1]) for x in s1], [(0x81, 0), (0x01, 0), (0x05, 0), (0x03, 0), (0x03, 0), (0x05, 2)])
-                check("W: maximized popup: the maximized move is to the work area origin",
-                      s1[4][2] if len(s1) > 4 else None, mk(0, 0))
-                check("W: maximized popup: the maximized size is the work area's",
-                      s1[5][2] if len(s1) > 5 else None, mk(work_w, work_h))
-                check("W: overlapped, invisible: no WM_SIZE/WM_MOVE at creation",
-                      [x[0] for x in segs[2]], [0x81, 0x01])
-                check("W: overlapped: its first ShowWindow ends with SIZE(RESTORED), MOVE",
-                      [(x[0], x[1]) for x in segs[3]][-2:], [(0x05, 0), (0x03, 0)])
+            if selected("W"):
+                code, out, fatal = run(tmp, binp, "W")
+                check("W: runs to the end", (code, fatal), (0, None))
+                m = re.match(r"R([0-9A-F]+),([0-9A-F]+) S([0-9A-F]+),([0-9A-F]+),([0-9A-F]+),([0-9A-F]+):(.*)",
+                             out[0] if out else "")
+                check("W: log printed", bool(m), True)
+                if m:
+                    work_w, work_h = int(m.group(1), 16), int(m.group(2), 16)
+                    cuts = [0] + [int(x, 16) for x in m.groups()[2:6]]
+                    log = [tuple(int(x, 16) for x in e.split("/")) for e in m.group(7).split()]
+                    segs = [sizes(log[cuts[i]:cuts[i + 1]]) for i in range(4)]
+                    mk = lambda lo, hi: lo | (hi << 16)
+                    # Wine msg.c WmCreateChildSeq / WmCreateMaxPopupSeq /
+                    # WmCreateOverlappedSeq, verified there on Windows. The
+                    # maximized popup takes the work area (SPI_GETWORKAREA: the
+                    # runtime's screen), at its origin.
+                    s0 = segs[0]
+                    check("W: popup: NCCREATE, CREATE, SIZE(RESTORED), MOVE",
+                          [(x[0], x[1]) for x in s0], [(0x81, 0), (0x01, 0), (0x05, 0), (0x03, 0)])
+                    check("W: popup: WM_SIZE is the 100x50 client", s0[2][2] if len(s0) > 2 else None, mk(100, 50))
+                    check("W: popup: WM_MOVE is the client origin (10,20)", s0[3][2] if len(s0) > 3 else None,
+                          mk(10, 20))
+                    s1 = segs[1]
+                    check("W: maximized popup: ... SIZE(RESTORED), MOVE, then MOVE, SIZE(MAXIMIZED)",
+                          [(x[0], x[1]) for x in s1], [(0x81, 0), (0x01, 0), (0x05, 0), (0x03, 0), (0x03, 0), (0x05, 2)])
+                    check("W: maximized popup: the maximized move is to the work area origin",
+                          s1[4][2] if len(s1) > 4 else None, mk(0, 0))
+                    check("W: maximized popup: the maximized size is the work area's",
+                          s1[5][2] if len(s1) > 5 else None, mk(work_w, work_h))
+                    check("W: overlapped, invisible: no WM_SIZE/WM_MOVE at creation",
+                          [x[0] for x in segs[2]], [0x81, 0x01])
+                    check("W: overlapped: its first ShowWindow ends with SIZE(RESTORED), MOVE",
+                          [(x[0], x[1]) for x in segs[3]][-2:], [(0x05, 0), (0x03, 0)])
 
-            code, out, fatal = run(tmp, binp, "V")
-            check("V: runs to the end", (code, fatal), (0, None))
-            flags(g.v_names, out, "V")
+            if selected("V"):
+                code, out, fatal = run(tmp, binp, "V")
+                check("V: runs to the end", (code, fatal), (0, None))
+                flags(g.v_names, out, "V")
 
-            code, out, fatal = run(tmp, binp, "O")
-            check("O: runs to the end", (code, fatal), (0, None))
-            flags(g.o_names, out, "O")
+            if selected("O"):
+                code, out, fatal = run(tmp, binp, "O")
+                check("O: runs to the end", (code, fatal), (0, None))
+                flags(g.o_names, out, "O")
 
-            # Mode N: Winsock 1.1 sockets on loopback (patch 0023), and one
-            # broadcast on the LAN, which needs this process to be allowed there.
-            check("N: precondition: this process may broadcast on the LAN (run attached, not detached from ssh)",
-                  lan_broadcast_errno(), None)
-            code, out, fatal = run(tmp, binp, "N", NET_LOG="1")
-            check("N: runs to the end", (code, fatal), (0, None))
-            before = failures
-            flags(g.n_names, out, "N")
-            if failures > before:  # the host errors behind them (<ID>_NET_LOG)
-                print("".join(l + "\n" for l in run.stderr.splitlines() if l.startswith("wsock32:")), end="")
+            if selected("N"):
+                # Mode N: Winsock 1.1 sockets on loopback (patch 0023), and one
+                # broadcast on the LAN, which needs this process to be allowed there.
+                check("N: precondition: this process may broadcast on the LAN (run attached, not detached from ssh)",
+                      lan_broadcast_errno(), None)
+                code, out, fatal = run(tmp, binp, "N", NET_LOG="1")
+                check("N: runs to the end", (code, fatal), (0, None))
+                before = failures
+                flags(g.n_names, out, "N")
+                if failures > before:  # the host errors behind them (<ID>_NET_LOG)
+                    print("".join(l + "\n" for l in run.stderr.splitlines() if l.startswith("wsock32:")), end="")
 
-            # Mode Q: completion ports on sockets (patch 0024).
-            code, out, fatal = run(tmp, binp, "Q", NET_LOG="1")
-            check("Q: runs to the end", (code, fatal), (0, None))
-            before = failures
-            flags(g.q_names, out, "Q")
-            if failures > before:
-                print("".join(l + "\n" for l in run.stderr.splitlines() if l.startswith("wsock32:")), end="")
+            if selected("Q"):
+                # Mode Q: completion ports on sockets (patch 0024).
+                code, out, fatal = run(tmp, binp, "Q", NET_LOG="1")
+                check("Q: runs to the end", (code, fatal), (0, None))
+                before = failures
+                flags(g.q_names, out, "Q")
+                if failures > before:
+                    print("".join(l + "\n" for l in run.stderr.splitlines() if l.startswith("wsock32:")), end="")
 
-            # Mode F: the screen the game sees is the desktop (W x H pixels);
-            # fullscreen on the simulated screen is a 1000x500-point window,
-            # windowed is the client scaled to fit it (min(1, 1000/W, 500/H)).
-            # Pointer positions are window points.
-            script = os.path.join(tmp, "f_input.txt")
-            with open(script, "w") as fh:
-                fh.write("1.0 pointer 520 260\n1.3 click\n1.6 pointer 20 100\n1.9 click\n"
-                         "2.5 chord ctrl+gui F\n3.2 pointer 300 200\n3.5 click\n"
-                         "4.2 chord ctrl+gui F\n4.9 pointer 990 490\n5.2 click\n")
-            code, out, fatal = run(tmp, binp, "F", TEST_SCREEN="1000x500", TEST_INPUT=script)
-            log = run.stderr
-            check("F: runs to the end", (code, fatal), (0, None))
-            mf = re.match(r"R([0-9A-F]+),([0-9A-F]+) C([0-9A-F]+):([0-9A-F]+),([0-9A-F]+),([0-9A-F]+),([0-9A-F]+)",
-                          out[0] if out else "")
-            check("F: clicks printed", bool(mf), True)
-            check("F: a maximized popup goes fullscreen on the simulated screen, and again after the toggles",
-                  len(re.findall(r"simulated fullscreen 1000x500 for a", log)), 2)
-            check("F: Ctrl+Cmd+F: windowed, then fullscreen",
-                  re.findall(r"user32: (windowed|fullscreen) \(Ctrl\+Cmd\+F\)", log), ["windowed", "fullscreen"])
-            if mf:
-                W, H = int(mf.group(1), 16), int(mf.group(2), 16)
-                s = min(1, 1000 / W, 500 / H)
-                ww, wh = max(round(W * s), 1), max(round(H * s), 1)
-                pt = lambda lp: (lp & 0xFFFF, lp >> 16)
-                got = [pt(int(mf.group(i), 16)) for i in range(4, 8)]
-                check("F: four clicks reached the window", int(mf.group(3), 16), 4)
-                check("F: fullscreen: a click inside the frame", got[0], fit_point(W, H, 1000, 500, 520, 260))
-                check("F: fullscreen: a click on a bar is at the frame's edge", got[1],
-                      fit_point(W, H, 1000, 500, 20, 100))
-                check("F: windowed (Ctrl+Cmd+F): the scaled window maps to the client", got[2],
-                      fit_point(W, H, ww, wh, 300, 200))
-                check("F: fullscreen again: past the frame clamps to its last pixel", got[3],
-                      fit_point(W, H, 1000, 500, 990, 490))
+            if selected("F"):
+                # Mode F: the screen the game sees is the desktop (W x H pixels);
+                # fullscreen on the simulated screen is a 1000x500-point window,
+                # windowed is the client scaled to fit it (min(1, 1000/W, 500/H)).
+                # Pointer positions are window points.
+                script = os.path.join(tmp, "f_input.txt")
+                with open(script, "w") as fh:
+                    fh.write("1.0 pointer 520 260\n1.3 click\n1.6 pointer 20 100\n1.9 click\n"
+                             "2.5 chord ctrl+gui F\n3.2 pointer 300 200\n3.5 click\n"
+                             "4.2 chord ctrl+gui F\n4.9 pointer 990 490\n5.2 click\n")
+                code, out, fatal = run(tmp, binp, "F", TEST_SCREEN="1000x500", TEST_INPUT=script)
+                log = run.stderr
+                check("F: runs to the end", (code, fatal), (0, None))
+                mf = re.match(r"R([0-9A-F]+),([0-9A-F]+) C([0-9A-F]+):([0-9A-F]+),([0-9A-F]+),([0-9A-F]+),([0-9A-F]+)",
+                              out[0] if out else "")
+                check("F: clicks printed", bool(mf), True)
+                check("F: a maximized popup goes fullscreen on the simulated screen, and again after the toggles",
+                      len(re.findall(r"simulated fullscreen 1000x500 for a", log)), 2)
+                check("F: Ctrl+Cmd+F: windowed, then fullscreen",
+                      re.findall(r"user32: (windowed|fullscreen) \(Ctrl\+Cmd\+F\)", log), ["windowed", "fullscreen"])
+                if mf:
+                    W, H = int(mf.group(1), 16), int(mf.group(2), 16)
+                    s = min(1, 1000 / W, 500 / H)
+                    ww, wh = max(round(W * s), 1), max(round(H * s), 1)
+                    pt = lambda lp: (lp & 0xFFFF, lp >> 16)
+                    got = [pt(int(mf.group(i), 16)) for i in range(4, 8)]
+                    check("F: four clicks reached the window", int(mf.group(3), 16), 4)
+                    check("F: fullscreen: a click inside the frame", got[0], fit_point(W, H, 1000, 500, 520, 260))
+                    check("F: fullscreen: a click on a bar is at the frame's edge", got[1],
+                          fit_point(W, H, 1000, 500, 20, 100))
+                    check("F: windowed (Ctrl+Cmd+F): the scaled window maps to the client", got[2],
+                          fit_point(W, H, ww, wh, 300, 200))
+                    check("F: fullscreen again: past the frame clamps to its last pixel", got[3],
+                          fit_point(W, H, 1000, 500, 990, 490))
 
-            # Mode F with TEST_INPUT_FOLLOW: lines appended while it runs are
-            # queued, "+<s>" times relative to when they are read; a partly
-            # written line waits until it is complete.
-            follow = os.path.join(tmp, "f_follow.txt")
-            open(follow, "w").close()
+                # Mode F with TEST_INPUT_FOLLOW: lines appended while it runs are
+                # queued, "+<s>" times relative to when they are read; a partly
+                # written line waits until it is complete.
+                follow = os.path.join(tmp, "f_follow.txt")
+                open(follow, "w").close()
 
-            def feed():
-                time.sleep(2.0)
-                with open(follow, "a") as fh:
-                    fh.write("+0.2 pointer 520 260\n+0.5 click\n+0.8 pointer 20")
-                time.sleep(1.0)
-                with open(follow, "a") as fh:
-                    fh.write(" 100\n+1.1 click\n")
-            code, out, fatal = run(tmp, binp, "F", during=feed, TEST_SCREEN="1000x500", TEST_INPUT_FOLLOW=follow)
-            log = run.stderr
-            check("FF: runs to the end", (code, fatal), (0, None))
-            check("FF: each complete appended line read once",
-                  re.findall(r"TEST_INPUT_FOLLOW: at [0-9.]+ s: (.*)", log),
-                  ["+0.2 pointer 520 260", "+0.5 click", "+0.8 pointer 20 100", "+1.1 click"])
-            reads = [float(x) for x in re.findall(r"TEST_INPUT_FOLLOW: at ([0-9.]+) s", log)]
-            check("FF: the split line read after its second part (>= 0.9 s after the first lines)",
-                  len(reads) == 4 and reads[2] - reads[0] >= 0.9, True)
-            mf = re.match(r"R([0-9A-F]+),([0-9A-F]+) C([0-9A-F]+):([0-9A-F]+),([0-9A-F]+)", out[0] if out else "")
-            check("FF: clicks printed", bool(mf), True)
-            if mf:
-                W, H = int(mf.group(1), 16), int(mf.group(2), 16)
-                pt = lambda lp: (lp & 0xFFFF, lp >> 16)
-                check("FF: two appended clicks reached the window", int(mf.group(3), 16), 2)
-                check("FF: an appended click lands where its pointer line put it",
-                      [pt(int(mf.group(4), 16)), pt(int(mf.group(5), 16))],
-                      [fit_point(W, H, 1000, 500, 520, 260), fit_point(W, H, 1000, 500, 20, 100)])
+                def feed():
+                    time.sleep(2.0)
+                    with open(follow, "a") as fh:
+                        fh.write("+0.2 pointer 520 260\n+0.5 click\n+0.8 pointer 20")
+                    time.sleep(1.0)
+                    with open(follow, "a") as fh:
+                        fh.write(" 100\n+1.1 click\n")
+                code, out, fatal = run(tmp, binp, "F", during=feed, TEST_SCREEN="1000x500", TEST_INPUT_FOLLOW=follow)
+                log = run.stderr
+                check("FF: runs to the end", (code, fatal), (0, None))
+                check("FF: each complete appended line read once",
+                      re.findall(r"TEST_INPUT_FOLLOW: at [0-9.]+ s: (.*)", log),
+                      ["+0.2 pointer 520 260", "+0.5 click", "+0.8 pointer 20 100", "+1.1 click"])
+                reads = [float(x) for x in re.findall(r"TEST_INPUT_FOLLOW: at ([0-9.]+) s", log)]
+                check("FF: the split line read after its second part (>= 0.9 s after the first lines)",
+                      len(reads) == 4 and reads[2] - reads[0] >= 0.9, True)
+                mf = re.match(r"R([0-9A-F]+),([0-9A-F]+) C([0-9A-F]+):([0-9A-F]+),([0-9A-F]+)", out[0] if out else "")
+                check("FF: clicks printed", bool(mf), True)
+                if mf:
+                    W, H = int(mf.group(1), 16), int(mf.group(2), 16)
+                    pt = lambda lp: (lp & 0xFFFF, lp >> 16)
+                    check("FF: two appended clicks reached the window", int(mf.group(3), 16), 2)
+                    check("FF: an appended click lands where its pointer line put it",
+                          [pt(int(mf.group(4), 16)), pt(int(mf.group(5), 16))],
+                          [fit_point(W, H, 1000, 500, 520, 260), fit_point(W, H, 1000, 500, 20, 100)])
 
-            # Mode X: a guest read of address 0x3C with no exception handler
-            # installed (a null object's field). The fatal report must say
-            # why it was not handled and show the guest's registers (spilled
-            # at the call) and its EBP chain, on stderr and in the crash file.
-            # FATAL_DUMP: guest memory named by expressions, dumped in the report.
-            # Expected values from the PE format: "MZ" at the image base, the
-            # PE signature at base + e_lfanew (read through a dereference).
-            # Patch 0019's arithmetic, checked against the image this test
-            # writes: e_lfanew (0x3C) = 0x40, ImageBase at PE + 0x34 = 0x400000;
-            # 32-bit wrapping; "*" before "+"/"-", left to right; xself holds
-            # its own address (mode X stores it), so nested reads stay readable.
-            xs = f"{g.var['xself']:#x}"
-            deep = lambda n: "[" * n + xs + "]" * n
-            dumps = {
-                "sub": "0x400040-4", "prec": "0x400000+0xF*4", "sum": "0x400000+[0x40003C]",
-                "mixed": "[0x400000+[0x40003C]+0x34]*2-0x400000+0x3C",
-                "wrap_add": "0xFFFFFFFF+0x400001", "wrap_mul": "0x80100000*2+0x200000",
-                "too_big": "0x100000000+0x400000", "signed": "0x400000++4", "mul_expr": "0x10*[0x40003C]",
-                "trailing": "0x400000)", "unclosed": "[0x40003C",
-                "deep8": deep(8), "deep9": deep(9), "side9": "+".join([deep(1)] * 9),
-            }
-            spec = ",".join(["0x400000:16", "[0x40003C]+0x400000:4", "[0x10]+4:8", "0x400000:0x2000"] +
-                            [f"{e}:4" for e in dumps.values()])
-            code, out, fatal = run(tmp, binp, "X", FATAL_DUMP=spec)
-            log = run.stderr
-            check("X: an unhandled guest fault is fatal", code != 0 and bool(fatal), True)
-            check("X: the fault address and the reason", bool(re.search(
-                r"guest memory fault at guest 0000003C \(not handled by the guest's exception handlers\)", log)), True)
-            check("X: the guest thread", bool(re.search(r"guest thread [0-9A-F]{4}", log)), True)
-            check("X: the guest registers (as of the call)",
-                  bool(re.search(r"ebx=22222222", log)) and bool(re.search(r"esi=55555555 edi=66666666", log)), True)
-            check("X: the guest backtrace along the EBP chain", "guest backtrace (ebp chain)" in log, True)
-            def first_value(label):
-                m = re.search(re.escape(f"dump {label} = ") + r"([0-9A-F]{8}) \(\d+ bytes\):\n +[0-9A-F]{8}: ([0-9A-F]{8})", log)
-                return (m.group(1), m.group(2)) if m else None
-            v = first_value("0x400000")
-            check("X: FATAL_DUMP: a plain address is dumped (the DOS header's \"MZ\" in its low word)",
-                  (v[0], v[1][4:]) if v else None, ("00400000", "5A4D"))
-            v = first_value("[0x40003C]+0x400000")
-            check("X: FATAL_DUMP: a dereferenced address (base + e_lfanew) reaches the PE signature",
-                  v[1] if v else None, "00004550")
-            check("X: FATAL_DUMP: an unreadable address is noted, not faulted",
-                  "dump [0x10]+4: unreadable or malformed" in log, True)
-            check("X: FATAL_DUMP: a dump is at most 0x1000 bytes",
-                  ("dump 0x400000 = 00400000 (4096 bytes):" in log,
-                   len(re.findall(r"^    00400[0-9A-F]{3}:", log, re.M)) >= 256,
-                   bool(re.search(r"^    00401000:", log, re.M))), (True, True, False))
-            v = first_value(dumps["sub"])
-            check("X: FATAL_DUMP: subtraction (0x400040 - 4 = e_lfanew's address, 0x40 there)",
-                  v, ("0040003C", "00000040"))
-            v = first_value(dumps["prec"])
-            check("X: FATAL_DUMP: \"*\" binds tighter than \"+\"", v[0] if v else None, "0040003C")
-            v = first_value(dumps["sum"])
-            check("X: FATAL_DUMP: the sum of two expressions (base + [e_lfanew]) reaches the PE signature",
-                  v, ("00400040", "00004550"))
-            v = first_value(dumps["mixed"])
-            check("X: FATAL_DUMP: a read, a product and a difference, left to right (ImageBase*2 - base + 0x3C)",
-                  v, ("0040003C", "00000040"))
-            v = first_value(dumps["wrap_add"])
-            check("X: FATAL_DUMP: addition wraps at 32 bits", v[0] if v else None, "00400000")
-            v = first_value(dumps["wrap_mul"])
-            check("X: FATAL_DUMP: multiplication wraps at 32 bits", v[0] if v else None, "00400000")
-            for k, why in (("too_big", "a number over 32 bits"), ("signed", "a signed number"),
-                           ("mul_expr", "a product by a non-constant"), ("trailing", "trailing text"),
-                           ("unclosed", "an unclosed read")):
-                check(f"X: FATAL_DUMP: {why} is malformed", f"dump {dumps[k]}: unreadable or malformed" in log, True)
-            v = first_value(dumps["deep8"])
-            check("X: FATAL_DUMP: reads nest 8 deep", v[0] if v else None, f"{g.var['xself']:08X}")
-            check("X: FATAL_DUMP: a 9th nested read is refused",
-                  f"dump {dumps['deep9']}: unreadable or malformed" in log, True)
-            m9 = re.search(re.escape(f"dump {dumps['side9']} = ") + r"([0-9A-F]{8})", log)
-            check("X: FATAL_DUMP: reads side by side do not count as nested (nine summed)",
-                  m9.group(1) if m9 else None, f"{g.var['xself'] * 9 & 0xFFFFFFFF:08X}")
-            crashes = os.path.join(tmp, "data", "win32test", "crashes")
-            reports = [open(os.path.join(crashes, f)).read() for f in sorted(os.listdir(crashes))] \
-                if os.path.isdir(crashes) else []
-            check("X: the same report in the crash file",
-                  any("guest memory fault at guest 0000003C" in r and "ebx=22222222" in r for r in reports), True)
+            if selected("X"):
+                # Mode X: a guest read of address 0x3C with no exception handler
+                # installed (a null object's field). The fatal report must say
+                # why it was not handled and show the guest's registers (spilled
+                # at the call) and its EBP chain, on stderr and in the crash file.
+                # FATAL_DUMP: guest memory named by expressions, dumped in the report.
+                # Expected values from the PE format: "MZ" at the image base, the
+                # PE signature at base + e_lfanew (read through a dereference).
+                # Patch 0019's arithmetic, checked against the image this test
+                # writes: e_lfanew (0x3C) = 0x40, ImageBase at PE + 0x34 = 0x400000;
+                # 32-bit wrapping; "*" before "+"/"-", left to right; xself holds
+                # its own address (mode X stores it), so nested reads stay readable.
+                xs = f"{g.var['xself']:#x}"
+                deep = lambda n: "[" * n + xs + "]" * n
+                dumps = {
+                    "sub": "0x400040-4", "prec": "0x400000+0xF*4", "sum": "0x400000+[0x40003C]",
+                    "mixed": "[0x400000+[0x40003C]+0x34]*2-0x400000+0x3C",
+                    "wrap_add": "0xFFFFFFFF+0x400001", "wrap_mul": "0x80100000*2+0x200000",
+                    "too_big": "0x100000000+0x400000", "signed": "0x400000++4", "mul_expr": "0x10*[0x40003C]",
+                    "trailing": "0x400000)", "unclosed": "[0x40003C",
+                    "deep8": deep(8), "deep9": deep(9), "side9": "+".join([deep(1)] * 9),
+                }
+                spec = ",".join(["0x400000:16", "[0x40003C]+0x400000:4", "[0x10]+4:8", "0x400000:0x2000"] +
+                                [f"{e}:4" for e in dumps.values()])
+                code, out, fatal = run(tmp, binp, "X", FATAL_DUMP=spec)
+                log = run.stderr
+                check("X: an unhandled guest fault is fatal", code != 0 and bool(fatal), True)
+                check("X: the fault address and the reason", bool(re.search(
+                    r"guest memory fault at guest 0000003C \(not handled by the guest's exception handlers\)", log)), True)
+                check("X: the guest thread", bool(re.search(r"guest thread [0-9A-F]{4}", log)), True)
+                check("X: the guest registers (as of the call)",
+                      bool(re.search(r"ebx=22222222", log)) and bool(re.search(r"esi=55555555 edi=66666666", log)), True)
+                check("X: the guest backtrace along the EBP chain", "guest backtrace (ebp chain)" in log, True)
+                def first_value(label):
+                    m = re.search(re.escape(f"dump {label} = ") + r"([0-9A-F]{8}) \(\d+ bytes\):\n +[0-9A-F]{8}: ([0-9A-F]{8})", log)
+                    return (m.group(1), m.group(2)) if m else None
+                v = first_value("0x400000")
+                check("X: FATAL_DUMP: a plain address is dumped (the DOS header's \"MZ\" in its low word)",
+                      (v[0], v[1][4:]) if v else None, ("00400000", "5A4D"))
+                v = first_value("[0x40003C]+0x400000")
+                check("X: FATAL_DUMP: a dereferenced address (base + e_lfanew) reaches the PE signature",
+                      v[1] if v else None, "00004550")
+                check("X: FATAL_DUMP: an unreadable address is noted, not faulted",
+                      "dump [0x10]+4: unreadable or malformed" in log, True)
+                check("X: FATAL_DUMP: a dump is at most 0x1000 bytes",
+                      ("dump 0x400000 = 00400000 (4096 bytes):" in log,
+                       len(re.findall(r"^    00400[0-9A-F]{3}:", log, re.M)) >= 256,
+                       bool(re.search(r"^    00401000:", log, re.M))), (True, True, False))
+                v = first_value(dumps["sub"])
+                check("X: FATAL_DUMP: subtraction (0x400040 - 4 = e_lfanew's address, 0x40 there)",
+                      v, ("0040003C", "00000040"))
+                v = first_value(dumps["prec"])
+                check("X: FATAL_DUMP: \"*\" binds tighter than \"+\"", v[0] if v else None, "0040003C")
+                v = first_value(dumps["sum"])
+                check("X: FATAL_DUMP: the sum of two expressions (base + [e_lfanew]) reaches the PE signature",
+                      v, ("00400040", "00004550"))
+                v = first_value(dumps["mixed"])
+                check("X: FATAL_DUMP: a read, a product and a difference, left to right (ImageBase*2 - base + 0x3C)",
+                      v, ("0040003C", "00000040"))
+                v = first_value(dumps["wrap_add"])
+                check("X: FATAL_DUMP: addition wraps at 32 bits", v[0] if v else None, "00400000")
+                v = first_value(dumps["wrap_mul"])
+                check("X: FATAL_DUMP: multiplication wraps at 32 bits", v[0] if v else None, "00400000")
+                for k, why in (("too_big", "a number over 32 bits"), ("signed", "a signed number"),
+                               ("mul_expr", "a product by a non-constant"), ("trailing", "trailing text"),
+                               ("unclosed", "an unclosed read")):
+                    check(f"X: FATAL_DUMP: {why} is malformed", f"dump {dumps[k]}: unreadable or malformed" in log, True)
+                v = first_value(dumps["deep8"])
+                check("X: FATAL_DUMP: reads nest 8 deep", v[0] if v else None, f"{g.var['xself']:08X}")
+                check("X: FATAL_DUMP: a 9th nested read is refused",
+                      f"dump {dumps['deep9']}: unreadable or malformed" in log, True)
+                m9 = re.search(re.escape(f"dump {dumps['side9']} = ") + r"([0-9A-F]{8})", log)
+                check("X: FATAL_DUMP: reads side by side do not count as nested (nine summed)",
+                      m9.group(1) if m9 else None, f"{g.var['xself'] * 9 & 0xFFFFFFFF:08X}")
+                crashes = os.path.join(tmp, "data", "win32test", "crashes")
+                reports = [open(os.path.join(crashes, f)).read() for f in sorted(os.listdir(crashes))] \
+                    if os.path.isdir(crashes) else []
+                check("X: the same report in the crash file",
+                      any("guest memory fault at guest 0000003C" in r and "ebx=22222222" in r for r in reports), True)
 
-            # Mode S: the stall recorder (patch 0018). The make-up of each frame
-            # comes from the program: Sleep waits at least its argument (MSDN),
-            # the busy loop runs guest code until GetTickCount has advanced 150
-            # ms, the reads and the texture are counted by the program.
-            with open(os.path.join(tmp, "install", "data.bin"), "wb") as f:
-                f.write(bytes(range(256)) * 16)
-            code, out, fatal = run(tmp, binp, "S", STALL="100")
-            log = run.stderr
-            st = stalls(log)
-            check("S: runs to the end", (code, fatal), (0, None))
-            check("S: the recorder says it is on", "stall: recording frames over 100.0 ms" in log, True)
-            check("S: a short frame is not reported", 3 in st, False)
-            check("S: the first frame is timed from the start (t = its length)",
-                  1 in st and abs(st[1]["ms"] - st[1]["t"] * 1000) <= 10 + st[1]["t"] * 5, True)
-            f3, f4, f5, f6, f7 = (st.get(i, dict(ms=0, phase="", cats={}, text="", imports="", samples=0, guest=[],
-                                                 raw=""))
-                                  for i in (4, 5, 6, 7, 8))
-            check("S: Sleep(160) frames are reported", all(f["ms"] >= 160 for f in (f3, f4, f5)), True)
-            check("S: phase before any message is pumped: startup", f3["phase"], "startup")
-            check("S: phase of a frame that pumped messages: interactive", f4["phase"], "interactive")
-            check("S: phase of a frame without pumping, after pumping: loading", f5["phase"], "loading")
-            check("S: the sleep is charged to waits", all(f["cats"].get("wait", 0) >= 155 for f in (f3, f4, f5)), True)
-            check("S: and to the Sleep import, called from guest code",
-                  bool(re.match(r"\s*Sleep (1[5-9]\d|[2-9]\d\d)\.\d x1 \(longest [\d.]+ from 0040[0-9A-F]{4}\)", f3["imports"])), True)
-            check("S: the categories partition the frame",
-                  all(abs(sum(f["cats"].values()) - f["ms"]) <= max(1.0, f["ms"] * 0.01) for f in st.values()), True)
-            check("S: file reads counted (3 ops, 3 KB)", "file" in f6["cats"] and "(3 ops, 3.0 KB)" in f6["text"], True)
-            check("S: the texture upload is texture work", bool(re.search(r"texture [\d.]+ x[1-9]", f6["text"])), True)
-            # (GetTickCount counts whole milliseconds: 150 of them may be 149.x ms.)
-            check("S: the guest loop is charged to guest code", f7["ms"] >= 145 and
-                  f7["cats"].get("guest", 0) >= 0.9 * f7["ms"], True)
-            check("S: pure getters are counted, not timed (GetTickCount in the loop)",
-                  bool(re.search(r"\| untimed: GetTickCount x([3-9]|\d\d+)", f7["raw"])) and
-                  "GetTickCount " not in f7["imports"], True)
-            check("S: the sampler names the guest function waiting in Sleep", f3["guest"][:1], ["00401000"])
-            check("S: the sampler names the guest function looping", f7["guest"][:1], ["00401000"])
-            check("S: samples cover the frame (about one per 2 ms)", f3["samples"] >= 40, True)
-            # A report that takes 150 ms (test aid): the next frame shows it as
-            # recorder time but is a stall only by its own content.
-            code, out, fatal = run(tmp, binp, "S", STALL="100", TEST_STALL_REPORT_MS="150")
-            st = stalls(run.stderr)
-            check("S: the recorder's own time is shown", st.get(5, {}).get("cats", {}).get("recorder", 0) >= 150, True)
-            check("S: and never makes a stall (every report is over 100 ms without it)",
-                  bool(st) and all(f["ms"] - f["cats"].get("recorder", 0) > 100 for f in st.values()), True)
-            code, out, fatal = run(tmp, binp, "S", STALL="100", STALL_MAX="1")
-            log = run.stderr
-            check("S: STALL_MAX=1: one report", len(stalls(log)), 1)
-            check("S: STALL_MAX=1: then counted only",
-                  "stall: 1 reports made; further stalls are counted, not reported" in log, True)
-            code, out, fatal = run(tmp, binp, "S")
-            check("S: without STALL nothing is recorded", (code, "stall:" in run.stderr), (0, False))
-            # Mode T: the recorder's cost per import call (2 million calls;
-            # the fastest of three alternating runs each, against noise).
-            times = {False: [], True: []}
-            for _ in range(3):
-                for recording in (False, True):
-                    code, out, fatal = run(tmp, binp, "T", **({"STALL": "100"} if recording else {}))
-                    m = re.match(r"T(\d+)", out[0]) if out else None
-                    if m:
-                        times[recording].append(int(m.group(1)))
-            t_off = min(times[False]) if len(times[False]) == 3 else None
-            t_on = min(times[True]) if len(times[True]) == 3 else None
-            if t_off is not None and t_on is not None:
-                print(f"note: 2M timed import calls: {t_off} ms off, {t_on} ms recording "
-                      f"({(t_on - t_off) / 2e6 * 1e6:.0f} ns per call)")
-            check("T: recording costs under 1 us per timed import call",
-                  t_off is not None and t_on is not None and (t_on - t_off) / 2e6 < 1e-3, True)
+            if selected("S"):
+                # Mode S: the stall recorder (patch 0018). The make-up of each frame
+                # comes from the program: Sleep waits at least its argument (MSDN),
+                # the busy loop runs guest code until GetTickCount has advanced 150
+                # ms, the reads and the texture are counted by the program.
+                with open(os.path.join(tmp, "install", "data.bin"), "wb") as f:
+                    f.write(bytes(range(256)) * 16)
+                code, out, fatal = run(tmp, binp, "S", STALL="100")
+                log = run.stderr
+                st = stalls(log)
+                check("S: runs to the end", (code, fatal), (0, None))
+                check("S: the recorder says it is on", "stall: recording frames over 100.0 ms" in log, True)
+                check("S: a short frame is not reported", 3 in st, False)
+                check("S: the first frame is timed from the start (t = its length)",
+                      1 in st and abs(st[1]["ms"] - st[1]["t"] * 1000) <= 10 + st[1]["t"] * 5, True)
+                f3, f4, f5, f6, f7 = (st.get(i, dict(ms=0, phase="", cats={}, text="", imports="", samples=0, guest=[],
+                                                     raw=""))
+                                      for i in (4, 5, 6, 7, 8))
+                check("S: Sleep(160) frames are reported", all(f["ms"] >= 160 for f in (f3, f4, f5)), True)
+                check("S: phase before any message is pumped: startup", f3["phase"], "startup")
+                check("S: phase of a frame that pumped messages: interactive", f4["phase"], "interactive")
+                check("S: phase of a frame without pumping, after pumping: loading", f5["phase"], "loading")
+                check("S: the sleep is charged to waits", all(f["cats"].get("wait", 0) >= 155 for f in (f3, f4, f5)), True)
+                check("S: and to the Sleep import, called from guest code",
+                      bool(re.match(r"\s*Sleep (1[5-9]\d|[2-9]\d\d)\.\d x1 \(longest [\d.]+ from 0040[0-9A-F]{4}\)", f3["imports"])), True)
+                check("S: the categories partition the frame",
+                      all(abs(sum(f["cats"].values()) - f["ms"]) <= max(1.0, f["ms"] * 0.01) for f in st.values()), True)
+                check("S: file reads counted (3 ops, 3 KB)", "file" in f6["cats"] and "(3 ops, 3.0 KB)" in f6["text"], True)
+                check("S: the texture upload is texture work", bool(re.search(r"texture [\d.]+ x[1-9]", f6["text"])), True)
+                # (GetTickCount counts whole milliseconds: 150 of them may be 149.x ms.)
+                check("S: the guest loop is charged to guest code", f7["ms"] >= 145 and
+                      f7["cats"].get("guest", 0) >= 0.9 * f7["ms"], True)
+                check("S: pure getters are counted, not timed (GetTickCount in the loop)",
+                      bool(re.search(r"\| untimed: GetTickCount x([3-9]|\d\d+)", f7["raw"])) and
+                      "GetTickCount " not in f7["imports"], True)
+                check("S: the sampler names the guest function waiting in Sleep", f3["guest"][:1], ["00401000"])
+                check("S: the sampler names the guest function looping", f7["guest"][:1], ["00401000"])
+                check("S: samples cover the frame (about one per 2 ms)", f3["samples"] >= 40, True)
+                # A report that takes 150 ms (test aid): the next frame shows it as
+                # recorder time but is a stall only by its own content.
+                code, out, fatal = run(tmp, binp, "S", STALL="100", TEST_STALL_REPORT_MS="150")
+                st = stalls(run.stderr)
+                check("S: the recorder's own time is shown", st.get(5, {}).get("cats", {}).get("recorder", 0) >= 150, True)
+                check("S: and never makes a stall (every report is over 100 ms without it)",
+                      bool(st) and all(f["ms"] - f["cats"].get("recorder", 0) > 100 for f in st.values()), True)
+                code, out, fatal = run(tmp, binp, "S", STALL="100", STALL_MAX="1")
+                log = run.stderr
+                check("S: STALL_MAX=1: one report", len(stalls(log)), 1)
+                check("S: STALL_MAX=1: then counted only",
+                      "stall: 1 reports made; further stalls are counted, not reported" in log, True)
+                code, out, fatal = run(tmp, binp, "S")
+                check("S: without STALL nothing is recorded", (code, "stall:" in run.stderr), (0, False))
+            if selected("T"):
+                # Mode T: the recorder's cost per import call (2 million calls;
+                # the fastest of three alternating runs each, against noise).
+                times = {False: [], True: []}
+                for _ in range(3):
+                    for recording in (False, True):
+                        code, out, fatal = run(tmp, binp, "T", **({"STALL": "100"} if recording else {}))
+                        m = re.match(r"T(\d+)", out[0]) if out else None
+                        if m:
+                            times[recording].append(int(m.group(1)))
+                t_off = min(times[False]) if len(times[False]) == 3 else None
+                t_on = min(times[True]) if len(times[True]) == 3 else None
+                if t_off is not None and t_on is not None:
+                    print(f"note: 2M timed import calls: {t_off} ms off, {t_on} ms recording "
+                          f"({(t_on - t_off) / 2e6 * 1e6:.0f} ns per call)")
+                check("T: recording costs under 1 us per timed import call",
+                      t_off is not None and t_on is not None and (t_on - t_off) / 2e6 < 1e-3, True)
 
-            code, out, fatal = run(tmp, binp, "M")
-            check("M: runs to the end", (code, fatal), (0, None))
-            mm = re.match(r"S([0-9A-F]+),([0-9A-F]+),([0-9A-F]+),([0-9A-F]+):(.*)", out[0] if out else "")
-            check("M: log printed", bool(mm), True)
-            if mm:
-                cuts = [int(x, 16) for x in mm.groups()[:4]]
-                log = [tuple(int(x, 16) for x in e.split("/")) for e in mm.group(5).split()]
-                cuts.append(len(log))
-                keep = {0x05, 0x06, 0x07, 0x08, 0x1C}  # SIZE, ACTIVATE, SETFOCUS, KILLFOCUS, ACTIVATEAPP
-                segs = [[x for x in log[cuts[i]:cuts[i + 1]] if x[0] in keep] for i in range(4)]
-                # Wine msg.c's minimize/restore sequences (verified there on
-                # Windows): minimized, WM_SIZE(SIZE_MINIMIZED) with an empty
-                # client, then deactivation (WM_ACTIVATE(WA_INACTIVE) with the
-                # minimized flag, WM_ACTIVATEAPP(FALSE), WM_KILLFOCUS); restored,
-                # activation and WM_SIZE(SIZE_RESTORED) with the 100x50 client.
-                minimized = [(0x05, 1, 0), (0x06, 0x10000, 0), (0x1C, 0, 0), (0x08, 0, 0)]
-                restored = [(0x1C, 1, 0), (0x06, 1, 0), (0x07, 0, 0), (0x05, 0, 100 | 50 << 16)]
-                check("M: ShowWindow(SW_MINIMIZE)", segs[0], minimized)
-                check("M: ShowWindow(SW_RESTORE)", segs[1], restored)
-                check("M: DefWindowProc(SC_MINIMIZE) minimizes", segs[2], minimized)
-                check("M: DefWindowProc(SC_RESTORE) restores", segs[3], restored)
+            if selected("M"):
+                code, out, fatal = run(tmp, binp, "M")
+                check("M: runs to the end", (code, fatal), (0, None))
+                mm = re.match(r"S([0-9A-F]+),([0-9A-F]+),([0-9A-F]+),([0-9A-F]+):(.*)", out[0] if out else "")
+                check("M: log printed", bool(mm), True)
+                if mm:
+                    cuts = [int(x, 16) for x in mm.groups()[:4]]
+                    log = [tuple(int(x, 16) for x in e.split("/")) for e in mm.group(5).split()]
+                    cuts.append(len(log))
+                    keep = {0x05, 0x06, 0x07, 0x08, 0x1C}  # SIZE, ACTIVATE, SETFOCUS, KILLFOCUS, ACTIVATEAPP
+                    segs = [[x for x in log[cuts[i]:cuts[i + 1]] if x[0] in keep] for i in range(4)]
+                    # Wine msg.c's minimize/restore sequences (verified there on
+                    # Windows): minimized, WM_SIZE(SIZE_MINIMIZED) with an empty
+                    # client, then deactivation (WM_ACTIVATE(WA_INACTIVE) with the
+                    # minimized flag, WM_ACTIVATEAPP(FALSE), WM_KILLFOCUS); restored,
+                    # activation and WM_SIZE(SIZE_RESTORED) with the 100x50 client.
+                    minimized = [(0x05, 1, 0), (0x06, 0x10000, 0), (0x1C, 0, 0), (0x08, 0, 0)]
+                    restored = [(0x1C, 1, 0), (0x06, 1, 0), (0x07, 0, 0), (0x05, 0, 100 | 50 << 16)]
+                    check("M: ShowWindow(SW_MINIMIZE)", segs[0], minimized)
+                    check("M: ShowWindow(SW_RESTORE)", segs[1], restored)
+                    check("M: DefWindowProc(SC_MINIMIZE) minimizes", segs[2], minimized)
+                    check("M: DefWindowProc(SC_RESTORE) restores", segs[3], restored)
 
-            code, out, fatal = run(tmp, binp, "D")
-            check("D: runs to the end", (code, fatal), (0, None))
-            flags(g.d_names, out, "D")
+            if selected("D"):
+                code, out, fatal = run(tmp, binp, "D")
+                check("D: runs to the end", (code, fatal), (0, None))
+                flags(g.d_names, out, "D")
 
-            code, out, fatal = run(tmp, binp, "L")
-            check("L: runs to the end", (code, fatal), (0, None))
-            flags(g.gl_names, out, "L")
+            if selected("L"):
+                code, out, fatal = run(tmp, binp, "L")
+                check("L: runs to the end", (code, fatal), (0, None))
+                flags(g.gl_names, out, "L")
 
-            code, out, fatal = run(tmp, binp, "P")
-            check("P: a plane that does not exist stops the process", code != 0 and code != 9, True)
-            check("P: diagnostic", fatal, "wglSwapLayerBuffers(planes 00000002): only the main plane exists")
+            if selected("P"):
+                code, out, fatal = run(tmp, binp, "P")
+                check("P: a plane that does not exist stops the process", code != 0 and code != 9, True)
+                check("P: diagnostic", fatal, "wglSwapLayerBuffers(planes 00000002): only the main plane exists")
 
-            for i, want in enumerate([
-                    'EnumDisplayDevicesA("\\\\.\\DISPLAY1"): monitor enumeration is not implemented',
-                    "ChangeDisplaySettingsExA: hwnd 00001234 / CDS_VIDEOPARAMETERS not supported",
-                    "CreateIoCompletionPort: associating a handle that is not a file is not implemented",
-                    "GetProfileStringA: enumerating sections or keys is not implemented",
-                    "CreateWindowExA: WS_MINIMIZE (created minimized) is not implemented",
-                    "FillRect(hdc 00D00001, (1,2)-(3,4), brush 00E00004): GDI drawing is not implemented",
-                    'DrawTextA(hdc 00D00001, "hi", format 00000025): GDI drawing is not implemented',
-                    "InvalidateRect(NULL, ...): invalidating the whole desktop is not implemented",
-                    "DefWindowProc(WM_ERASEBKGND): erasing with class brush 00E00004 is GDI drawing, "
-                    "which is not implemented",
-                    "WriteFile on a socket is not implemented",
-                    "ReadFile on a socket without an OVERLAPPED is not implemented",
-                    "AcceptEx receiving data with the connection is not implemented"]):
-                code, out, fatal = run(tmp, binp, chr(0x31 + i))
-                check(f"stop {i + 1}: an unimplemented form stops the process", code != 0 and code != 9, True)
-                check(f"stop {i + 1}: diagnostic", fatal, want)
-    print("ALL PASS" if not failures else f"{failures} FAILED")
+            if selected("stops"):
+                for i, want in enumerate([
+                        'EnumDisplayDevicesA("\\\\.\\DISPLAY1"): monitor enumeration is not implemented',
+                        "ChangeDisplaySettingsExA: hwnd 00001234 / CDS_VIDEOPARAMETERS not supported",
+                        "CreateIoCompletionPort: associating a handle that is not a file is not implemented",
+                        "GetProfileStringA: enumerating sections or keys is not implemented",
+                        "CreateWindowExA: WS_MINIMIZE (created minimized) is not implemented",
+                        "FillRect(hdc 00D00001, (1,2)-(3,4), brush 00E00004): GDI drawing is not implemented",
+                        'DrawTextA(hdc 00D00001, "hi", format 00000025): GDI drawing is not implemented',
+                        "InvalidateRect(NULL, ...): invalidating the whole desktop is not implemented",
+                        "DefWindowProc(WM_ERASEBKGND): erasing with class brush 00E00004 is GDI drawing, "
+                        "which is not implemented",
+                        "WriteFile on a socket is not implemented",
+                        "ReadFile on a socket without an OVERLAPPED is not implemented",
+                        "AcceptEx receiving data with the connection is not implemented"]):
+                    code, out, fatal = run(tmp, binp, chr(0x31 + i))
+                    check(f"stop {i + 1}: an unimplemented form stops the process", code != 0 and code != 9, True)
+                    check(f"stop {i + 1}: diagnostic", fatal, want)
+    subset = "" if SELECTED is None else f" (modes {','.join(g for g in MODE_GROUPS if g in SELECTED)} only)"
+    print(("ALL PASS" if not failures else f"{failures} FAILED") + subset)
     return 1 if failures else 0
 
 
