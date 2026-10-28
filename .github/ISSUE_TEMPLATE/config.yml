@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security problem
+    url: https://github.com/retronative/refrozen/security/policy
+    about: Security problems are reported privately, never in a public issue.
+  - name: Getting started and compatibility
+    url: https://github.com/retronative/refrozen/blob/main/docs/getting-started.md
+    about: Installation steps, requirements and what works.

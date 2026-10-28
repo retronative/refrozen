@@ -1,0 +1,57 @@
+name: Bug report
+description: Something in reFrozen doesn't work as it should.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. **Never attach or link game files, maps, MPQs, installers, executables,
+        CD keys or recompiled code.** Security problems go through the [security policy](https://github.com/retronative/refrozen/security/policy), not an issue.
+  - type: input
+    id: version
+    attributes:
+      label: reFrozen version or commit
+      description: The release (for example 0.1.0) or, for a build from source, the commit.
+    validations:
+      required: true
+  - type: input
+    id: mac
+    attributes:
+      label: Mac and macOS
+      description: The Mac model (for example MacBook Air M1, 8 GB) and the macOS version.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: What you did
+      description: The steps that lead to the problem, including the map and game mode.
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happened
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Crash report and logs
+      description: |
+        A crash report is saved in `~/Library/Application Support/reFrozen/crashes/`. Paste it here
+        only if it contains no game files or keys.
+      render: text
+  - type: checkboxes
+    id: rules
+    attributes:
+      label: Before submitting
+      options:
+        - label: This report contains no game files, maps, CD keys or recompiled code.
+          required: true
