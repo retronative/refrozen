@@ -22,7 +22,34 @@ TESTS = {
     "builder": "test_builder_poc.py",
     "setup": "test_first_run_setup.py",
     "stack": "test_run_on_stack.py",
+    "mutate": "test_mutate.py",
 }
+
+# Focused runs (mutate.py --focused): the test_win32 --modes group that prints
+# a check, by the check's name prefix (first match). A mutant whose expected
+# check matches none, or whose group's unmutated run does not print it as ok,
+# runs the whole test.
+WIN32_GROUPS = (
+    ("N:", "N"), ("Q:", "Q"), ("FF:", "F"), ("F:", "F"), ("X:", "X"), ("S:", "S"), ("T:", "T"),
+    ("M:", "M"), ("D:", "D"), ("W:", "W"), ("V:", "V"), ("O:", "O"), ("L:", "L"), ("gl:", "L"),
+    ("P:", "P"), ("stop ", "stops"),
+    # mode A's flags
+    ("A:", "A"), ("iocp:", "A"), ("wsock:", "A"), ("profile:", "A"), ("named", "A"), ("display", "A"),
+    ("reg", "A"), ("cs:", "A"), ("lang", "A"), ("wave", "A"),
+)
+
+# mutate.py --changed: what a changed path can affect beyond the mutants in
+# that file (patches/x86recomp/*.patch count as the files they change). Each
+# rule: (changed path prefix, changed path suffix, the mutants it selects: a
+# file prefix, or "test:<key>").
+TEST_IMPORTS = {"test_loader.py": ("win32", "lifter")}  # test_win32/test_lifter_patches import it
+CHANGE_SCOPE = (
+    ("tools/x86recomp/src/runtime/", ".h", "tools/x86recomp/src/runtime/"),  # a runtime header
+    ("tools/x86recomp/tools/lifter/", "", "test:lifter"),  # the lifter lifts every test's guest code
+    ("tools/x86recomp/tools/lifter/", "", "test:loader"),
+    ("tools/x86recomp/tools/lifter/", "", "test:win32"),
+    ("tools/x86recomp/CMakeLists.txt", "", "tools/x86recomp/"),  # build flags of everything it builds
+)
 
 K32 = "tools/x86recomp/src/runtime/hle/kernel32.cpp"
 K32F = "tools/x86recomp/src/runtime/hle/kernel32_file.cpp"
@@ -1479,4 +1506,54 @@ MUTANTS = [
          old='"GetCurrentProcess", "GetProcessHeap", "GetTickCount",',
          new='"GetCurrentProcess", "GetProcessHeap",',
          expect="S: pure getters are counted, not timed"),
+    dict(id='R-G1', milestone="R", area="gate", file='tests/mutate.py', test="mutate",
+         fault="a restored mutant file is not recorded (a later sync can leave the mutant's object in the build)",
+         old='        if rel.startswith("x86recomp/"):\n            mark_restored(scratch, rel)\n',
+         new='',
+         expect='stale: the restored file is recorded'),
+    dict(id='R-G2', milestone="R", area="gate", file='tests/mutate.py', test="mutate",
+         fault="sync does not touch the restored files (rsync's older mtime keeps the mutant's object)",
+         old='            os.utime(os.path.join(scratch, rel))\n',
+         new='            pass\n',
+         expect='stale: after a sync, the restored file is rebuilt'),
+    dict(id='R-G3', milestone="R", area="gate", file='tests/mutate.py', test="mutate",
+         fault='a successful build keeps the record of restored files',
+         old='        os.remove(os.path.join(scratch, ".restored-unbuilt"))  # restored files are compiled now\n',
+         new='        pass\n',
+         expect='stale: a successful build clears the record'),
+    dict(id='R-G4', milestone="R", area="gate", file='tests/mutate.py', test="mutate",
+         fault='a focused run that survives decides the mutant (no whole test)',
+         old='        if status == "KILLED":\n            return status, detail, True\n',
+         new='        if status in ("KILLED", "SURVIVED"):\n            return status, detail, True\n',
+         expect='focused: SURVIVED goes to the whole test'),
+    dict(id='R-G5', milestone="R", area="gate", file='tests/mutate.py', test="mutate",
+         fault='a focused run that times out decides the mutant (no whole test)',
+         old='        if status == "KILLED":\n            return status, detail, True\n',
+         new='        if status in ("KILLED", "TIMEOUT"):\n            return status, detail, True\n',
+         expect='focused: TIMEOUT goes to the whole test'),
+    dict(id='R-G6', milestone="R", area="gate", file='tests/mutate.py', test="mutate",
+         fault='the group is used without checking that it prints the expected check',
+         old='        if g is not None and not any(m["expect"] in l for l in self.baseline("win32", self.args(g))):\n',
+         new='        if g is not None and not any(True for l in self.baseline("win32", self.args(g))):\n',
+         expect='focused: a group that does not print the expected check: the whole test'),
+    dict(id='R-G7', milestone="R", area="gate", file='tests/mutate.py', test="mutate",
+         fault='a timeout is classified KILLED',
+         old='        return "TIMEOUT", f"no result in {timeout} s"\n',
+         new='        return "KILLED", f"no result in {timeout} s"\n',
+         expect='classify: a timeout is never KILLED'),
+    dict(id='R-G8', milestone="R", area="gate", file='tests/mutate.py', test="mutate",
+         fault="--changed: a changed patch's files are not read from its +++ lines",
+         old='l.startswith("+++ b/")',
+         new='l.startswith("+++ a/")',
+         expect='changed: a changed patch selects the mutants in the files it changes'),
+    dict(id='R-G9', milestone="R", area="gate", file='tests/mutate.py', test="mutate",
+         fault='--changed: the tests that import a changed test are not selected',
+         old='            tests |= set(keys)\n',
+         new='            pass\n',
+         expect="changed: a changed test_loader.py selects test_win32's mutants"),
+    dict(id='R-G10', milestone="R", area="gate", file='tests/mutate.py', test="mutate",
+         fault="--changed: CHANGE_SCOPE's rules are not applied",
+         old='        if any(f.startswith(path) and f.endswith(suffix) for f in files):\n',
+         new='        if any(f.startswith(path) and f.endswith(suffix) and False for f in files):\n',
+         expect='changed: a runtime header selects every runtime mutant'),
 ]

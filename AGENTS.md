@@ -32,7 +32,9 @@ ctest --test-dir tools/x86recomp/out/build/debug   # "pacing" is a known timing 
 /opt/homebrew/bin/python3 -I tests/test_font_keydata.py       # needs game/wine-oracle + the readme
 /opt/homebrew/bin/python3 -I tests/test_jumptable_corrections.py
 /opt/homebrew/bin/python3 -I tests/test_run_on_stack.py      # patch 0022: the main guest stack's end frame
-/opt/homebrew/bin/python3 -I tests/mutate.py [--milestone M3]  # the mutation gate (scratch tree)
+/opt/homebrew/bin/python3 -I tests/mutate.py [--milestone M3]  # the mutation gate (scratch tree): sign-off
+/opt/homebrew/bin/python3 -I tests/mutate.py --changed main --focused  # focused gate while working
+/opt/homebrew/bin/python3 -I tests/test_mutate.py            # the gate's own rules
 # Per module (symbols dir names: war3 game storm mss32 msvcr80 ijl15 mp3dec_asi mssfast_m3d
 # msseax2_m3d mssdolby_m3d reverb3_flt), e.g. game.dll: Ghidra analysis + exports (JDK 25, ~4 min for game.dll),
 JAVA_HOME=/opt/homebrew/opt/openjdk@25 MAXMEM=8G /opt/homebrew/opt/ghidra/libexec/support/analyzeHeadless \
@@ -119,6 +121,14 @@ scripts/wine_loadtest.sh game/wine-oracle 'Maps\Download\<map>.w3x' 60 game/load
   EQUIVALENT; survivors fixed by better tests, not weaker mutants) and `reference/TEST_COVERAGE.md`
   records each mutant, its expected failure, the observed result and any survivors. Earlier
   milestones' mutants stay in the registry and are re-run.
+- While working, `tests/mutate.py --changed <ref> --focused` runs only the mutants the changes can
+  affect (their files, patched files, changed or importing tests, changed registry entries,
+  `CHANGE_SCOPE`), each test_win32 mutant on the `--modes` group that prints its expected check
+  (`WIN32_GROUPS`; the group's unmutated run must print that check) with the compiled test
+  program reused while its inputs are unchanged. Only a kill by the expected check counts there;
+  anything else is decided by the whole test. Run it attached (mode N). It does not replace the
+  default run, which signs off milestones and releases. A new check-name prefix goes into
+  `WIN32_GROUPS`, a new indirect dependency into `CHANGE_SCOPE` or `TEST_IMPORTS`.
 - Tests stay deterministic; never weaken an assertion, suppress a failure or change production
   behaviour only to satisfy a test.
 
