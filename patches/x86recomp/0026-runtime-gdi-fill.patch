@@ -1,0 +1,338 @@
+diff --git a/src/runtime/hle/gdi32.cpp b/src/runtime/hle/gdi32.cpp
+index 6889b18..c61eb13 100644
+--- a/src/runtime/hle/gdi32.cpp
++++ b/src/runtime/hle/gdi32.cpp
+@@ -1,11 +1,16 @@
+ // gdi32: device contexts, fonts and metrics. The game draws through
+-// DirectDraw; GDI is only queried (metrics, device caps). Drawing calls
++// DirectDraw; GDI is only queried (metrics, device caps), except for
++// solid fills on windows (user32_window.cpp: FillRect, WM_ERASEBKGND,
++// GetPixel), which the game's movie backdrop uses. Other drawing calls
+ // succeed without output. If the game turns out to render glyphs through
+ // GDI (TextOutW/GetDIBits suggest IME text), real rasterisation goes here.
+ 
+ #include <atomic>
+ #include <cstring>
++#include <map>
++#include <mutex>
+ 
++#include "runtime/hle/gdi32.h"
+ #include "runtime/hle/hle.h"
+ #include "runtime/hle/input_state.h"
+ #include "runtime/log.h"
+@@ -15,16 +20,27 @@ namespace {
+ 
+ std::atomic<uint32_t> g_next_gdi{0x00E00010};
+ uint32_t NewGdi() { return g_next_gdi += 0x10; }
++std::mutex g_brush_mu;
++std::map<uint32_t, uint32_t> g_brush_color;  // CreateSolidBrush's handles -> COLORREF
+ 
+ // Stock objects get fixed handles so repeated GetStockObject calls agree.
+ HLE("gdi32.dll", GetStockObject, 1) { return 0x00E00000u | (Arg(c, 0) & 0xFF); }
+ HLE("gdi32.dll", CreateFontA, 14) { return NewGdi(); }
+ HLE("gdi32.dll", CreateFontIndirectA, 1) { return NewGdi(); }
+ HLE("gdi32.dll", CreateHatchBrush, 2) { return NewGdi(); }
+-HLE("gdi32.dll", CreateSolidBrush, 1) { return NewGdi(); }
++HLE("gdi32.dll", CreateSolidBrush, 1) {
++  uint32_t h = NewGdi();
++  std::lock_guard<std::mutex> l(g_brush_mu);
++  g_brush_color[h] = Arg(c, 0) & 0xFFFFFFu;
++  return h;
++}
+ HLE("gdi32.dll", CreateCompatibleDC, 1) { return NewGdi(); }
+ HLE("gdi32.dll", CreateCompatibleBitmap, 3) { return NewGdi(); }
+-HLE("gdi32.dll", DeleteObject, 1) { return 1; }
++HLE("gdi32.dll", DeleteObject, 1) {
++  std::lock_guard<std::mutex> l(g_brush_mu);
++  g_brush_color.erase(Arg(c, 0));
++  return 1;
++}
+ HLE("gdi32.dll", DeleteDC, 1) { return 1; }
+ HLE("gdi32.dll", SelectObject, 2) { return 0x00E00000u; }
+ 
+@@ -78,7 +94,6 @@ HLE("gdi32.dll", GetCharWidthA, 4) {
+ 
+ HLE("gdi32.dll", TextOutW, 5) { return 1; }
+ HLE("gdi32.dll", ExtTextOutA, 8) { return 1; }
+-HLE("gdi32.dll", GetPixel, 3) { return 0; }
+ HLE("gdi32.dll", DPtoLP, 3) { return 1; }
+ 
+ HLE("gdi32.dll", GetDIBits, 7) {
+@@ -87,4 +102,27 @@ HLE("gdi32.dll", GetDIBits, 7) {
+ }
+ 
+ }  // namespace
++
++// The stock brushes' colours (MSDN GetStockObject): WHITE_BRUSH 0, LTGRAY_BRUSH
++// 1 (192), GRAY_BRUSH 2 (128), DKGRAY_BRUSH 3 (64), BLACK_BRUSH 4, NULL_BRUSH 5.
++// Stock objects are 0x00E00000 + index (indices below 0x20); NewGdi's handles
++// start at 0x00E00020.
++BrushKind BrushColor(uint32_t brush, uint32_t* color) {
++  if ((brush & 0xFFFFFFE0u) == 0x00E00000u) {
++    switch (brush & 0xFF) {
++      case 0: *color = 0xFFFFFFu; return BrushKind::Solid;
++      case 1: *color = 0xC0C0C0u; return BrushKind::Solid;
++      case 2: *color = 0x808080u; return BrushKind::Solid;
++      case 3: *color = 0x404040u; return BrushKind::Solid;
++      case 4: *color = 0x000000u; return BrushKind::Solid;
++      case 5: return BrushKind::Hollow;
++      default: return BrushKind::Unknown;
++    }
++  }
++  std::lock_guard<std::mutex> l(g_brush_mu);
++  auto it = g_brush_color.find(brush);
++  if (it == g_brush_color.end()) return BrushKind::Unknown;
++  *color = it->second;
++  return BrushKind::Solid;
++}
+ }  // namespace recomp::hle
+diff --git a/src/runtime/hle/gdi32.h b/src/runtime/hle/gdi32.h
+new file mode 100644
+index 0000000..e989522
+--- /dev/null
++++ b/src/runtime/hle/gdi32.h
+@@ -0,0 +1,13 @@
++#pragma once
++// gdi32 objects other HLE modules draw with (user32's FillRect and
++// WM_ERASEBKGND): the stock brushes and CreateSolidBrush's.
++#include <cstdint>
++
++namespace recomp::hle {
++
++enum class BrushKind { Solid, Hollow, Unknown };
++// Solid: *color is the brush's COLORREF (0x00BBGGRR); Hollow: NULL_BRUSH,
++// which draws nothing; Unknown: not a brush this runtime can fill with.
++BrushKind BrushColor(uint32_t brush, uint32_t* color);
++
++}  // namespace recomp::hle
+diff --git a/src/runtime/hle/present.cpp b/src/runtime/hle/present.cpp
+index 683c005..c27eca3 100644
+--- a/src/runtime/hle/present.cpp
++++ b/src/runtime/hle/present.cpp
+@@ -144,6 +144,7 @@ uint64_t GfxWindowFlags() {
+ std::unique_ptr<gfx::Device> CreateGfxDevice(SDL_Window* w) {
+   std::unique_ptr<gfx::Device> d = gfx::CreateDevice(GfxBackend(), w);
+   if (!d) FatalF("cannot create the graphics device");
++  OnGfxDeviceCreated(w);
+   return d;
+ }
+ 
+diff --git a/src/runtime/hle/user32_window.cpp b/src/runtime/hle/user32_window.cpp
+index d4fcda7..bc6b2b2 100644
+--- a/src/runtime/hle/user32_window.cpp
++++ b/src/runtime/hle/user32_window.cpp
+@@ -25,6 +25,7 @@
+ #include <vector>
+ 
+ #include "runtime/display.h"
++#include "runtime/hle/gdi32.h"
+ #include "runtime/hle/hle.h"
+ #include "runtime/hle/input_state.h"
+ #include "runtime/hle/kernel32_state.h"
+@@ -114,8 +115,25 @@ struct Window {
+   // `title`; selection, font, image and check state are kept here.
+   uint32_t sel_lo = 0, sel_hi = 0, font = 0, image = 0, check = 0;
+   uint32_t limit = 30000;  // edit text limit (EM_SETLIMITTEXT)
++  // GDI drawing (FillRect, the class brush's erase): the client area's
++  // pixels as COLORREFs, shown through an SDL renderer on the window.
++  // Only for windows no graphics device presents on.
++  std::vector<uint32_t> gdi_px;
++  int gdi_w = 0, gdi_h = 0;
++  SDL_Renderer* gdi_r = nullptr;
++  SDL_Texture* gdi_tex = nullptr;
++  bool gfx = false;  // a graphics device presents on this window
+ };
+ 
++void GdiRelease(Window& w) {
++  if (w.gdi_tex) SDL_DestroyTexture(w.gdi_tex);
++  if (w.gdi_r) SDL_DestroyRenderer(w.gdi_r);
++  w.gdi_tex = nullptr;
++  w.gdi_r = nullptr;
++  w.gdi_px.clear();
++  w.gdi_w = w.gdi_h = 0;
++}
++
+ struct Msg {
+   uint32_t hwnd, msg, wparam, lparam, time;
+   int32_t ptx, pty;
+@@ -1316,6 +1334,16 @@ uint32_t DcForWindow(uint32_t hwnd) { return hwnd ? 0x40000000u | hwnd : 0x00D00
+ 
+ uint32_t WindowForDc(uint32_t hdc) { return hdc & 0x40000000u ? hdc & ~0x40000000u : 0; }
+ 
++void OnGfxDeviceCreated(SDL_Window* sdl) {
++  std::lock_guard<std::recursive_mutex> lk(g_mu);
++  for (auto& [h, w] : g_windows) {
++    if (w.sdl != sdl) continue;
++    if (w.gdi_r || !w.gdi_px.empty())
++      FatalF("a graphics device on window %08X, which has GDI drawing on it: not implemented", h);
++    w.gfx = true;
++  }
++}
++
+ SDL_Window* SdlWindowFor(uint32_t hwnd) {
+   std::lock_guard<std::recursive_mutex> l(g_mu);
+   Window* w = Win(hwnd);
+@@ -1377,6 +1405,7 @@ void ClientAreaSize(uint32_t hwnd, int* w, int* h) {
+ 
+ namespace hle {
+ namespace {
++bool GdiFillWindow(uint32_t hwnd, int32_t l, int32_t t, int32_t r, int32_t b, uint32_t brush, const char* who);
+ 
+ using namespace win32;
+ 
+@@ -1598,6 +1627,7 @@ HLE("user32.dll", DestroyWindow, 1) {
+       g_clip.hwnd = 0;
+       if (w->sdl) SDL_SetWindowRelativeMouseMode(w->sdl, false);
+     }
++    GdiRelease(*w);
+     if (w->sdl) SDL_DestroyWindow(w->sdl);
+     w->sdl = nullptr;
+     w->destroyed = true;
+@@ -2286,8 +2316,10 @@ HLE("user32.dll", DefWindowProcA, 4) {
+         brush = w ? w->background : 0;
+       }
+       if (!brush) return 0;
+-      FatalF("DefWindowProc(WM_ERASEBKGND): erasing with class brush %08X is GDI drawing, "
+-             "which is not implemented", brush);
++      // Wine's DefWindowProc: FillRect with the class brush (a hollow
++      // brush draws nothing), then nonzero.
++      GdiFillWindow(hwnd, 0, 0, INT32_MAX, INT32_MAX, brush, "DefWindowProc(WM_ERASEBKGND)");
++      return 1;
+     }
+     case WM_NCHITTEST: return 1;  // HTCLIENT
+     case WM_SYSCOMMAND: {
+@@ -2729,8 +2761,8 @@ HLE("user32.dll", ChangeDisplaySettingsExA, 5) {
+   return ChangeDisplay(Arg(c, 1), flags);
+ }
+ 
+-// ---- painting and GDI device contexts (no GDI drawing reaches the screen;
+-// the game renders through DirectDraw) -------------------------------------------------
++// ---- painting and GDI device contexts (GDI drawing: solid fills on windows
++// without a graphics device; the game renders through DirectDraw) ---------------------
+ 
+ // Device contexts are named after their window (see DcForWindow); the
+ // screen DC (GetDC(NULL)) is a constant.
+@@ -2769,15 +2801,101 @@ HLE("user32.dll", BeginPaint, 2) {
+ }
+ HLE("user32.dll", EndPaint, 2) { return 1; }
+ 
+-// GDI drawing: no DC here has pixels behind it (windows show what the
+-// graphics APIs present), so drawing is a strict stop, never a silent
+-// success. The game draws with GDI only in its movie backdrop and dialog
+-// paths (FEASIBILITY §11).
++// GDI drawing. A window's DC has a surface of COLORREFs the size of its
++// client area, black until drawn on, shown through an SDL renderer on the
++// window (a texture of the whole surface, presented after each fill). The
++// game draws with GDI only in its movie backdrop and dialog paths
++// (FEASIBILITY §11): the backdrop is a FillRect with the black stock brush
++// behind a cinematic. Anything else stays a strict stop, never a silent
++// success: the screen DC (no pixels behind it), a window a graphics device
++// presents on (the two would fight over the window), a child window (no SDL
++// window of its own), a brush that is not solid, and text (DrawTextA).
++
++// The window's surface, sized to its client area (resized: cleared).
++std::vector<uint32_t>& GdiSurface(Window& w) {
++  int cw, ch;
++  ClientSize(w, &cw, &ch);
++  if (w.gdi_w != cw || w.gdi_h != ch) {
++    w.gdi_px.assign(size_t(cw) * size_t(ch), 0);
++    w.gdi_w = cw;
++    w.gdi_h = ch;
++    if (w.gdi_tex) SDL_DestroyTexture(w.gdi_tex);
++    w.gdi_tex = nullptr;
++  }
++  return w.gdi_px;
++}
++
++// Shows the surface on the window.
++void GdiPresent(Window& w) {
++  if (!w.gdi_r) {
++    w.gdi_r = SDL_CreateRenderer(w.sdl, nullptr);
++    if (!w.gdi_r) FatalF("SDL_CreateRenderer for GDI drawing on window %08X: %s", w.hwnd, SDL_GetError());
++  }
++  if (!w.gdi_tex) {
++    w.gdi_tex = SDL_CreateTexture(w.gdi_r, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, w.gdi_w, w.gdi_h);
++    if (!w.gdi_tex) FatalF("SDL_CreateTexture for GDI drawing on window %08X: %s", w.hwnd, SDL_GetError());
++  }
++  std::vector<uint32_t> argb(w.gdi_px.size());
++  for (size_t i = 0; i < argb.size(); i++) {
++    const uint32_t c = w.gdi_px[i];  // COLORREF 0x00BBGGRR -> 0xFFRRGGBB
++    argb[i] = 0xFF000000u | ((c & 0xFFu) << 16) | (c & 0xFF00u) | ((c >> 16) & 0xFFu);
++  }
++  SDL_UpdateTexture(w.gdi_tex, nullptr, argb.data(), w.gdi_w * 4);
++  SDL_RenderClear(w.gdi_r);
++  SDL_RenderTexture(w.gdi_r, w.gdi_tex, nullptr, nullptr);
++  SDL_RenderPresent(w.gdi_r);
++}
++
++// Fills (l,t)-(r,b) of hwnd's client area with `brush`, clipped to the
++// client area; the right and bottom edges are excluded (MSDN FillRect).
++// False for a window that is not open.
++bool GdiFillWindow(uint32_t hwnd, int32_t l, int32_t t, int32_t r, int32_t b, uint32_t brush, const char* who) {
++  uint32_t color = 0;
++  switch (BrushColor(brush, &color)) {
++    case BrushKind::Hollow: return true;  // NULL_BRUSH draws nothing
++    case BrushKind::Unknown: FatalF("%s: brush %08X is not a solid brush: not implemented", who, brush);
++    case BrushKind::Solid: break;
++  }
++  std::lock_guard<std::recursive_mutex> lk(g_mu);
++  Window* w = Win(hwnd);
++  if (!w || w->destroyed) return false;
++  if (w->gfx) FatalF("%s: GDI drawing on window %08X, which a graphics device presents on: not implemented", who, hwnd);
++  if (!w->sdl) FatalF("%s: GDI drawing on child window %08X is not implemented", who, hwnd);
++  std::vector<uint32_t>& px = GdiSurface(*w);
++  l = std::max(l, 0);
++  t = std::max(t, 0);
++  r = std::min(r, w->gdi_w);
++  b = std::min(b, w->gdi_h);
++  for (int32_t y = t; y < b; y++)
++    for (int32_t x = l; x < r; x++) px[size_t(y) * size_t(w->gdi_w) + size_t(x)] = color;
++  GdiPresent(*w);
++  return true;
++}
++
+ HLE("user32.dll", FillRect, 3) {
+   uint32_t rc = Arg(c, 1);
+-  FatalF("FillRect(hdc %08X, (%d,%d)-(%d,%d), brush %08X): GDI drawing is not implemented",
+-         Arg(c, 0), int32_t(Rd32(rc)), int32_t(Rd32(rc + 4)), int32_t(Rd32(rc + 8)),
+-         int32_t(Rd32(rc + 12)), Arg(c, 2));
++  const int32_t l = int32_t(Rd32(rc)), t = int32_t(Rd32(rc + 4)), r = int32_t(Rd32(rc + 8)), b = int32_t(Rd32(rc + 12));
++  uint32_t hwnd = WindowForDc(Arg(c, 0));
++  if (!hwnd)
++    FatalF("FillRect(hdc %08X, (%d,%d)-(%d,%d), brush %08X): drawing on the screen DC is not implemented",
++           Arg(c, 0), l, t, r, b, Arg(c, 2));
++  char who[64];
++  std::snprintf(who, sizeof who, "FillRect(hdc %08X, (%d,%d)-(%d,%d)", Arg(c, 0), l, t, r, b);
++  return GdiFillWindow(hwnd, l, t, r, b, Arg(c, 2), who) ? 1 : 0;
++}
++// GetPixel on a window DC reads its surface: CLR_INVALID outside the client
++// area (MSDN: outside the clipping region). Other DCs have no pixels and
++// answer 0, as before.
++HLE("gdi32.dll", GetPixel, 3) {
++  uint32_t hwnd = WindowForDc(Arg(c, 0));
++  if (!hwnd) return 0;
++  const int32_t x = int32_t(Arg(c, 1)), y = int32_t(Arg(c, 2));
++  std::lock_guard<std::recursive_mutex> lk(g_mu);
++  Window* w = Win(hwnd);
++  if (!w || w->destroyed) return 0xFFFFFFFFu;
++  std::vector<uint32_t>& px = GdiSurface(*w);
++  if (x < 0 || y < 0 || x >= w->gdi_w || y >= w->gdi_h) return 0xFFFFFFFFu;  // CLR_INVALID
++  return px[size_t(y) * size_t(w->gdi_w) + size_t(x)];
+ }
+ HLE("user32.dll", DrawTextA, 5) {
+   int32_t n = int32_t(Arg(c, 2));
+diff --git a/src/runtime/hle/user32_window.h b/src/runtime/hle/user32_window.h
+index 2230bac..48c0f7d 100644
+--- a/src/runtime/hle/user32_window.h
++++ b/src/runtime/hle/user32_window.h
+@@ -21,6 +21,10 @@ SDL_Window* SdlWindowFor(uint32_t hwnd);
+ // (0 for the screen DC or anything else).
+ uint32_t DcForWindow(uint32_t hwnd);
+ uint32_t WindowForDc(uint32_t hdc);
++// A graphics device (ddraw, d3d9, opengl32) now presents on this SDL
++// window: GDI drawing on it is refused from here on (and a window that
++// already has GDI drawing cannot get a device).
++void OnGfxDeviceCreated(SDL_Window* w);
+ 
+ // Whether the caller is the guest's main thread (the one SDL's video and
+ // events belong to).

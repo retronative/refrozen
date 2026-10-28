@@ -42,13 +42,16 @@ Modes (the command line's last character):
      is refused. One 1/0 flag per check.
   D  painting (M4): update regions, WM_PAINT synthesis and order,
      UpdateWindow, BeginPaint's PAINTSTRUCT and WM_ERASEBKGND, invalidation
-     by show and resize, DefWindowProc's WM_PAINT. One 1/0 flag per check.
+     by show and resize, DefWindowProc's WM_PAINT; GDI fills (patch 0026):
+     FillRect with stock and solid brushes read back with GetPixel (edges
+     excluded, NULL_BRUSH, CLR_INVALID outside the client), DefWindowProc
+     erasing with the class brush. One 1/0 flag per check.
   1-5  the other forms M3 does not implement, each a stop with its diagnostic:
      monitor enumeration (EnumDisplayDevicesA), ChangeDisplaySettingsExA with
      an hwnd, CreateIoCompletionPort on a file handle, GetProfileStringA
      enumeration, CreateWindowExA(WS_MINIMIZE).
-  6-9  GDI drawing M4 does not implement, each a stop: FillRect, DrawTextA,
-     InvalidateRect(NULL), DefWindowProc erasing with a class brush.
+  6-9  GDI drawing not implemented, each a stop: FillRect on the screen DC,
+     DrawTextA, InvalidateRect(NULL), FillRect with a hatch brush.
 
 Expected values come from Windows' documented behaviour and Wine's
 conformance tests (which pass on Windows), ReactOS where named, and the
@@ -131,6 +134,7 @@ IMPORTS = [
                     "wsprintfA", "SystemParametersInfoA", "InvalidateRect", "UpdateWindow", "BeginPaint",
                     "EndPaint", "FillRect", "DrawTextA", "PeekMessageA", "DispatchMessageA",
                     "PostMessageA", "SetTimer", "SetWindowPos"]),
+    ("gdi32.dll", ["GetStockObject", "CreateSolidBrush", "CreateHatchBrush", "GetPixel"]),
     ("advapi32.dll", ["RegOpenKeyExA", "RegQueryValueExA"]),
     ("winmm.dll", ["waveOutOpen", "waveOutGetDevCapsA", "waveOutPrepareHeader", "waveOutUnprepareHeader",
                    "waveOutWrite", "waveOutReset", "waveOutClose", "waveOutGetID"]),
@@ -158,7 +162,8 @@ class Guest:
         self.var = {k: self.d.put(b"\0" * 4) for k in
                     ("hk", "type", "size", "lang", "port", "bytes", "key", "ovl", "wkey", "thread",
                      "hwave", "hwnd", "hdc", "logn", "seg0", "seg1", "seg2", "seg3", "hover", "tryres",
-                     "pcount", "perase", "pl", "pt", "pr", "pb", "phdc", "ecount", "hp", "hq", "cn", "xself")}
+                     "pcount", "perase", "pl", "pt", "pr", "pb", "phdc", "ecount", "hp", "hq", "cn", "xself",
+                     "hdc", "hbr")}
         self.clicks = self.d.put(b"\0" * 16)  # mode F: WM_LBUTTONDOWN lParams
         self.ps = self.d.put(b"\0" * 64)    # PAINTSTRUCT
         self.msg = self.d.put(b"\0" * 28)   # MSG
@@ -166,6 +171,9 @@ class Guest:
         self.r2 = self.d.put(struct.pack("<iiii", 20, 10, 60, 40))
         self.r3 = self.d.put(struct.pack("<iiii", 200, 200, 300, 300))
         self.r4 = self.d.put(struct.pack("<iiii", 1, 2, 3, 4))
+        self.r5 = self.d.put(struct.pack("<iiii", 0, 0, 100, 50))
+        self.r6 = self.d.put(struct.pack("<iiii", 10, 5, 60, 40))
+        self.r7 = self.d.put(struct.pack("<iiii", 0, 0, 1, 1))
         self.wc2 = self.d.put(b"\0" * 40)
         self.wc3 = self.d.put(b"\0" * 40)
         self.wc4 = self.d.put(b"\0" * 40)
@@ -411,7 +419,7 @@ def build_text(g):
         g.d.b[va - g.d.va0:va - g.d.va0 + 40] = struct.pack("<IIIIIIIIII", style, TEXT + PAINTPROC, 0, 0, EXE,
                                                             0, 0, 0, 0, g.str(name))
     g.d.b[g.wc4 - g.d.va0:g.wc4 - g.d.va0 + 40] = struct.pack("<IIIIIIIIII", 0, TEXT + WNDPROC, 0, 0, EXE, 0, 0,
-                                                              0x00E00004, 0, g.str("T4"))
+                                                              0x00E00000, 0, g.str("T4"))
     P = lambda k: f"dword ptr [{v[k]:#x}]"
     NL = "\n"
 
@@ -507,6 +515,41 @@ def build_text(g):
     d += f"  mov dword ptr [{v['hp']:#x}], eax{NL}" + pump()
     d += g.call("SetWindowPos", P("hp"), 0, 0, 0, 120, 50, 0x16) + pump()
     d += paint_is("D: grown, CS_HREDRAW", 7, 1, 0, 0, 120, 50)
+    # GDI fills on a fresh 100x50 popup (patch 0026), read back with GetPixel.
+    d += g.call("CreateWindowExA", 0, g.str("T2"), g.str("f"), 0x90000000, 0, 0, 100, 50, 0, 0, EXE, 0)
+    d += f"  mov dword ptr [{v['hp']:#x}], eax{NL}" + pump() + g.call("GetDC", P("hp"))
+    d += f"  mov dword ptr [{v['hdc']:#x}], eax{NL}"
+    PX = lambda name, x, y, want: g.call("GetPixel", P("hdc"), x, y) + g.chk(name, g.eq(want))
+    d += g.call("FillRect", P("hdc"), g.r5, 0x00E00000) + g.chk("D: fill: FillRect with WHITE_BRUSH returns 1", g.eq(1))
+    d += PX("D: fill: a pixel inside is white (COLORREF 00FFFFFF)", 0, 0, 0xFFFFFF)
+    d += PX("D: fill: the far corner (99,49) is white", 99, 49, 0xFFFFFF)
+    d += g.call("CreateSolidBrush", 0x00030201) + f"  mov dword ptr [{v['hbr']:#x}], eax{NL}"
+    d += g.call("FillRect", P("hdc"), g.r6, P("hbr")) + g.chk("D: fill: FillRect with a solid brush returns 1", g.eq(1))
+    d += PX("D: fill: a solid brush fills (10,5)-(60,40): (10,5)", 10, 5, 0x030201)
+    d += PX("D: fill: the solid brush's colour, COLORREF 0x00BBGGRR (59,39)", 59, 39, 0x030201)
+    d += PX("D: fill: the right edge is excluded (60,20)", 60, 20, 0xFFFFFF)
+    d += PX("D: fill: the bottom edge is excluded (30,40)", 30, 40, 0xFFFFFF)
+    d += PX("D: fill: outside the rect untouched (9,5)", 9, 5, 0xFFFFFF)
+    d += g.call("FillRect", P("hdc"), g.r6, 0x00E00005) + g.chk("D: fill: NULL_BRUSH returns 1", g.eq(1))
+    d += PX("D: fill: NULL_BRUSH draws nothing", 10, 5, 0x030201)
+    d += PX("D: GetPixel outside the client is CLR_INVALID (100,0)", 100, 0, 0xFFFFFFFF)
+    d += PX("D: GetPixel at a negative coordinate is CLR_INVALID", 0xFFFFFFFF, 0, 0xFFFFFFFF)
+    for idx, name, want in ((2, "GRAY_BRUSH is RGB(128,128,128)", 0x808080), (1, "LTGRAY_BRUSH is RGB(192,192,192)", 0xC0C0C0),
+                            (3, "DKGRAY_BRUSH is RGB(64,64,64)", 0x404040), (4, "BLACK_BRUSH is black", 0)):
+        d += g.call("FillRect", P("hdc"), g.r7, 0x00E00000 | idx) + PX(f"D: fill: {name}", 0, 0, want)
+    # Resized: the surface takes the new client size, cleared (so the pixel
+    # that was outside the old surface exists, black).
+    d += g.call("SetWindowPos", P("hp"), 0, 0, 0, 120, 50, 0x16)
+    d += PX("D: fill: after a resize the surface has the new size (110,10 is a pixel, black)", 110, 10, 0)
+    d += PX("D: fill: ... and was cleared (0,0)", 0, 0, 0)
+    # DefWindowProc(WM_ERASEBKGND) with a class brush (T4: WHITE_BRUSH) fills
+    # the client area (Wine's DefWindowProc: FillRect, then nonzero).
+    d += g.call("RegisterClassA", g.wc4)
+    d += g.call("CreateWindowExA", 0, g.str("T4"), g.str("g"), 0x90000000, 0, 0, 64, 64, 0, 0, EXE, 0)
+    d += f"  mov dword ptr [{v['hq']:#x}], eax{NL}" + pump() + g.call("GetDC", P("hq"))
+    d += f"  mov dword ptr [{v['hdc']:#x}], eax{NL}"
+    d += PX("D: T4: DefWindowProc erased the client with the class brush (0,0)", 0, 0, 0xFFFFFF)
+    d += PX("D: T4: ... to the far corner (63,63)", 63, 63, 0xFFFFFF)
     g.d_code = d
     g.d_names, g.names = g.names[first_d:], g.names[:first_d]
 
@@ -1085,8 +1128,8 @@ def build_text(g):
         g.call("FillRect", 0x00D00001, g.r4, 0x00E00004),
         g.call("DrawTextA", 0x00D00001, g.str("hi"), -1, g.r4, 0x25),
         g.call("InvalidateRect", 0, 0, 1),
-        g.call("RegisterClassA", g.wc4) + g.call("CreateWindowExA", 0, g.str("T4"), g.str("b"), 0x90000000,
-                                                0, 0, 64, 64, 0, 0, EXE, 0) + pump(),
+        mkclass + win("z9", 0x80000000, 0, 0, 64, 64) + "  mov edi, eax\n" + g.call("CreateHatchBrush", 0, 0)
+        + "  mov esi, eax\n" + g.call("GetDC", "edi") + g.call("FillRect", "eax", g.r4, "esi"),
         g.call(23, 2, 1, 0) + g.call("WriteFile", "eax", g.tmp, 1, g.n, g.ovl),
         g.call(23, 2, 1, 0) + g.call("ReadFile", "eax", g.tmp, 1, g.n, 0),
         g.call("AcceptEx", 0, 0, g.tmp, 4, 32, 32, 0, g.ovl),
@@ -1831,11 +1874,10 @@ def main():
                         "CreateIoCompletionPort: associating a handle that is not a file is not implemented",
                         "GetProfileStringA: enumerating sections or keys is not implemented",
                         "CreateWindowExA: WS_MINIMIZE (created minimized) is not implemented",
-                        "FillRect(hdc 00D00001, (1,2)-(3,4), brush 00E00004): GDI drawing is not implemented",
+                        "FillRect(hdc 00D00001, (1,2)-(3,4), brush 00E00004): drawing on the screen DC is not implemented",
                         'DrawTextA(hdc 00D00001, "hi", format 00000025): GDI drawing is not implemented',
                         "InvalidateRect(NULL, ...): invalidating the whole desktop is not implemented",
-                        "DefWindowProc(WM_ERASEBKGND): erasing with class brush 00E00004 is GDI drawing, "
-                        "which is not implemented",
+                        "FillRect(hdc 40010010, (1,2)-(3,4): brush 00E00020 is not a solid brush: not implemented",
                         "WriteFile on a socket is not implemented",
                         "ReadFile on a socket without an OVERLAPPED is not implemented",
                         "AcceptEx receiving data with the connection is not implemented"]):
