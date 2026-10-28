@@ -23,6 +23,14 @@ if(REFROZEN_DYNAMIC_MODULE)
   add_executable(refrozen src/main.cpp)
   target_compile_definitions(refrozen PRIVATE REFROZEN_DYNAMIC_MODULE
     REFROZEN_MODULE_STAMP="${REFROZEN_MODULE_STAMP}")
+  # The app starts the game by replacing itself with this launcher, so macOS
+  # asks the launcher for local network access: give it an Info.plist (its
+  # name, a stable identity, the usage description), embedded as
+  # __TEXT,__info_plist since the launcher is not a bundle.
+  configure_file(src/launcher-Info.plist.in "${CMAKE_CURRENT_BINARY_DIR}/launcher-Info.plist" @ONLY)
+  target_link_options(refrozen PRIVATE
+    "LINKER:-sectcreate,__TEXT,__info_plist,${CMAKE_CURRENT_BINARY_DIR}/launcher-Info.plist")
+  set_property(TARGET refrozen APPEND PROPERTY LINK_DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/launcher-Info.plist")
 else()
   # The recompiled modules, generated from the player's own files by scripts/lift.sh
   # (git-ignored). Re-run cmake after lifting.

@@ -58,6 +58,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>LSApplicationCategoryType</key><string>public.app-category.games</string>
   <key>NSHighResolutionCapable</key><true/>
+  <key>NSLocalNetworkUsageDescription</key><string>reFrozen uses your local network to find, host and join Warcraft III LAN games with other Macs on the same network.</string>
   <key>NSHumanReadableCopyright</key><string>reFrozen is free software under the GNU GPL v3 or later. Not affiliated with Blizzard Entertainment.</string>
 </dict>
 </plist>
@@ -85,8 +86,16 @@ done
 install_name_tool -id @rpath/libstorm.dylib "$KIT/lib/libstorm.dylib"
 strip -S "$KIT"/bin/* "$KIT"/lib/*.dylib "$APP/Contents/MacOS/reFrozen" 2>/dev/null || true
 
-# Ad hoc signatures, inside out.
-codesign --force -s - "$KIT"/bin/* "$KIT"/lib/*.dylib
+# Ad hoc signatures, inside out. The game launcher gets a stable identifier
+# (its embedded Info.plist's): macOS keys local network permission to it.
+codesign --force -s - "$KIT"/lib/*.dylib
+for f in "$KIT"/bin/*; do
+  if [ "$(basename "$f")" = refrozen ]; then
+    codesign --force -s - --identifier org.retronative.refrozen.game "$f"
+  else
+    codesign --force -s - "$f"
+  fi
+done
 codesign --force -s - "$APP"
 codesign --verify --deep --strict "$APP"
 echo "app: $APP ($(du -sh "$APP" | cut -f1)), kit stamp $STAMP"
