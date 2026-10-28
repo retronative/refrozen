@@ -244,7 +244,8 @@ LAN play is Mac to Mac.
 **Outside v0.2.0:** Windows 1.26a interoperability (the stretch goal above) and M7b private
 servers.
 
-**Status (2026-10-28):**
+**Status (2026-10-28):** the current release status, with the two-Mac results, is in
+`M7_READINESS.md`; the notes below record how it was reached.
 - Determinism: VERIFIED for reFrozen against itself (record vs playback, a 30-minute match), and
   across Macs (M1 and M5, the same replay).
 - Patch 0023 (Winsock 1.1): implemented and tested on its branch, not merged.
