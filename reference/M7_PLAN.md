@@ -277,6 +277,42 @@ wording, then allow it.
 8. Afterwards on both: no `hangs/` dump, no FATAL in the logs; keep the logs and replays.
 9. The release requirement's 30+ minute DotA session is a separate, later session.
 
+### Two-Mac smoke test results (2026-10-28, patch 0024 build, main 98b2e48)
+
+Booty Bay, isolated test installs on both Macs (the installed v0.1.0 and its data untouched).
+- **M1 hosts, M5 joins: pass.** Discovery, lobby, chat both ways, about 2 minutes of play, clean
+  exit; replays: same seed, 3286 of 3286 per-turn checksums identical.
+- **M5 hosts, M1 joins: pass once the M5's VPN was disconnected.** Lobby and in-game chat both ways;
+  replays 2433 of 2433 identical; the host leaving ends the game for the joiner without a hang.
+- **VPN finding:** the game's LAN discovery broadcasts (UDP 6112) go to 255.255.255.255, which macOS
+  routes by the primary service; with a VPN there, into its tunnel, which refuses them
+  (`EADDRNOTAVAIL`), so a Mac with a VPN on can join but not host. Patch 0025 sends them to each
+  local network's broadcast address instead.
+- **Local Network permission:** macOS asks once per app identity ("Allow “refrozen” to find devices
+  on local networks?"); until allowed, the first broadcast fails with `EHOSTUNREACH`. The prompt
+  names the game launcher (the app replaces itself with it), not the app: see the launcher
+  identity work.
+
+### VPN-on acceptance with map transfer (patch 0025)
+
+Runs only after patch 0025 passes its mutation gate and the test builds are verified, with the
+owner's confirmation immediately before the session. Isolated 0025 test installs on both Macs
+(fresh data folders, the existing maps, saves and v0.1.0 installations untouched); no network or
+VPN setting is changed by the test.
+
+Setup: the M5 (darkBook) with its VPN on, set by the owner; the M1 (m1-air) without a VPN.
+1. The M5 hosts: the M1 sees the game in its LAN list while the M5's VPN is on.
+2. The M5 hosts DotA v6.78c AI 1.4e (7.3 MB, in the M5's test install only).
+3. The M1 downloads the map: progress shown, the join completes.
+4. The downloaded map's SHA-256 equals the host's original.
+5. A short game: play, chat both ways (lobby and in game), clean exit; replays compared per turn.
+6. Reverse: the M1 hosts a small custom map (one shown as playable in its Create Game list) that
+   the M5 lacks; the M5, its VPN still on, downloads it; steps 3–5 again.
+7. Kept: both net logs (`REFROZEN_NET_LOG=1`), transfer progress screenshots, both replays and the
+   map checksums.
+
+Wi-Fi-off disconnect and the 30+ minute DotA session stay separate, each with its own approval.
+
 ## M7b: private servers (separate scope, not started)
 
 Private servers that players run themselves (PvPGN-style): Battle.net-style logon (the `w3l`
