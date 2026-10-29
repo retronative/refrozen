@@ -21,6 +21,13 @@ yet resolved).
 release notes present it as experimental, invite community reports, and plan official
 cross-platform LAN testing for v0.2.1.
 
+**Clean install for v0.2.0 (the owner, 2026-10-29): accepted as for v0.1.0, with a known
+limitation.** R5 runs the packaged setup in a fresh data folder on m1-air (a fresh `REFROZEN_DATA`,
+from a copy of the dmg carrying the browser-download quarantine attribute; the installers and keys
+as a player supplies them, the keys on stdin and checked absent from every log). The test in a
+fresh macOS account is **deferred, not run**: a first run that depends on account-level state
+(for example an existing permission or a cached Command Line Tools prompt) is not covered.
+
 **R1 for v0.2.0 (the owner's decision, 2026-10-29).** The intermittent crash in long AI matches
 ships as a documented known issue and does not block v0.2.0. Its mechanism is identified (probe
 8: a sleeping trigger's attacker handle is left without a counted reference and freed while the
