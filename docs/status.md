@@ -65,5 +65,13 @@ milestone passes only when its acceptance criteria have been met and observed.
 - iCCup online (M8)
 - Battle.net
 
+### Known issues in v0.2.0 Beta (in preparation)
+
+- **Terror of the Tides (The Frozen Throne's Sentinel campaign) stops the game when you start it.**
+  The game plays its opening cinematic through DirectShow, which reFrozen does not provide, and
+  does not recover when that fails. A known compatibility limitation, not blocking v0.2.0; planned for after
+  it. The Founding of Durotar starts and its opening sequence plays (the rest of that campaign is
+  not verified); the other campaigns are not verified yet.
+
 A release contains only reFrozen itself: the recompiler, the runtime and the native installer.
 The game modules are built on your Mac from your own copy; see [Getting started](getting-started.md).
