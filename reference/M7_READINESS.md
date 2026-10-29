@@ -1,7 +1,7 @@
 # M7 readiness: reFrozen v0.2.0 Alpha — LAN Multiplayer
 
 Status of the v0.2.0 release requirements (`M7_PLAN.md`, "v0.2.0 release target"), with the
-evidence behind each. Updated 2026-10-28; main at the merge of patch 0025.
+evidence behind each. Updated 2026-10-29; main at the merge of patch 0028 (d3291ea).
 
 Labels: **VERIFIED** (tested, evidence kept), **OPEN** (not yet tested), **ISSUE** (found, not
 yet resolved).
@@ -14,7 +14,7 @@ yet resolved).
 | 2 | A 30+ minute DotA multiplayer session without desync | **OPEN**: separate session, needs the owner's approval |
 | 3 | Map transfer and disconnect recovery | Map transfer **VERIFIED** both directions; disconnect (Wi-Fi off) **OPEN** |
 | 4 | M4–M6 regression protection | Unit tests and the mutation gate pass on main; M4 3/3 and one M5 match PASS on the patch 0024 runtime; **OPEN** on the final v0.2.0 build |
-| 5 | Clean install, packaging, signing, human verification | **OPEN**; see "Local Network permission" |
+| 5 | Clean install, packaging, signing, human verification | Manual playtest **PASSED** on the patch 0028 build (the owner, 2026-10-29, below); R6 on the final v0.2.0 build, clean install, packaging and signing **OPEN**; see "Local Network permission" |
 | 6 | Website, compatibility docs, release notes | **OPEN** |
 
 ## Two-Mac sessions (2026-10-28)
@@ -58,6 +58,36 @@ before the session). The M1 had none.
 | No desync | 2973 of 2973 turns identical | 2664 of 2664 turns identical |
 | Exit | both clean | both clean |
 | Network errors | none from the VPN; one failed first join while the permission prompt was open | the same |
+
+## Manual playtest (2026-10-29, patch 0028 build)
+
+The owner's manual session on the M5 Mac (darkBook), on the release-pipeline build of `63a6f33`
+(patch 0028, the GetTickCount grid; main `d3291ea` differs from it by a documentation commit
+only), kit stamp `63a6f3368d09-b76ce7bf87e6`, the game module built on that Mac
+(`9f43945ef567…`, byte-identical to the M1's), no diagnostic probes. Before the launch: the app's
+manifest (87 files) and code signature verified, the module stamps checked, and the game started
+to the main menu. An isolated test installation (`~/rf-test/m7a-0028`, its own data folder); the
+installed v0.1.0, its data, saves and maps untouched. The same build had passed the two-Mac replay
+checksum test earlier that day (14:43–15:04; both host directions, 1499 of 1499 and 1588 of 1588
+turns identical).
+
+**Result (the owner, 2026-10-29): PASSED.** All 16 items of the owner's checklist passed:
+gameplay, graphics, audio, controls, custom maps, save/load on the supported maps, fullscreen and
+windowed behaviour, general stability. No crash, freeze or noticeable memory problem during the
+session; the game felt playable throughout. Session 17:08–18:17 Bangkok, two launches; the second
+(17:17–18:17) ended by a normal quit. Resolution changes (800 × 600, 1920 × 1200, 2940 × 1912,
+1600 × 1200) and Ctrl+Cmd+F both ways worked.
+
+Recorded alongside, not counted against the session:
+- The first launch ended when the Terror of the Tides campaign was started: the documented
+  DirectShow cinematic limitation (`docs/status.md`, the 0.2.0 known issues), unchanged by 0028;
+  crash report kept in the test folder.
+- Six hang reports were written while the macOS menu bar was open (the watchdog sees the main
+  thread inside the menu's tracking loop): not hangs; a follow-up to silence them.
+- **ISSUE (follow-up):** the game window cannot be moved to another display; it always opens
+  on the primary display. Requirement: it opens on the display that holds the launcher window.
+- R1 (the intermittent crash in long AI matches) stays **OPEN**: not seen in this session, but
+  reproduced separately on the dedicated test Mac and under investigation (`private/r1/NOTES.md`).
 
 ## Open issues
 
