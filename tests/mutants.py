@@ -36,7 +36,7 @@ WIN32_GROUPS = (
     ("P:", "P"), ("stop ", "stops"),
     # mode A's flags
     ("A:", "A"), ("iocp:", "A"), ("wsock:", "A"), ("profile:", "A"), ("named", "A"), ("display", "A"),
-    ("reg", "A"), ("cs:", "A"), ("lang", "A"), ("wave", "A"),
+    ("reg", "A"), ("cs:", "A"), ("lang", "A"), ("wave", "A"), ("console", "A"),
 )
 
 # mutate.py --changed: what a changed path can affect beyond the mutants in
