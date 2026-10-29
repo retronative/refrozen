@@ -95,7 +95,7 @@ before the session). The M1 had none.
   opening sequence with no error; the rest of it, and the other campaigns, were not tested. Listed
   in the release notes' known issues and on the compatibility page. Not a v0.2.0 regression: the
   stop dates from M4 (v0.1.0 was not re-run to confirm). **Update (2026-10-29, branch
-  `feat/gdi-fill`, not merged):** with GDI fills implemented (patch 0026) and GetConsoleMode failing
+  `feat/gdi-fill`, merged into main the same day):** with GDI fills implemented (patch 0026) and GetConsoleMode failing
   properly (0027), the campaign gets past its backdrop: the game then creates a DirectShow filter
   graph for the cinematic, which fails here (no DirectShow), prints its own `[FAIL]
   CoCreateInstance(CLSID_FilterGraph ...)` line (now visible in the log) and uses the failed graph
