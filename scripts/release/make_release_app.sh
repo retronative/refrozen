@@ -13,6 +13,7 @@
 # loses its debug symbols (no build paths) and is ad hoc signed, then the app.
 set -euo pipefail
 ROOT=$(cd "$1" && pwd) DEPS=$(cd "$2" && pwd) FC=$(cd "$3" && pwd) OUT=$4
+VERSION=$(cat "$ROOT/VERSION")  # the release version, one setting
 BUILD="$ROOT/build/main"
 X86="$ROOT/tools/x86recomp"
 APP="$OUT/reFrozen.app"
@@ -52,7 +53,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleName</key><string>reFrozen</string>
   <key>CFBundleDisplayName</key><string>reFrozen</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>0.1.0</string>
+  <key>CFBundleShortVersionString</key><string>$VERSION</string>
   <key>CFBundleVersion</key><string>$STAMP</string>
   <key>CFBundleIconFile</key><string>reFrozen</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>

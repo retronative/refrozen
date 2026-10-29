@@ -76,6 +76,8 @@ def sync(scratch=SCRATCH):
                            (os.path.join(ROOT, "app") + "/", "app/", [])):
         cmd = ["rsync", "-a", "--delete", "--checksum"] + [f"--exclude={e}" for e in excl]
         subprocess.run(cmd + [src, os.path.join(scratch, dst)], check=True)
+    if os.path.exists(os.path.join(ROOT, "VERSION")):  # the release scripts read it from the root
+        shutil.copy2(os.path.join(ROOT, "VERSION"), os.path.join(scratch, "VERSION"))
     # rsync gives a restored mutant file its source's (older) mtime again,
     # which would leave the mutant's object in the build: touch it.
     for rel in restored_unbuilt(scratch):
