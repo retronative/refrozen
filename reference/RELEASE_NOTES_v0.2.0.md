@@ -68,5 +68,15 @@ Official cross-platform LAN compatibility testing is planned for v0.2.1.
 
 ## Verification
 
-To be completed from `M7_READINESS.md` before publication: the two-Mac sessions, the regression
-runs on the release candidate, the clean install and the owner's playtest.
+On release candidate 2 (`64ef120`; `reFrozen-0.2.0.dmg`, SHA-256
+`db1ff96c3e839bb7c2450db525f37ceca8ff08ba367fe200cb0a7af550685643`), details in `M7_READINESS.md`:
+
+- Two Macs (M1 and M5) over the LAN: a 33.7-minute DotA session with the owner playing, 20029 of
+  20029 turns identical on both Macs, no crash; a Wi-Fi disconnect and reconnect, recovered, 3460 of
+  3460 turns identical; hosting and joining in both directions.
+- Release checks, the dmg read back, signature, a clean install in a fresh data folder (the
+  installers, cancel, the first build), suites and ctest, two identical lifts, M4 3/3, M5 3/3, and
+  the full mutation gate (349 mutants: 347 killed, 2 equivalent).
+- One 30-minute AI stress run stopped with the known intermittent crash in long AI matches (Known issues, above).
+- A preliminary check with the original 1.26a client under Wine joining a reFrozen game: playable,
+  1582 of 1582 turns identical. Windows play is not verified (experimental).

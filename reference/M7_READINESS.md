@@ -1,7 +1,7 @@
 # M7 readiness: reFrozen v0.2.0 Alpha — LAN Multiplayer
 
 Status of the v0.2.0 release requirements (`M7_PLAN.md`, "v0.2.0 release target"), with the
-evidence behind each. Updated 2026-10-29; main at the merge of patch 0028 (d3291ea).
+evidence behind each. Updated 2026-10-30; main at the merge of patch 0028 (d3291ea).
 
 Labels: **VERIFIED** (tested, evidence kept), **OPEN** (not yet tested), **ISSUE** (found, not
 yet resolved).
@@ -11,10 +11,10 @@ yet resolved).
 | # | Requirement | Status |
 |---|---|---|
 | 1 | LAN between the M1 and the M5 Mac, both host directions | **VERIFIED** (below), including the host behind a VPN |
-| 2 | A 30+ minute DotA multiplayer session without desync | **OPEN**: separate session, needs the owner's approval |
-| 3 | Map transfer and disconnect recovery | Map transfer **VERIFIED** both directions; disconnect (Wi-Fi off) **OPEN** |
-| 4 | M4–M6 regression protection | Unit tests and the mutation gate pass on main; M4 3/3 and one M5 match PASS on the patch 0024 runtime; on release candidate 2: see "Release candidate 2" |
-| 5 | Clean install, packaging, signing, human verification | Manual playtest **PASSED** on the patch 0028 build (the owner, 2026-10-29, below); R6 on the final v0.2.0 build, clean install, packaging and signing **OPEN**; see "Local Network permission" |
+| 2 | A 30+ minute DotA multiplayer session without desync | **VERIFIED** on release candidate 2: session A, 33.7 minutes, 20029 of 20029 turns identical ("Release candidate 2") |
+| 3 | Map transfer and disconnect recovery | Map transfer **VERIFIED** both directions; disconnect (Wi-Fi off) and recovery **VERIFIED** on release candidate 2: session B ("Release candidate 2") |
+| 4 | M4–M6 regression protection | **VERIFIED** on release candidate 2: suites, ctest, M4 3/3, M5 3/3, the full mutation gate (349: 347 KILLED, 2 EQUIVALENT); the one 30-minute M6 run failed with R1's known crash ("Release candidate 2") |
+| 5 | Clean install, packaging, signing, human verification | Manual playtest **PASSED** on the patch 0028 build (the owner, 2026-10-29, below); on release candidate 2 the release checks, dmg read-back, signature and clean install in a fresh data folder **VERIFIED** (Gatekeeper rejects: not notarized, as for v0.1.0), and the owner played sessions A and B on it; R6 sign-off on the final build is the owner's, **OPEN**; see "Local Network permission" |
 | 6 | Website, compatibility docs, release notes | Known issues, changelog, status and compatibility pages and the release-notes draft updated (2026-10-29); the site and the published notes at publication (R8): **OPEN** |
 
 **Windows 1.26a interoperability (the owner, 2026-10-29):** outside v0.2.0's verification; the
@@ -108,6 +108,122 @@ Recorded alongside, not counted against the session:
 - R1 (the intermittent crash in long AI matches) stays **OPEN**: not seen in this session, but
   reproduced separately on the dedicated test Mac and under investigation (`private/r1/NOTES.md`).
 
+## Release candidate 2 (2026-10-29, `64ef120`)
+
+`release/v0.2.0-rc2` at `64ef120`: main `d3291ea` (patches 0026–0028) with the version setting
+(release candidate 1) and these documents. Built by the branch's own release pipeline on m1-air:
+`reFrozen-0.2.0.dmg`, SHA-256 `db1ff96c3e839bb7c2450db525f37ceca8ff08ba367fe200cb0a7af550685643`,
+kit stamp `64ef1208a752-b76ce7bf87e6`; each Mac built its own game module from the packaged app,
+byte-identical on both. No diagnostic probes. Evidence: `~/rf-release/evidence-rc2/` (m1-air) and
+`~/rf-test/v020-rc2/evidence/` (darkBook).
+
+### Automated gates (m1-air)
+
+| Gate | Result |
+|---|---|
+| R4 release checks (`check_release.py`) | ALL PASS (24 checks) |
+| R4/R5/R7a: the dmg as downloaded, signature, Gatekeeper, clean install in a fresh data folder | read-back identical, quarantine present, signature valid; Gatekeeper rejects (expected: not notarized); install, cancel and complete build (336 s, progress monotonic) PASS; no CD key in any output or log |
+| Suites and ctest | 18 suites PASS; ctest 20/20 |
+| Lifts, patches | two lifts identical (`dc7fa7f190d3d9ea`); `validate_lift.py` HARD PASS; patch tree identical to main's |
+| M4 | 3/3 PASS |
+| M5 | 3/3 PASS |
+| M6, one 30-minute run | **FAIL: R1.** A fatal fault about 16 minutes in, with R1's signature (the attacker lookup after a trigger's wait); recorded as the known issue under the owner's R1 decision; crash report kept |
+| Full mutation gate | **PASS**: 349 mutants, 347 KILLED, 2 EQUIVALENT (the release gate, below) |
+
+### Mutation gate (2026-10-30, m1-air, run attached, nothing else running)
+
+The release gate as revised by the owner (2026-10-30): `tests/mutate.py --focused --jobs 3`, every
+registered mutant, from branch `perf/mutation-gate-release` (local, not merged). The full default
+run was stopped after 5 minutes (C3) for this change; it took 2.8 h on release candidate 1.
+
+| | Result |
+|---|---|
+| Mutants | **349: 347 KILLED, 2 EQUIVALENT** (M3-F9, M7-B6, documented); no survivor, timeout, INVALID or KILLED-OTHER |
+| Runtime, measured | cold (no scratch trees, no caches) **2265 s (37.8 min)**; warm 2148 s (35.8 min); release candidate 1's default run 10071 s (2.8 h, 324 mutants) |
+| Runtime, estimated | about **27 min cold, 25 min warm** after the change below (the measured runs less R-B1's and R-B3's 670 s; not measured as a whole) |
+| Same results as the default runner | all 324 mutants of release candidate 1's default run: the same result; the 26 it did not have (patches 0026–0028's and the gate's own) by the default runner too: 26 KILLED; cold and warm: the same for all 349 |
+| Parallel isolation | the parallel-safe tests unmutated in 3 concurrent loops: 207 runs, 0 failed |
+| Change after the measured runs | R-B1 and R-B3 (330 s and 340 s: with their check removed the builder lifts and compiles everything) get a lifter that fails at once in their focused cases only. Verified: the unmutated cases pass; R-B1–R-B3 focused KILLED by their expected checks in 2–4 s; R-B1 and R-B3 by the whole test on the real kit (551 s, 563 s) KILLED by the same checks; the other six builder mutants (R-B4–R-B7, R-L1, R-L2) re-run focused with the changed script: KILLED. No other test changed, so no other result was re-run |
+
+**What was tested, and the difference from the release candidate.** The gate ran on a worktree at
+`64ef120` with its x86recomp tree `b76ce7b` (the release manifest's; no uncommitted or untracked
+file there) and the kit cloned from release candidate 2 (stamp `64ef1208a752-b76ce7bf87e6`), plus
+the gate branch's test files: `tests/mutate.py`, `mutants.py`, `test_mutate.py`,
+`test_builder_poc.py`, `test_first_run_setup.py`, `scripts/poc/test_errors.sh` and the new
+`scripts/poc/lift_fixture.sh`. None of them is in the dmg's manifest or the kit; the runtime, the
+lifter and the shipped files are those of release candidate 2. The gate tooling itself is not in
+commit `64ef120` and is not merged (the owner's approval).
+
+### darkBook preparation
+
+An isolated test installation (`~/rf-test/v020-rc2`) on each Mac, its own data folder; the
+installed v0.1.0, its data, saves and maps untouched. On darkBook: the dmg's SHA-256 matched, the
+app's manifest (87 files) and code signature verified, version 0.2.0. Both games ran with
+`REFROZEN_STALL=1000`.
+
+### Session A: 30+ minute DotA LAN session
+
+| | darkBook hosts (the owner plays), m1-air joins (scripted, idle) |
+|---|---|
+| Map | DotA v6.83d AI 1.4e (the owner's choice), 8 Easy computer players |
+| Discovery, join | VERIFIED (after the Local Network permission was allowed on m1-air, below) |
+| Length | 33.7 minutes of game time on the host (2021163 ms); the joiner stayed to 36.7 minutes, then left |
+| No desync | seed `006f62c5` on both; **20029 of 20029 turns identical** |
+| Crashes, hang reports | none on either Mac (R1 not seen) |
+| Exit | darkBook by the owner's normal quit; m1-air left by F10, End Game, Quit |
+
+Long frames on darkBook during play (38.7 s, 17.4 s, 13.3 s, 6.5 s) were time spent waiting, not
+in the game (frames the window did not present; the log shows the window switched to and
+from fullscreen during the session); none on m1-air after the map load. Both games log an access
+violation caught by the loader in `game.dll`'s detach during `ExitProcess`, as in the earlier
+two-Mac sessions' logs: the exit completes (code 0).
+
+### Session B: Wi-Fi disconnect and recovery
+
+Booty Bay, darkBook hosts (the owner plays), m1-air joins (scripted, idle; its game detached from
+ssh so that m1-air's outage could not end it). As planned, the owner turned each Mac's Wi-Fi off
+for about 30 s and on again during the match; the owner's account below is darkBook's view, not
+reported separately per outage.
+
+| | Result |
+|---|---|
+| During the outage (the owner, on darkBook) | "Waiting for players" with a countdown; when it ran out, the game offered to drop the disconnected player; the owner chose not to and kept waiting |
+| Recovery | with Wi-Fi back, the player reconnected and the game resumed normally; nobody was dropped |
+| No desync | seed `0002c133` on both; **3460 of 3460 turns identical** (5.8 minutes on the host) |
+| Crashes, hang reports | none on either Mac; m1-air's game survived its own outage |
+| Afterwards, both host and join | darkBook hosts, m1-air joins: VERIFIED; m1-air hosts, darkBook joins: VERIFIED |
+
+**Result: PASSED** as a disconnect and reconnect recovery test (the owner, 2026-10-29). The
+plan's variant (the other Mac drops the player and plays on) was offered by the game and
+declined; dropping was not exercised.
+
+### Local Network permission (the new launcher identity)
+
+On each Mac the prompt appeared at the first outgoing connection (the first join), not when
+hosting. Until it is allowed a join fails silently: the game list shows the game, Join does
+nothing, no message (m1-air: 16 failed connection attempts; darkBook: `connect: errno 65 (No
+route to host)`). The prompt's wording on darkBook: *Allow "refrozen" to find devices on local
+networks? This will allow the app to discover, connect to, and collect data from devices on your
+networks.* [Don't Allow] [Allow]. It names the game process `refrozen` (lower case), not
+reFrozen. The wording on m1-air was not captured.
+
+### Preliminary Wine compatibility (smoke test; not Windows verification)
+
+The original Warcraft III 1.26a client under Wine (Wine Devel, an isolated copy of the
+installation and prefix) on m1-air; reFrozen release candidate 2 on darkBook, hosting Booty Bay.
+About 3 minutes of play.
+
+| | Result |
+|---|---|
+| Discovery, join, play | worked (the owner: the game was playable) |
+| Chat | tested manually by the owner, successfully; both directions of lobby chat not separately confirmed: **unverified** |
+| No desync | seed `0007c978` on both; **1582 of 1582 turns identical** (2.7 minutes on the host) |
+| Crashes, disconnects | none; no errors in the Wine log |
+
+Preliminary only: one short game, one map, the Wine client joining. Official cross-platform LAN
+testing with the Windows client stays planned for v0.2.1; the release notes' experimental wording
+is unchanged.
+
 ## Open issues
 
 - **Local Network permission across builds (ISSUE, non-blocking for v0.2.0).** macOS asks the
@@ -153,8 +269,9 @@ Recorded alongside, not counted against the session:
   issue's wording is updated accordingly.
 - **Map checker tool (tooling).** `scripts/map_check.py` stops with an exception on Castle Fight's
   MPQ header; the game itself lists and plays the map. Not a player-facing issue.
-- **Not yet tested:** Wi-Fi-off disconnect recovery; the 30+ minute DotA session; Windows
-  interoperability (outside v0.2.0).
+- **Not yet tested:** Windows interoperability (outside v0.2.0; a preliminary Wine smoke test
+  on release candidate 2); dropping a disconnected player (offered by the game, declined in
+  session B).
 
 ## Remaining acceptance plan (prepared 2026-10-28)
 
@@ -163,7 +280,10 @@ Recorded alongside, not counted against the session:
 these documents) is built and verified on m1-air: items 2 and 5's R4, R5 and R7a, see "Release
 candidate 2". Sessions A and B need the owner and darkBook. Under the R1 decision above, an R1
 crash during session A is recorded as the known issue; whether the session is then repeated is
-the owner's call.
+the owner's call. Sessions A and B PASSED on release candidate 2, with a preliminary Wine smoke
+test ("Release candidate 2"); the full mutation gate PASSED (2026-10-30, the release gate).
+Left: R6 on the final build, the release notes' verification, the site and the published notes
+(requirement 6), and R8 with the owner's approval.
 
 Order: the release candidate first, so the long sessions run on the build that ships.
 
