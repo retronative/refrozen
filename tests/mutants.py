@@ -36,7 +36,7 @@ WIN32_GROUPS = (
     ("P:", "P"), ("stop ", "stops"),
     # mode A's flags
     ("A:", "A"), ("iocp:", "A"), ("wsock:", "A"), ("profile:", "A"), ("named", "A"), ("display", "A"),
-    ("reg", "A"), ("cs:", "A"), ("lang", "A"), ("wave", "A"), ("console", "A"),
+    ("reg", "A"), ("cs:", "A"), ("lang", "A"), ("wave", "A"), ("console", "A"), ("tick:", "A"),
 )
 
 # mutate.py --changed: what a changed path can affect beyond the mutants in
@@ -1688,4 +1688,30 @@ MUTANTS = [
          old='HLE("kernel32.dll", GetConsoleMode, 2) {\n  SetLastError(kErrorInvalidHandle);\n  return 0;\n}',
          new='HLE("kernel32.dll", GetConsoleMode, 2) {\n  Wr32(Arg(c, 1), 3);\n  return 1;\n}',
          expect='console: GetConsoleMode on a standard handle fails (no console)'),
+    # patch 0028: the 64 Hz system timer tick
+    dict(id="R-T1", milestone="R", area="tick", file=K32, test="win32",
+         fault='GetTickCount is not quantised (millisecond ticks: the port before the patch)',
+         old='  return uint32_t(us / kTickUs * kTickUs / 1000);\n',
+         new='  return uint32_t(us / 1000);\n',
+         expect='tick: GetTickCount advances in 15 or 16 ms steps'),
+    dict(id="R-T2", milestone="R", area="tick", file=K32, test="win32",
+         fault='a 100 Hz grid instead of the 64 Hz one',
+         old='  constexpr uint64_t kTickUs = 15625;\n',
+         new='  constexpr uint64_t kTickUs = 10000;\n',
+         expect='tick: GetTickCount advances in 15 or 16 ms steps'),
+    dict(id="R-T3", milestone="R", area="tick", file=K32, test="win32",
+         fault='rounded up to the grid: the tick runs ahead of real time',
+         old='  return uint32_t(us / kTickUs * kTickUs / 1000);\n',
+         new='  return uint32_t((us + kTickUs - 1) / kTickUs * kTickUs / 1000);\n',
+         expect='tick: GetTickCount is floored to the grid (never ahead of the performance counter, at most 16 ms behind)'),
+    dict(id="R-T4", milestone="R", area="tick", file=K32, test="win32",
+         fault="the grid has the steady clock's origin, not the process start (the tick far ahead of the performance counter)",
+         old='duration_cast<microseconds>(steady_clock::now() - g_start)',
+         new='duration_cast<microseconds>(steady_clock::now().time_since_epoch())',
+         expect='tick: GetTickCount is floored to the grid (never ahead of the performance counter, at most 16 ms behind)'),
+    dict(id="R-T5", milestone="R", area="tick", file=K32, test="win32",
+         fault='timeGetTime quantised too (the sound library would time its streams on the coarse clock)',
+         old='HLE("winmm.dll", timeGetTime, 0) { return TickCount(); }',
+         new='HLE("winmm.dll", timeGetTime, 0) { return SystemTimerTick(); }',
+         expect='tick: timeGetTime keeps millisecond precision (steps of at most 4 ms)'),
 ]

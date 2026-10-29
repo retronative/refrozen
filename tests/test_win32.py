@@ -15,7 +15,8 @@ Modes (the command line's last character):
   A  Win32 functions: REG_DWORD seeding, GetProfileStringA, the system
      language, named events/mutexes, I/O completion ports (with a worker
      thread woken by a post), waveOutOpen, EnumDisplayDevicesA,
-     ChangeDisplaySettingsExA, GetConsoleMode (no console). One 1/0 flag per check.
+     ChangeDisplaySettingsExA, GetConsoleMode (no console), the 64 Hz system
+     timer tick (patch 0028). One 1/0 flag per check.
   W  window messages: the WM_NCCREATE/WM_CREATE/WM_SIZE/WM_MOVE a wndproc
      sees for a popup, a WS_MAXIMIZE popup, an overlapped window and its
      first ShowWindow.
@@ -122,7 +123,8 @@ IMPORTS = [
                       "InitializeCriticalSection", "TryEnterCriticalSection", "LeaveCriticalSection",
                       "CreateFileA", "ReadFile", "WriteFile", "CloseHandle", "SetFilePointer",
                       "SetLastError", "GetCurrentThreadId", "GetTickCount", "LoadLibraryA",
-                      "GetProcAddress", "GetStdHandle", "GetConsoleMode"]),
+                      "GetProcAddress", "GetStdHandle", "GetConsoleMode",
+                      "QueryPerformanceFrequency", "QueryPerformanceCounter"]),
     # Winsock 1.1 by ordinal (Wine's wsock32.spec): htonl, htons, inet_addr,
     # inet_ntoa, ntohl, ntohs, WSAGetLastError; mode N's sockets: accept, bind,
     # closesocket, connect, getpeername, getsockname, ioctlsocket, listen,
@@ -136,7 +138,7 @@ IMPORTS = [
                     "PostMessageA", "SetTimer", "SetWindowPos"]),
     ("gdi32.dll", ["GetStockObject", "CreateSolidBrush", "CreateHatchBrush", "GetPixel"]),
     ("advapi32.dll", ["RegOpenKeyExA", "RegQueryValueExA"]),
-    ("winmm.dll", ["waveOutOpen", "waveOutGetDevCapsA", "waveOutPrepareHeader", "waveOutUnprepareHeader",
+    ("winmm.dll", ["timeGetTime", "waveOutOpen", "waveOutGetDevCapsA", "waveOutPrepareHeader", "waveOutUnprepareHeader",
                    "waveOutWrite", "waveOutReset", "waveOutClose", "waveOutGetID"]),
     ("gdi32.dll", ["ChoosePixelFormat", "SetPixelFormat"]),
     ("opengl32.dll", ["wglCreateContext", "wglMakeCurrent", "wglSwapLayerBuffers", "glGetError",
@@ -377,6 +379,33 @@ def build_text(g):
     a += g.call("GetStdHandle", 0xFFFFFFF5) + g.call("GetConsoleMode", "eax", g.tmp)
     a += g.chk("console: GetConsoleMode on a standard handle fails (no console)", g.eq(0))
     a += g.gle("console: ... ERROR_INVALID_HANDLE", 6)
+    # The system timer (patch 0028): GetTickCount advances on Windows' default
+    # 64 Hz clock grid (steps of 15 and 16 ms), floored: never ahead of the
+    # performance counter (10 MHz here), at most 16 ms behind its whole
+    # milliseconds. timeGetTime keeps millisecond precision.
+    T0, T1, Q, FAIL, CNT = g.tmp + 24, g.tmp + 28, g.tmp + 32, g.tmp + 40, g.tmp + 44
+    a += g.call("QueryPerformanceFrequency", Q) + g.chk("tick: the performance counter runs at 10 MHz", g.mem(Q, 10000000))
+    a += g.call("GetTickCount") + f"  mov dword ptr [{T0:#x}], eax\n"
+    a += "tk1:\n" + g.call("GetTickCount") + f"  cmp eax, dword ptr [{T0:#x}]\n  je tk1\n  mov dword ptr [{T0:#x}], eax\n"
+    a += "tk2:\n" + g.call("GetTickCount") + f"  cmp eax, dword ptr [{T0:#x}]\n  je tk2\n  mov dword ptr [{T1:#x}], eax\n"
+    a += f"  sub eax, dword ptr [{T0:#x}]\n  sub eax, 15\n  cmp eax, 1\n  setbe al\n"
+    a += g.chk("tick: GetTickCount advances in 15 or 16 ms steps", "  cmp al, 1\n")
+    a += "tk3:\n" + g.call("GetTickCount") + f"  cmp eax, dword ptr [{T1:#x}]\n  je tk3\n"
+    a += f"  sub eax, dword ptr [{T1:#x}]\n  sub eax, 15\n  cmp eax, 1\n  setbe al\n"
+    a += g.chk("tick: ... and so does the next step", "  cmp al, 1\n")
+    # 12 samples 2 ms apart; counter ms - tick in [-1, 16] (the reads are not simultaneous)
+    a += f"  mov dword ptr [{FAIL:#x}], 0\n  mov dword ptr [{CNT:#x}], 12\n"
+    a += "tk4:\n" + g.call("QueryPerformanceCounter", Q) + g.call("GetTickCount")
+    a += f"  mov ecx, eax\n  mov eax, dword ptr [{Q:#x}]\n  mov edx, dword ptr [{Q + 4:#x}]\n  mov ebx, 10000\n  div ebx\n"
+    a += f"  sub eax, ecx\n  add eax, 1\n  cmp eax, 17\n  jbe tk5\n  inc dword ptr [{FAIL:#x}]\ntk5:\n" + g.call("Sleep", 2)
+    a += f"  dec dword ptr [{CNT:#x}]\n  jnz tk4\n"
+    a += g.chk("tick: GetTickCount is floored to the grid (never ahead of the performance counter, at most 16 ms behind)",
+               g.mem(FAIL, 0))
+    a += g.call("timeGetTime") + f"  mov dword ptr [{T0:#x}], eax\n"
+    a += "tg1:\n" + g.call("timeGetTime") + f"  cmp eax, dword ptr [{T0:#x}]\n  je tg1\n  mov dword ptr [{T0:#x}], eax\n"
+    a += "tg2:\n" + g.call("timeGetTime") + f"  cmp eax, dword ptr [{T0:#x}]\n  je tg2\n"
+    a += f"  sub eax, dword ptr [{T0:#x}]\n  cmp eax, 4\n  setbe al\n"
+    a += g.chk("tick: timeGetTime keeps millisecond precision (steps of at most 4 ms)", "  cmp al, 1\n")
 
     # mode W: wndproc log of four windows (see the test for the sequences)
     wc = struct.pack("<IIIIIIIIII", 0, TEXT + WNDPROC, 0, 0, EXE, 0, 0, 0, 0, g.str("T"))
@@ -1104,13 +1133,14 @@ def build_text(g):
     sc += g.call("CloseHandle", "edi") + g.call("glBindTexture", 0x0DE1, 1)
     sc += g.call("glTexImage2D", 0x0DE1, 0, 0x1908, 16, 16, 0, 0x1908, 0x1401, g.out)
     sc += g.call("Sleep", 130) + swap
-    # frame 8: guest code for at least 150 ms (GetTickCount between batches
-    # of a million loop iterations)
+    # frame 8: guest code for at least 175 ms of GetTickCount (between batches
+    # of a million loop iterations): over 160 ms real, as the tick is floored
+    # to 15.625 ms steps (patch 0028)
     # (a multiplicative recurrence the compiler cannot fold away)
     sc += g.call("GetTickCount") + f"  mov dword ptr [{g.tmp + 8:#x}], eax\ns_busy:\n  mov ecx, 1000000\n"
     sc += f"  mov eax, dword ptr [{g.tmp + 16:#x}]\ns_spin:\n  imul eax, eax, 1103515245\n  add eax, 12345\n"
     sc += f"  dec ecx\n  jnz s_spin\n  mov dword ptr [{g.tmp + 16:#x}], eax\n" + g.call("GetTickCount")
-    sc += f"  sub eax, dword ptr [{g.tmp + 8:#x}]\n  cmp eax, 150\n  jb s_busy\n" + swap
+    sc += f"  sub eax, dword ptr [{g.tmp + 8:#x}]\n  cmp eax, 175\n  jb s_busy\n" + swap
     g.s_code = sc
     # mode T: two million GetCommandLineA calls (a cheap import the recorder
     # times), timed by GetTickCount ("T<ms>"): the per-import overhead.
@@ -1793,7 +1823,7 @@ def main():
                       all(abs(sum(f["cats"].values()) - f["ms"]) <= max(1.0, f["ms"] * 0.01) for f in st.values()), True)
                 check("S: file reads counted (3 ops, 3 KB)", "file" in f6["cats"] and "(3 ops, 3.0 KB)" in f6["text"], True)
                 check("S: the texture upload is texture work", bool(re.search(r"texture [\d.]+ x[1-9]", f6["text"])), True)
-                # (GetTickCount counts whole milliseconds: 150 of them may be 149.x ms.)
+                # (GetTickCount is floored to 15.625 ms steps: 175 of them is over 160 ms real.)
                 check("S: the guest loop is charged to guest code", f7["ms"] >= 145 and
                       f7["cats"].get("guest", 0) >= 0.9 * f7["ms"], True)
                 check("S: pure getters are counted, not timed (GetTickCount in the loop)",

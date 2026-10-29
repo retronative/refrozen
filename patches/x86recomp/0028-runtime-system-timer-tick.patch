@@ -1,0 +1,29 @@
+diff --git a/src/runtime/hle/kernel32.cpp b/src/runtime/hle/kernel32.cpp
+index 0f8c540..09212b7 100644
+--- a/src/runtime/hle/kernel32.cpp
++++ b/src/runtime/hle/kernel32.cpp
+@@ -959,7 +959,23 @@ HLE("kernel32.dll", InterlockedCompareExchange, 3) {
+ 
+ // ---- time ----------------------------------------------------------------
+ 
+-HLE("kernel32.dll", GetTickCount, 0) { return TickCount(); }
++// Patch 0028: GetTickCount advances on the grid of Windows' default system
++// timer, 64 times a second (15.625 ms: the clock interrupt's interval when no
++// process has asked for a finer one; none of the game's modules does). The
++// game runs a frame only when the tick has changed since the last one and
++// dispatches its timers in batches at those ticks, so the original client runs
++// at 64 frames a second; with a millisecond tick this port ran about 170
++// iterations a second, with its timers dispatched one by one at millisecond
++// precision. The value is floored to the grid as Windows' is (steps of 15 and
++// 16 ms, never ahead of the performance counter, which keeps its resolution).
++// timeGetTime keeps millisecond precision.
++static uint32_t SystemTimerTick() {
++  using namespace std::chrono;
++  constexpr uint64_t kTickUs = 15625;
++  const uint64_t us = uint64_t(duration_cast<microseconds>(steady_clock::now() - g_start).count());
++  return uint32_t(us / kTickUs * kTickUs / 1000);
++}
++HLE("kernel32.dll", GetTickCount, 0) { return SystemTimerTick(); }
+ 
+ HLE("kernel32.dll", QueryPerformanceFrequency, 1) {
+   Wr64(Arg(c, 0), 10000000);
