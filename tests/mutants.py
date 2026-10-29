@@ -24,6 +24,7 @@ TESTS = {
     "stack": "test_run_on_stack.py",
     "mutate": "test_mutate.py",
     "bcast": "test_lan_broadcast.py",
+    "version": "test_release_version.py",
 }
 
 # Focused runs (mutate.py --focused): the test_win32 --modes group that prints
@@ -1714,4 +1715,19 @@ MUTANTS = [
          old='HLE("winmm.dll", timeGetTime, 0) { return TickCount(); }',
          new='HLE("winmm.dll", timeGetTime, 0) { return SystemTimerTick(); }',
          expect='tick: timeGetTime keeps millisecond precision (steps of at most 4 ms)'),
+    dict(id='R-R1', milestone="R", area="version", file='scripts/release/check_release.py', test="version",
+         fault='the release check compares the Info.plist with a fixed version',
+         old='check(f"Info.plist: version {VERSION}", info.get("CFBundleShortVersionString") == VERSION,',
+         new='check(f"Info.plist: version {VERSION}", info.get("CFBundleShortVersionString") == "0.2.0",',
+         expect='release/check_release.py: names no version itself'),
+    dict(id='R-R2', milestone="R", area="version", file='scripts/release/make_release_app.sh', test="version",
+         fault="the app's Info.plist names a fixed version",
+         old='  <key>CFBundleShortVersionString</key><string>$VERSION</string>\n',
+         new='  <key>CFBundleShortVersionString</key><string>0.2.0</string>\n',
+         expect='release/make_release_app.sh: names no version itself'),
+    dict(id='R-R3', milestone="R", area="version", file='scripts/release/release_candidate.sh', test="version",
+         fault='the dmg is named with a fixed version',
+         old='"$OUT/reFrozen-$VERSION.dmg"',
+         new='"$OUT/reFrozen-0.2.0.dmg"',
+         expect='release/release_candidate.sh: names no version itself'),
 ]

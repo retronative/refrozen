@@ -109,6 +109,12 @@ and mutants), if any of these happens:
 - the crash occurs in human playtesting (R6 or later);
 - a reproducible runtime divergence is identified.
 
+*R1 for v0.2.0 (the owner, 2026-10-29).* The crash has occurred on the dedicated test machine
+(a reopening trigger) and its mechanism has been identified, but no fix is verified. The owner
+decided that v0.2.0 ships with R1 as a documented known issue, not a blocker; the investigation
+continues separately for v0.2.1. No unverified R1 change (in particular no GetAttacker
+workaround) goes into v0.2.0, and nothing may claim the crash is fixed.
+
 *Consequences for M6 and R3.* ROADMAP M6 step 1 reads "the crash fixed, or accepted under the
 revised R1". Steps 2 and 3 keep every pass condition. Any crash during an M6 stress or acceptance
 run fails that run and reopens R1.

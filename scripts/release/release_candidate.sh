@@ -23,6 +23,7 @@ rm -rf "$SRC"
 git clone -q "$REPO" "$SRC"
 git -C "$SRC" checkout -q "$COMMIT"
 SHA=$(git -C "$SRC" rev-parse HEAD)
+VERSION=$(cat "$SRC/VERSION")
 [ -z "$(git -C "$SRC" status --porcelain)" ] || { echo "clone not clean"; exit 1; }
 
 step "x86recomp $X86_BASE + patches/x86recomp (from the mirror)"
@@ -60,12 +61,12 @@ step "release checks"
 /usr/bin/python3 -I "$SRC/scripts/release/check_release.py" "$APP" | tee "$OUT/check_release.txt"
 
 step "dmg"
-/usr/bin/python3 -I "$SRC/scripts/release/make_dmg.py" "$SRC" "$APP" "$OUT/reFrozen-0.1.0.dmg"
+/usr/bin/python3 -I "$SRC/scripts/release/make_dmg.py" "$SRC" "$APP" "$OUT/reFrozen-$VERSION.dmg"
 
 step "checksums and manifest"
-(cd "$OUT" && shasum -a 256 reFrozen-0.1.0.dmg > SHA256SUMS)
+(cd "$OUT" && shasum -a 256 "reFrozen-$VERSION.dmg" > SHA256SUMS)
 {
-  echo "reFrozen 0.1.0 release candidate"
+  echo "reFrozen $VERSION release candidate"
   echo "commit $SHA"
   echo "x86recomp $X86_BASE + patches, tree $X86_TREE"
   echo "kit stamp $(cat "$APP/Contents/Resources/kit/stamp.txt")"
