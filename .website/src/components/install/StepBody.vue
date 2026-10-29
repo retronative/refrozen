@@ -18,14 +18,14 @@ const dataFolder = '~/Library/Application Support/reFrozen'
   <div class="install-body">
     <!-- 1. Download -->
     <template v-if="n === 1">
-      <p class="install-lead">Get reFrozen {{ release.version }} for Apple silicon Macs: an offline-only alpha pre-release.</p>
+      <p class="install-lead">Get reFrozen {{ release.version }} Beta for Apple silicon Macs: offline games, and LAN games between Macs.</p>
       <div class="install-download">
         <a class="btn" :href="release.dmg.url ?? undefined" :aria-describedby="id('download-note')">
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M8 1v10M3.5 6.5 8 11l4.5-4.5M2 15h12" /></svg>
           Download reFrozen
         </a>
         <p :id="id('download-note')" class="install-download__note">
-          From the <a :href="release.page ?? undefined">GitHub release page</a>, with the release notes and known limitations.
+          From the <a :href="release.page ?? undefined">GitHub release page</a>, with the release notes and known issues.
         </p>
         <dl class="install-facts">
           <div><dt>Version</dt><dd>{{ release.version ?? TBA }}</dd></div>
@@ -157,10 +157,25 @@ const dataFolder = '~/Library/Application Support/reFrozen'
     <template v-else>
       <p class="install-lead">Press <strong>Start Game</strong>, open <strong>Single Player › Custom Game</strong> and pick a map you supply.</p>
       <p>
-        v0.1.0 is offline only. LAN, private servers, iCCup and Battle.net are not part of it: their menus stay as the game has them,
-        and are not supported or tested. Which DotA maps work is on the <RouterLink to="/compatibility/#dota-maps">Compatibility</RouterLink> page.
+        Private servers, iCCup and Battle.net are not part of {{ release.version }}: their menus stay as the game has them, and are not
+        supported or tested. Which DotA maps work is on the <RouterLink to="/compatibility/#dota-maps">Compatibility</RouterLink> page.
       </p>
       <StepArt :step="5" />
+
+      <component :is="h" :id="id('lan-games')">LAN games between Macs <StatusTag kind="verified" /></component>
+      <ul class="install-list">
+        <li>Every Mac runs reFrozen {{ release.version }} on the same local network.</li>
+        <li>Open <strong>Local Area Network</strong> from the game's multiplayer menu, then host a game or join one. Custom maps download from the host.</li>
+        <li>
+          The first time you join a game, macOS asks <strong>Allow “refrozen” to find devices on local networks?</strong> Choose
+          <strong>Allow</strong>. Until it is allowed, joining fails silently: the game appears in the list, but <strong>Join</strong>
+          does nothing. The question appears at the first join, not when hosting.
+        </li>
+        <li>
+          <StatusTag kind="unverified" /> Games with the original Windows 1.26a client are experimental and not yet officially
+          verified; official testing is planned for v0.2.1.
+        </li>
+      </ul>
 
       <component :is="h" :id="id('controls')">Controls <StatusTag kind="verified" /></component>
       <ul class="install-keys">
@@ -173,11 +188,11 @@ const dataFolder = '~/Library/Application Support/reFrozen'
         <li><span class="install-keys__none">In game</span><span>Mouse and keyboard work as in the original game</span></li>
       </ul>
 
-      <component :is="h" :id="id('known-limitations')">Known limitations</component>
+      <component :is="h" :id="id('known-limitations')">Known issues</component>
       <p>
-        v0.1.0 is an alpha. Its <a :href="release.page ?? undefined">release notes</a> list the known limitations, among them an
-        intermittent crash in long AI matches, and saved games of one map version, DotA v6.83d AI (PMV 1.42 EN), that can't be
-        loaded (the game reports an error, then crashes). Saves load on standard maps and on DotA v6.78c AI 1.4e.
+        {{ release.version }} is a beta. Its <a :href="release.page ?? undefined">release notes</a> list the known issues, among them an
+        intermittent crash in long AI matches (a fix is planned for 0.2.1), and saved games of one map version, DotA v6.83d AI
+        (PMV 1.42 EN), that can't be loaded. Saves load on Booty Bay and on DotA v6.78c AI 1.4e.
       </p>
 
       <component :is="h" :id="id('troubleshooting')">Troubleshooting</component>

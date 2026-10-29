@@ -1,14 +1,14 @@
 ---
 title: Getting started
-description: How to install reFrozen 0.1.0 on an Apple silicon Mac and play Warcraft III 1.26a natively, from your own copy of the game.
+description: How to install reFrozen 0.2.0 Beta on an Apple silicon Mac and play Warcraft III 1.26a natively, offline and over LAN between Macs, from your own copy of the game.
 order: 1
 ---
 
 # Getting started
 
-> **reFrozen 0.1.0 (alpha)** is available: an offline-only pre-release. Download
-> `reFrozen-0.1.0.dmg` from the [release page](https://github.com/retronative/refrozen/releases/tag/v0.1.0), which also has the release notes and
-> known limitations.
+> **reFrozen 0.2.0 Beta** is available: the offline game of 0.1.0, plus LAN multiplayer between
+> Macs. Download `reFrozen-0.2.0.dmg` from the [release page](https://github.com/retronative/refrozen/releases/tag/v0.2.0), which
+> also has the release notes and known issues.
 
 ## What you will need
 
@@ -26,9 +26,9 @@ reFrozen never ships any of these. It contains no game code, assets, maps or key
 
 ## Install
 
-1. **Download** `reFrozen-0.1.0.dmg`. To check it, run `shasum -a 256 reFrozen-0.1.0.dmg` in
+1. **Download** `reFrozen-0.2.0.dmg`. To check it, run `shasum -a 256 reFrozen-0.2.0.dmg` in
    Terminal, in the folder with the download. It must print
-   `0658af0ad31185e83b5b6af14e6eec7589a6c3a5739b394b759098eff4e46153`.
+   `db1ff96c3e839bb7c2450db525f37ceca8ff08ba367fe200cb0a7af550685643`.
 2. **Open the disk image** and drag **reFrozen** to **Applications**. Open it from Applications.
 3. **The first open.** reFrozen is ad hoc signed and **not notarized**: Apple has not checked it,
    so macOS blocks it the first time. Opening it anyway is your own decision to make an exception
@@ -57,18 +57,40 @@ reFrozen never ships any of these. It contains no game code, assets, maps or key
 - The game keeps its original 4:3 interface. On wide or Retina screens the picture is scaled
   sharply and framed with bars instead of being stretched.
 
-## Known limitations
+## LAN games between Macs
 
-v0.1.0 is an alpha. The [release notes](https://github.com/retronative/refrozen/releases/tag/v0.1.0) list its known limitations, among them:
+- **Every Mac runs reFrozen 0.2.0** on the same local network.
+- In the game, open **Local Area Network** from the multiplayer menu, then host a game or join
+  one. If you don't have a game's custom map, it downloads from the host when you join.
+- **The local network permission.** The first time you join a game, macOS asks *Allow "refrozen"
+  to find devices on local networks?* Choose **Allow**. Until it is allowed, joining fails
+  silently: the game appears in the list, but **Join** does nothing. The question appears at the
+  first join, not when hosting.
+- **The original Windows 1.26a client** is experimental: playing with it has not yet been
+  officially verified, and official testing is planned for v0.2.1. Community reports are welcome,
+  including successful connections, disconnections and synchronization issues.
 
-- an intermittent crash in long AI matches, whose cause is not known;
-- saved games of one map version, DotA v6.83d AI (PMV 1.42 EN), can't be loaded: the game reports
-  the save as unavailable or corrupted, then crashes and closes. Saving and loading work on standard
-  maps and on DotA v6.78c AI 1.4e;
-- a short pause before a map starts loading, and a loading bar that freezes for a few seconds on
+## Known issues
+
+v0.2.0 is a beta. The [release notes](https://github.com/retronative/refrozen/releases/tag/v0.2.0) list its known issues:
+
+- **An intermittent crash in long AI matches** (as in 0.1.0). It happens occasionally in long
+  matches with many computer players. Its mechanism has been identified; a fix is not verified
+  yet and is planned for 0.2.1.
+- **Terror of the Tides** (The Frozen Throne's Sentinel campaign) stops the game when you start
+  it: the game plays its opening cinematic through DirectShow, which reFrozen does not provide.
+- **Saved games of one map version, DotA v6.83d AI (PMV 1.42 EN), can't be loaded.** Saving
+  works; saves load on Booty Bay and DotA v6.78c AI 1.4e.
+- **The game opens on the Mac's main display** and can't be moved to another display. To play on
+  an external monitor, make it the main display in System Settings → Displays before you start
+  the game.
+- A short pause before a map starts loading, and a loading bar that freezes for a few seconds on
   large maps.
+- reFrozen is not notarized: macOS blocks the first open until you choose **Open Anyway** (see
+  [Install](#install)).
 
 If the game crashes, a report is written to `~/Library/Application Support/reFrozen/crashes`.
+Please report it with that crash report.
 
 ## Uninstall
 
@@ -79,5 +101,5 @@ are never changed.
 
 ## Before you ask
 
-reFrozen is offline-only for v0.1.0. LAN, private servers, iCCup and Battle.net are not part of
-it. Read the [FAQ](faq.md) for more.
+v0.2.0 plays offline and over LAN between Macs. Private servers, iCCup and Battle.net are not
+part of it. Read the [FAQ](faq.md) for more.

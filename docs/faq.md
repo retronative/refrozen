@@ -27,16 +27,19 @@ your Mac from that copy.
 
 ## Will it work online, on iCCup or on Battle.net?
 
-Not in v0.1.0, which is offline-only. LAN and private servers that players run
-themselves are a later milestone (M7). iCCup support (M8) would only ever happen with iCCup's
+Not online. v0.2.0 plays offline and over LAN between Macs on the same local network (see
+[Getting started](getting-started.md#lan-games-between-macs)); LAN games with the original Windows
+1.26a client are experimental and not yet officially verified. Private servers that players run
+themselves are a later step (M7b). iCCup support (M8) would only ever happen with iCCup's
 official cooperation and within its anti-cheat requirements; nothing is bypassed. Battle.net is not
 supported. See [Status and releases](status.md).
 
 ## Is there a release?
 
-Yes. **reFrozen 0.1.0 (alpha)**, an offline-only pre-release, was published on 27 October 2026. See
-[Getting started](getting-started.md) to install it, and the [release page](https://github.com/retronative/refrozen/releases/tag/v0.1.0) for its notes
-and known limitations. The current state is on the [Status and releases](status.md) page.
+Yes. **reFrozen 0.2.0 Beta**, with LAN multiplayer between Macs, was published on
+30 October 2026. See [Getting started](getting-started.md) to install it, and the
+[release page](https://github.com/retronative/refrozen/releases/tag/v0.2.0) for its notes and known issues. The first release, 0.1.0 (alpha, offline
+only), was published on 27 October 2026. The current state is on the [Status and releases](status.md) page.
 
 ## Is it legal?
 

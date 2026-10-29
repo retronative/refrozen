@@ -1,9 +1,4 @@
-# reFrozen v0.2.0 Beta: release notes (draft)
-
-Draft, not published. Scope, requirements and the release decision are in `M7_READINESS.md`;
-the text below is reviewed by the owner before publication.
-
----
+# reFrozen v0.2.0 Beta: release notes
 
 reFrozen 0.2.0 Beta adds LAN multiplayer between Macs to the offline game of 0.1.0: Warcraft III:
 The Frozen Throne 1.26a recompiled to run natively on Apple silicon Macs with macOS 14 or later,

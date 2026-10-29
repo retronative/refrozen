@@ -50,7 +50,7 @@ const banner = `${import.meta.env.BASE_URL}banners/icegate`
         </picture>
       </CarvedFrame>
       <p class="mt-8 text-center text-ash">
-        The gates open with v0.1.0. <RouterLink to="/releases/">Follow the release status</RouterLink> or read the
+        The gates are open with v0.2.0. <RouterLink to="/releases/">Follow the release status</RouterLink> or read the
         <RouterLink to="/faq/">FAQ</RouterLink>.
       </p>
     </div>

@@ -11,6 +11,9 @@ const releasesSection = doc.sections.find((s) => s.id === 'releases')
 // The section's first paragraph is the release summary; the lists are rendered as columns below.
 const summary = releasesSection?.html.split(/<h3 /)[0] ?? ''
 const outro = releasesSection?.html.split(/<\/ul>\n?/).pop() ?? ''
+// The lists are headed by the current release (docs/status.md `release_version`), e.g. "In v0.2.0".
+const version = status.releaseVersion
+const versionId = (version ?? '').replace(/\./g, '')
 </script>
 
 <template>
@@ -27,7 +30,7 @@ const outro = releasesSection?.html.split(/<\/ul>\n?/).pop() ?? ''
 
       <div class="mt-16 grid gap-10 md:grid-cols-2">
         <div>
-          <h3 id="in-v010" class="eyebrow !text-verdant">In v0.1.0</h3>
+          <h3 :id="`in-${versionId}`" class="eyebrow !text-verdant">In {{ version }}</h3>
           <ul class="mt-5 list-none space-y-3 p-0 m-0">
             <li v-for="item in status.planned" :key="item" class="grid grid-cols-[1rem_1fr] gap-3">
               <span class="mt-[.55em] h-2 w-2 rotate-45 bg-verdant" aria-hidden="true" />
@@ -36,7 +39,7 @@ const outro = releasesSection?.html.split(/<\/ul>\n?/).pop() ?? ''
           </ul>
         </div>
         <div>
-          <h3 id="not-part-of-v010" class="eyebrow !text-dusk">Not part of v0.1.0</h3>
+          <h3 :id="`not-part-of-${versionId}`" class="eyebrow !text-dusk">Not part of {{ version }}</h3>
           <ul class="mt-5 list-none space-y-3 p-0 m-0">
             <li v-for="item in status.excluded" :key="item" class="grid grid-cols-[1rem_1fr] gap-3">
               <span class="mt-[.55em] h-2 w-2 rotate-45 bg-dusk" aria-hidden="true" />
@@ -47,7 +50,7 @@ const outro = releasesSection?.html.split(/<\/ul>\n?/).pop() ?? ''
       </div>
 
       <div class="mt-12">
-        <h3 id="known-limitations" class="eyebrow !text-ember">Known limitations in v0.1.0</h3>
+        <h3 id="known-limitations" class="eyebrow !text-ember">Known issues in {{ version }}</h3>
         <ul class="mt-5 list-none space-y-3 p-0 m-0">
           <li v-for="item in status.known" :key="item" class="grid grid-cols-[1rem_1fr] gap-3">
             <span class="mt-[.55em] h-2 w-2 rotate-45 bg-ember" aria-hidden="true" />

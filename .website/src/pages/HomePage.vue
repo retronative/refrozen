@@ -202,7 +202,7 @@ const steps = [
       <div class="mt-8 flex flex-wrap items-center justify-between gap-4">
         <p class="m-0 text-ash">
           <strong class="text-bone">{{ status.releaseHeadline }}.</strong> {{ status.releasePlanned }}.
-          <RouterLink v-if="status.known.length" to="/releases/#known-limitations">Known limitations</RouterLink>
+          <RouterLink v-if="status.known.length" to="/releases/#known-limitations">Known issues</RouterLink>
         </p>
         <RouterLink to="/releases/" class="btn">Releases</RouterLink>
       </div>

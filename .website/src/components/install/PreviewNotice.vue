@@ -9,7 +9,7 @@ import { release } from '../../data/release'
     <p id="install-preview-title" class="eyebrow">reFrozen {{ release.version }}</p>
     <p class="mt-2 mb-0">
       <strong>{{ release.headline }}.</strong> This guide installs the {{ release.released }} release. Its
-      <a :href="release.page ?? undefined">release notes</a> list the known limitations.
+      <a :href="release.page ?? undefined">release notes</a> list the known issues.
       <RouterLink to="/releases/">Release status</RouterLink>.
     </p>
     <ul class="install-legend" aria-label="Labels used in this guide">

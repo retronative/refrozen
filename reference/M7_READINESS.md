@@ -1,4 +1,4 @@
-# M7 readiness: reFrozen v0.2.0 Alpha — LAN Multiplayer
+# M7 readiness: reFrozen v0.2.0 Beta — LAN Multiplayer
 
 Status of the v0.2.0 release requirements (`M7_PLAN.md`, "v0.2.0 release target"), with the
 evidence behind each. Updated 2026-10-30; main at the merge of patch 0028 (d3291ea).
