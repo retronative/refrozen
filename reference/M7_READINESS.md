@@ -13,9 +13,21 @@ yet resolved).
 | 1 | LAN between the M1 and the M5 Mac, both host directions | **VERIFIED** (below), including the host behind a VPN |
 | 2 | A 30+ minute DotA multiplayer session without desync | **OPEN**: separate session, needs the owner's approval |
 | 3 | Map transfer and disconnect recovery | Map transfer **VERIFIED** both directions; disconnect (Wi-Fi off) **OPEN** |
-| 4 | M4–M6 regression protection | Unit tests and the mutation gate pass on main; M4 3/3 and one M5 match PASS on the patch 0024 runtime; **OPEN** on the final v0.2.0 build |
+| 4 | M4–M6 regression protection | Unit tests and the mutation gate pass on main; M4 3/3 and one M5 match PASS on the patch 0024 runtime; on release candidate 2: see "Release candidate 2" |
 | 5 | Clean install, packaging, signing, human verification | Manual playtest **PASSED** on the patch 0028 build (the owner, 2026-10-29, below); R6 on the final v0.2.0 build, clean install, packaging and signing **OPEN**; see "Local Network permission" |
-| 6 | Website, compatibility docs, release notes | **OPEN** |
+| 6 | Website, compatibility docs, release notes | Known issues, changelog, status and compatibility pages and the release-notes draft updated (2026-10-29); the site and the published notes at publication (R8): **OPEN** |
+
+**Windows 1.26a interoperability (the owner, 2026-10-29):** outside v0.2.0's verification; the
+release notes present it as experimental, invite community reports, and plan official
+cross-platform LAN testing for v0.2.1.
+
+**R1 for v0.2.0 (the owner's decision, 2026-10-29).** The intermittent crash in long AI matches
+ships as a documented known issue and does not block v0.2.0. Its mechanism is identified (probe
+8: a sleeping trigger's attacker handle is left without a counted reference and freed while the
+trigger waits; `private/r1/NOTES.md`), but no fix is verified. No GetAttacker workaround and no
+unverified R1 change goes into v0.2.0; nothing may claim the crash is fixed. The investigation
+and the replay-based debugging continue separately for v0.2.1. A crash in a v0.2.0 run is
+recorded with its report as this known issue; any other crash fails the run as before.
 
 ## Two-Mac sessions (2026-10-28)
 
@@ -137,7 +149,14 @@ Recorded alongside, not counted against the session:
 - **Not yet tested:** Wi-Fi-off disconnect recovery; the 30+ minute DotA session; Windows
   interoperability (outside v0.2.0).
 
-## Remaining acceptance plan (prepared 2026-10-28; nothing started)
+## Remaining acceptance plan (prepared 2026-10-28)
+
+**Status 2026-10-29:** item 1 done (the version setting, `release/v0.2.0-rc1`, merged into
+`release/v0.2.0-rc2`). Release candidate 2 (main with patches 0026–0028, the version setting and
+these documents) is built and verified on m1-air: items 2 and 5's R4, R5 and R7a, see "Release
+candidate 2". Sessions A and B need the owner and darkBook. Under the R1 decision above, an R1
+crash during session A is recorded as the known issue; whether the session is then repeated is
+the owner's call.
 
 Order: the release candidate first, so the long sessions run on the build that ships.
 

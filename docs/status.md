@@ -67,11 +67,20 @@ milestone passes only when its acceptance criteria have been met and observed.
 
 ### Known issues in v0.2.0 Beta (in preparation)
 
+- **An intermittent crash in long AI matches** (as in 0.1.0). It happens occasionally in long
+  matches with many computer players, and has also occurred on the dedicated test Mac. Its
+  mechanism has been identified: a unit that a map's script still refers to across a wait can
+  be removed during that wait, and the script's next lookup of it then fails. A fix is not
+  verified yet; it is planned for 0.2.1. If it happens to you, please report it with the crash
+  report from `~/Library/Application Support/reFrozen/crashes`.
 - **Terror of the Tides (The Frozen Throne's Sentinel campaign) stops the game when you start it.**
   The game plays its opening cinematic through DirectShow, which reFrozen does not provide, and
   does not recover when that fails. A known compatibility limitation, not blocking v0.2.0; planned for after
   it. The Founding of Durotar starts and its opening sequence plays (the rest of that campaign is
   not verified); the other campaigns are not verified yet.
+- **The game opens on the Mac's main display** and can't be moved to another display. To play
+  on an external monitor, make it the main display in System Settings → Displays before you
+  start the game.
 
 A release contains only reFrozen itself: the recompiler, the runtime and the native installer.
 The game modules are built on your Mac from your own copy; see [Getting started](getting-started.md).
