@@ -62,9 +62,11 @@ and exposes the result as the virtual module `virtual:docs`:
   at `/docs/<slug>/`.
 - **`docs/status.md` is the single source of project status.** The plugin parses its milestone
   table (`State` must be one of `Passed, signed off`, `Passed, sign-off pending`, `In progress`,
-  `Future work`; anything else fails the build), its `Planned for v0.1.0` / `Not part of v0.1.0`
-  lists and its `release_headline` / `release_planned` front matter. Two optional front-matter fields drive the home
-  page's download button: `release_version` (for example `v0.1.0`) and `release_url`, the
+  `Future work`; anything else fails the build), its `In <version>` / `Known issues in <version>` /
+  `Not part of <version>` lists, whose headings are derived from `release_version` (for example
+  `### In v0.2.0`; the build fails if one is missing, and they are not read without a release), and its
+  `release_headline` / `release_planned` front matter. Two front-matter fields drive the home
+  page's download button: `release_version` (for example `v0.2.0`) and `release_url`, the
   release's DMG asset, which must match
   `https://github.com/retronative/refrozen/releases/download/<tag>/<name>.dmg`. They are set
   together or not at all; the build fails otherwise. While they are absent the button is a

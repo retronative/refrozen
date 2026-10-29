@@ -15,7 +15,7 @@ const numerals = ['I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X']
       <RouterLink :to="installPath()" class="install-feature group mb-10 no-underline">
         <span class="eyebrow">Installation guide</span>
         <span class="display mt-2 block text-[1.4rem] text-bone group-hover:text-gold-bright transition-colors">Installing reFrozen, step by step</span>
-        <span class="mt-1 block text-ash text-[.97rem]">Installing reFrozen 0.1.0: download, Applications, first launch, preparing your own game and playing.</span>
+        <span class="mt-1 block text-ash text-[.97rem]">Installing reFrozen 0.2.0: download, Applications, first launch, preparing your own game and playing.</span>
       </RouterLink>
       <ol class="slab slab--rim list-none m-0 p-0">
         <li v-for="(doc, i) in docs" :key="doc.slug" class="border-t border-white/5 first:border-0">

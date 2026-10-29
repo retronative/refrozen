@@ -84,7 +84,8 @@ export function parseStatus(docsDir, base) {
   const md = createRenderer(base)
   const { data, body } = parseFrontmatter(readFileSync(join(docsDir, 'status.md'), 'utf8'))
   const section = (heading) => {
-    const start = body.search(new RegExp(`^#{2,3} ${heading}\\s*$`, 'm'))
+    const escaped = heading.replace(/[.*+?^$()|[\]\\]/g, '\\$&')
+    const start = body.search(new RegExp(`^#{2,3} ${escaped}\\s*$`, 'm'))
     if (start < 0) throw new Error(`docs/status.md: missing heading "${heading}"`)
     const rest = body.slice(start).split('\n').slice(1).join('\n')
     const end = rest.search(/^#{2,3} /m)
@@ -110,16 +111,18 @@ export function parseStatus(docsDir, base) {
   const releaseVersion = data.release_version || null
   if (!releaseUrl !== !releaseVersion) throw new Error('docs/status.md: set release_url and release_version together, or neither')
   if (releaseUrl && !RELEASE_DMG_URL.test(releaseUrl)) throw new Error(`docs/status.md: release_url must be a .dmg asset under https://github.com/retronative/refrozen/releases/download/ (got ${releaseUrl})`)
-  if (releaseVersion && !RELEASE_VERSION.test(releaseVersion)) throw new Error(`docs/status.md: release_version must look like v0.1.0 (got ${releaseVersion})`)
+  if (releaseVersion && !RELEASE_VERSION.test(releaseVersion)) throw new Error(`docs/status.md: release_version must look like v0.2.0 (got ${releaseVersion})`)
+  // The Releases lists are headed by the current release ("In v0.2.0", ...); none before a release.
+  const releaseList = (heading) => (releaseVersion ? list(`${heading}${releaseVersion}`) : [])
   return {
     releaseHeadline: data.release_headline,
     releasePlanned: data.release_planned,
     releaseUrl,
     releaseVersion,
     milestones,
-    planned: list('In v0.1.0'),
-    known: list('Known limitations in v0.1.0'),
-    excluded: list('Not part of v0.1.0'),
+    planned: releaseList('In '),
+    known: releaseList('Known issues in '),
+    excluded: releaseList('Not part of '),
   }
 }
 

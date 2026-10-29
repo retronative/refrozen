@@ -5,9 +5,13 @@ All notable changes to reFrozen are recorded here. The format follows
 [Semantic Versioning](https://semver.org/). Each published release also has its notes on
 [GitHub Releases](https://github.com/retronative/refrozen/releases).
 
-## [Unreleased]: 0.2.0 Beta, LAN multiplayer (in preparation)
+## [Unreleased]
 
-Not released. What is planned and how far it is tested are in [docs/status.md](docs/status.md).
+## [0.2.0]: 2026-10-30, Beta (LAN multiplayer)
+
+reFrozen 0.2.0 Beta adds LAN multiplayer between Macs to the offline game of 0.1.0. The full notes,
+with the requirements, the known issues and the experimental status of games with the Windows
+1.26a client, are on the [release page](https://github.com/retronative/refrozen/releases/tag/v0.2.0).
 
 ### Added
 
@@ -35,9 +39,8 @@ Not released. What is planned and how far it is tested are in [docs/status.md](d
   verified yet; it is planned for 0.2.1. If it happens to you, please report it with the crash
   report from `~/Library/Application Support/reFrozen/crashes`.
 - **Terror of the Tides (The Frozen Throne's Sentinel campaign) stops the game when you start it.**
-  The game paints a full-screen window with a Windows drawing call (GDI's FillRect) that reFrozen
-  does not implement yet. A known compatibility limitation, not blocking 0.2.0; planned for after
-  it. The Founding of Durotar starts and its opening sequence plays (the rest of that campaign is
+  The game plays its opening cinematic through DirectShow, which reFrozen does not provide, and
+  does not recover when that fails. The Founding of Durotar starts and its opening sequence plays (the rest of that campaign is
   not verified); the other campaigns are not verified yet.
 - **Saved games of one map version, DotA v6.83d AI (PMV 1.42 EN), can't be loaded** (as in 0.1.0).
 - **The game opens on the Mac's main display** and can't be moved to another display. To play
@@ -92,5 +95,6 @@ LAN and private multiplayer, iCCup and Battle.net. Network menus are present but
 (tag `v0.1.0`, commit `57a0db5`). The app is ad hoc signed and not notarized: see
 [Getting started](docs/getting-started.md) for opening it.
 
-[Unreleased]: https://github.com/retronative/refrozen/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/retronative/refrozen/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/retronative/refrozen/releases/tag/v0.2.0
 [0.1.0]: https://github.com/retronative/refrozen/releases/tag/v0.1.0

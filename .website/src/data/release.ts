@@ -1,4 +1,4 @@
-// The release the installation guide describes: reFrozen 0.1.0, published 27 October 2026. The
+// The release the installation guide describes: reFrozen 0.2.0 Beta, published 30 October 2026. The
 // values come from the published release and its tests, as docs/getting-started.md gives them. The
 // headline text comes from docs/status.md, the single status source.
 import { status } from '../docs'
@@ -11,14 +11,14 @@ export const release = {
   /** The line under the headline (docs/status.md front matter). */
   planned: status.releasePlanned,
   published: true,
-  version: 'v0.1.0' as string | null,
-  tag: 'v0.1.0' as string | null,
-  released: '27 October 2026' as string | null,
-  page: 'https://github.com/retronative/refrozen/releases/tag/v0.1.0' as string | null,
+  version: status.releaseVersion,
+  tag: status.releaseVersion,
+  released: '30 October 2026' as string | null,
+  page: `https://github.com/retronative/refrozen/releases/tag/${status.releaseVersion}` as string | null,
   dmg: {
-    name: 'reFrozen-0.1.0.dmg' as string | null,
+    name: 'reFrozen-0.2.0.dmg' as string | null,
     url: status.releaseUrl,
-    sha256: '0658af0ad31185e83b5b6af14e6eec7589a6c3a5739b394b759098eff4e46153' as string | null,
+    sha256: 'db1ff96c3e839bb7c2450db525f37ceca8ff08ba367fe200cb0a7af550685643' as string | null,
   },
   minMacos: 'macOS 14' as string | null,
   diskSpace: 'About 2.5 GB free during setup; about 1.2 GB once set up' as string | null,
@@ -31,31 +31,31 @@ export const installSteps = [
     slug: 'step-1',
     title: 'Download reFrozen',
     short: 'Download',
-    description: 'Step 1 of 5 of installing reFrozen 0.1.0: what you will need, the download and its checksum.',
+    description: 'Step 1 of 5 of installing reFrozen 0.2.0: what you will need, the download and its checksum.',
   },
   {
     slug: 'step-2',
     title: 'Move reFrozen to Applications',
     short: 'Install',
-    description: 'Step 2 of 5 of installing reFrozen 0.1.0: open the disk image and drag reFrozen to Applications.',
+    description: 'Step 2 of 5 of installing reFrozen 0.2.0: open the disk image and drag reFrozen to Applications.',
   },
   {
     slug: 'step-3',
     title: 'Open it for the first time',
     short: 'First launch',
-    description: 'Step 3 of 5 of installing reFrozen 0.1.0: the first launch, and allowing the app when macOS blocks it.',
+    description: 'Step 3 of 5 of installing reFrozen 0.2.0: the first launch, and allowing the app when macOS blocks it.',
   },
   {
     slug: 'step-4',
     title: 'Prepare Warcraft III',
     short: 'Prepare the game',
-    description: 'Step 4 of 5 of installing reFrozen 0.1.0: your own installers are checked, then the game is built on your Mac.',
+    description: 'Step 4 of 5 of installing reFrozen 0.2.0: your own installers are checked, then the game is built on your Mac.',
   },
   {
     slug: 'step-5',
     title: 'Play',
     short: 'Play',
-    description: 'Step 5 of 5 of installing reFrozen 0.1.0: offline play, controls, troubleshooting and uninstalling.',
+    description: 'Step 5 of 5 of installing reFrozen 0.2.0: offline and LAN play, controls, troubleshooting and uninstalling.',
   },
 ] as const
 
