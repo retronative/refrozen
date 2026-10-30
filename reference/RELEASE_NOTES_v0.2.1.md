@@ -64,5 +64,15 @@ Official testing with Windows is planned for v0.2.2.
 
 ## Verification
 
-To be completed from `READINESS_v0.2.1.md` before publication: the regression runs on the release
-candidate, the clean install and upgrade, and the owner's review.
+On release candidate 2 (`23c28ec`; `reFrozen-0.2.1.dmg`, SHA-256
+`576a1e5836251c23b9751c7dded8922faf280c81de4f56b0fae820990a47a3cc`), details in `READINESS_v0.2.1.md`:
+
+- The crash guard: a regression test, mutation testing, a test map that forces the condition (the
+  game no longer stops), and a real DotA AI match in which the guard took effect and the match went
+  on normally.
+- Release checks, the dmg read back, signature, a clean install in a fresh data folder (the
+  installers, cancel, the first build), an upgrade over a 0.2.0 installation (the game module
+  rebuilt, maps kept), suites and ctest, two identical lifts, M4 3/3, M5 3/3, and the full mutation
+  gate (362 mutants: 360 killed, 2 equivalent).
+- One 30-minute AI match on the release candidate: no crash, stable frame pacing and memory.
+- LAN play between Macs: verified for 0.2.0; 0.2.1 changes no network code.
