@@ -11,10 +11,11 @@ built on your Mac from your own game files, with LAN games between Macs.
 ## What's fixed
 
 - **The intermittent crash in long AI matches.** A map's trigger can wait, then ask which unit
-  attacked or damaged. If the game had discarded that event's information during the wait, the
-  game stopped. reFrozen now answers "no unit" in that case, as the game does for a unit that has
-  left the game, and play continues. In testing, the guard took effect during a real DotA AI match
-  and the game continued without a crash.
+  attacked or damaged (`GetAttacker` and the damage-source response). If the game had discarded
+  that event's information during the wait, the game stopped. reFrozen now answers "no unit" in
+  that case, as the game does for a unit that has left the game, and play continues. In testing,
+  the guard took effect on `GetAttacker` during a real DotA AI match and the game continued
+  without a crash; the damage-source path is covered by the regression tests.
 
 ## Upgrading from 0.2.0
 
@@ -30,9 +31,11 @@ keys and the official 1.26a English patch, and maps you supply.
 
 ## Known issues
 
-- **A related, rarer case is not fixed.** In the same situation (a trigger that waits, then asks
-  for its event's unit), the answer may in rare cases be a different unit instead of none. It does
-  not stop the game, but a map's script may then act on the wrong unit. It is under investigation.
+- **A related handle-reference issue is not fixed.** In the same situation (a trigger that waits,
+  then asks for its event's unit), the game may have reused the reference the trigger still holds,
+  so the answer can in rare cases be a different unit instead of none. It does not stop the game,
+  but a map's script may then act on the wrong unit. It is unresolved and under investigation; this
+  release does not fix every issue related to the crash.
 - **Terror of the Tides (The Frozen Throne's Sentinel campaign) stops the game when you start it.**
   The game plays its opening cinematic through DirectShow, which reFrozen does not provide, and
   does not recover when that fails. The Founding of Durotar starts and its opening sequence plays

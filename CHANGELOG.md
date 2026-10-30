@@ -12,15 +12,20 @@ Not released. What is planned and how far it is tested are in [docs/status.md](d
 ### Fixed
 
 - **The intermittent crash in long AI matches** (a known issue of 0.1.0 and 0.2.0). A map's trigger
-  that waited, then asked which unit attacked or damaged, could find that the game had discarded
-  the event's information during the wait, and the game stopped. The answer is now "no unit", as
-  for a unit that has left the game, and play continues.
+  that waited, then asked which unit attacked or damaged (`GetAttacker` and the damage-source
+  response), could find that the game had discarded the event's information during the wait, and
+  the game stopped. reFrozen now answers "no unit" in that case, as the game does for a unit that
+  has left the game, and play continues. Verified with a regression test and mutation testing for
+  both responses, a test map that forces the condition, and a real DotA AI match in which the guard
+  took effect on `GetAttacker` and the game continued without a crash.
 
 ### Known issues
 
-- **A related, rarer case is not fixed.** In the same situation, the answer may in rare cases be a
-  different unit instead of none. It does not stop the game, but a map's script may then act on
-  the wrong unit. It is under investigation.
+- **A related handle-reference issue is not fixed.** In the same situation, the game may have
+  reused the reference the trigger still holds, so the answer can in rare cases be a different
+  unit instead of none. It does not stop the game, but a map's script may then act on the wrong
+  unit. It is unresolved and under investigation; this release does not fix every issue related
+  to the crash.
 - As in 0.2.0: Terror of the Tides stops the game when you start it; saved games of DotA v6.83d AI
   (PMV 1.42 EN) can't be loaded; the game opens on the Mac's main display.
 - LAN games with the original Windows 1.26a client stay experimental; official testing is planned
