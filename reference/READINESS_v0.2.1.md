@@ -40,7 +40,7 @@ given), **OPEN** (not yet done), **OWNER** (the owner's decision or session).
 | R6 Human verification | **VERIFIED**: PASSED by the owner (2026-10-30), a short session on darkBook with the release candidate's dmg (below). Mac-to-Mac LAN not repeated (the owner's decision; 0.2.0's evidence reused) |
 | R7a Signing | **VERIFIED**: ad hoc signature valid; Gatekeeper rejects (not notarized), as for 0.2.0 |
 | R7b Distribution and notices | **REUSED**: nothing shipped is added or changed except reFrozen's own code |
-| R8 Publication | **OWNER** |
+| R8 Publication | **VERIFIED**: approved by the owner and published on 30 October 2026 (below) |
 
 ## Release candidate 1 (2026-10-30, `580077e`): stopped
 
@@ -133,3 +133,12 @@ R-E12, the corrected audit's mutant); `test_event_data` passes there.
 | Two-Mac LAN sessions (33.7 minutes, Wi-Fi disconnect and recovery, both host directions); not repeated for 0.2.1 (the owner's decision, 2026-10-30) | No network, runtime or launcher code changed. The guard changes the game only where it stopped before, identically on every Mac running 0.2.1 |
 | x86recomp patches reapply identically | The x86recomp tree (`b76ce7b`) is unchanged |
 | The preliminary Wine check with the original client | Kept as preliminary evidence only; official Windows testing in v0.2.2 |
+
+## Published (2026-10-30)
+
+With the owner's R8 approval: tag `v0.2.1` (annotated) on `23c28ec`; main `d2f503f` (the release
+candidate's branch and the publication docs); the GitHub pre-release "reFrozen 0.2.1 (maintenance)"
+with `reFrozen-0.2.1.dmg` (12,455,657 bytes) and `SHA256SUMS`. Downloaded back from GitHub: SHA-256
+`576a1e5836251c23b9751c7dded8922faf280c81de4f56b0fae820990a47a3cc`, matching. The site's Pages deploy
+succeeded, and the live home page, releases page and installation guide show 0.2.1, its checksum
+and its download.
