@@ -184,6 +184,9 @@ def parallel():
     check("serial: a loader mutant may share, whole or not", mutate.serial(w("x", "loader"), whole=True), False)
 
     runs, lock = [], threading.Lock()
+    # P10's and P11's whole tests (the parallel phase) wait for P13's whole test_win32 run (0.5 s at
+    # most), so that run overlaps them whenever it is started in the parallel phase, whatever the timing.
+    p13_whole = threading.Event()
 
     class Fake:
         def __init__(self, needs_x86, timeout, path):
@@ -194,6 +197,10 @@ def parallel():
 
         def _run(self, m, kind):
             t0 = time.time()
+            if kind == "whole" and m["id"] == "P13":
+                p13_whole.set()
+            elif kind == "whole" and m["id"] in ("P10", "P11"):
+                p13_whole.wait(0.5)
             time.sleep(0.03)
             with lock:
                 runs.append((self.path, kind, m["id"], t0, time.time()))
