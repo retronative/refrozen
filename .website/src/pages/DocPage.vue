@@ -15,7 +15,7 @@ const doc = computed(() => requireDoc(String(route.params.slug)))
     <p v-if="doc.slug === 'getting-started'" class="install-feature install-feature--inline mb-10">
       <span class="eyebrow">Installation guide</span>
       <span class="mt-1 block">
-        Installing reFrozen 0.2.0 in five steps:
+        Installing reFrozen 0.2.1 in five steps:
         <RouterLink :to="installPath()">the installation guide</RouterLink>.
       </span>
     </p>
