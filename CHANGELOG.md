@@ -5,9 +5,13 @@ All notable changes to reFrozen are recorded here. The format follows
 [Semantic Versioning](https://semver.org/). Each published release also has its notes on
 [GitHub Releases](https://github.com/retronative/refrozen/releases).
 
-## [Unreleased]: 0.2.1, maintenance (in preparation)
+## [Unreleased]
 
-Not released. What is planned and how far it is tested are in [docs/status.md](docs/status.md).
+## [0.2.1]: 2026-10-30, maintenance
+
+A maintenance release of 0.2.0 Beta. The full notes are on the
+[release page](https://github.com/retronative/refrozen/releases/tag/v0.2.1). The SHA-256 of
+`reFrozen-0.2.1.dmg` is `576a1e5836251c23b9751c7dded8922faf280c81de4f56b0fae820990a47a3cc`.
 
 ### Fixed
 
@@ -120,6 +124,7 @@ LAN and private multiplayer, iCCup and Battle.net. Network menus are present but
 (tag `v0.1.0`, commit `57a0db5`). The app is ad hoc signed and not notarized: see
 [Getting started](docs/getting-started.md) for opening it.
 
-[Unreleased]: https://github.com/retronative/refrozen/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/retronative/refrozen/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/retronative/refrozen/releases/tag/v0.2.1
 [0.2.0]: https://github.com/retronative/refrozen/releases/tag/v0.2.0
 [0.1.0]: https://github.com/retronative/refrozen/releases/tag/v0.1.0

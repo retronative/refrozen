@@ -1,7 +1,4 @@
-# reFrozen v0.2.1: release notes (draft)
-
-Draft, not published. Scope, requirements and the release decision are in `READINESS_v0.2.1.md`;
-the text below is reviewed by the owner before publication.
+# reFrozen v0.2.1: release notes
 
 reFrozen 0.2.1 is a maintenance release of 0.2.0 Beta. It guards against the intermittent crash in
 long AI matches, the main known issue of 0.1.0 and 0.2.0. Everything else is as in 0.2.0: Warcraft

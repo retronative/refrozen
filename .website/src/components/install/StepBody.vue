@@ -173,7 +173,7 @@ const dataFolder = '~/Library/Application Support/reFrozen'
         </li>
         <li>
           <StatusTag kind="unverified" /> Games with the original Windows 1.26a client are experimental and not yet officially
-          verified; official testing is planned for v0.2.1.
+          verified; official testing is planned for v0.2.2.
         </li>
       </ul>
 
@@ -190,9 +190,11 @@ const dataFolder = '~/Library/Application Support/reFrozen'
 
       <component :is="h" :id="id('known-limitations')">Known issues</component>
       <p>
-        {{ release.version }} is a beta. Its <a :href="release.page ?? undefined">release notes</a> list the known issues, among them an
-        intermittent crash in long AI matches (a fix is planned for 0.2.1), and saved games of one map version, DotA v6.83d AI
-        (PMV 1.42 EN), that can't be loaded. Saves load on Booty Bay and on DotA v6.78c AI 1.4e.
+        {{ release.version }} is a maintenance release of a beta. Its <a :href="release.page ?? undefined">release notes</a> list the
+        known issues, among them a related handle-reference issue of the long-match crash that 0.2.1 guards against (in rare cases a
+        map's script may get a different unit; the game does not stop), short pauses while loading and an occasional freeze of about a
+        second during a match, and saved games of one map version, DotA v6.83d AI (PMV 1.42 EN), that can't be loaded. Saves load on
+        Booty Bay and on DotA v6.78c AI 1.4e.
       </p>
 
       <component :is="h" :id="id('troubleshooting')">Troubleshooting</component>

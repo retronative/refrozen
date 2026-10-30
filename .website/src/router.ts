@@ -65,7 +65,7 @@ const routes: RouteRecordRaw[] = [
     meta: {
       title: `Installation guide — ${SITE}`,
       description:
-        'Installing reFrozen 0.2.0, all five steps on one page: download, Applications, first launch, preparing your own game and playing.',
+        'Installing reFrozen 0.2.1, all five steps on one page: download, Applications, first launch, preparing your own game and playing.',
     },
   },
   ...installSteps.map(

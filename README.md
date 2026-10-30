@@ -19,12 +19,13 @@ Native recompilation of Warcraft III: The Frozen Throne (1.26a) for Apple Silico
 
 ## Status
 
-**[reFrozen 0.2.0 Beta](https://github.com/retronative/refrozen/releases/tag/v0.2.0) is available** for Apple silicon Macs (macOS 14 or
+**[reFrozen 0.2.1](https://github.com/retronative/refrozen/releases/tag/v0.2.1) is available** for Apple silicon Macs (macOS 14 or
 later). It installs Warcraft III 1.26a from your own installers, builds the game for your Mac, and
 plays offline custom games, including full DotA matches with computer players, with audio, Retina
-displays and borderless fullscreen (Ctrl+Cmd+F). New in 0.2.0: LAN games between Macs (hosting,
-finding and joining games, lobby and chat, custom map download). To install it, follow
-[Getting started](docs/getting-started.md); the [release notes](https://github.com/retronative/refrozen/releases/tag/v0.2.0) list its
+displays and borderless fullscreen (Ctrl+Cmd+F). Since 0.2.0: LAN games between Macs (hosting,
+finding and joining games, lobby and chat, custom map download); 0.2.1 guards against the
+intermittent crash in long AI matches. To install it, follow
+[Getting started](docs/getting-started.md); the [release notes](https://github.com/retronative/refrozen/releases/tag/v0.2.1) list its
 known issues. Private servers, iCCup and Battle.net are not part of it.
 
 Changes by release are in [CHANGELOG.md](CHANGELOG.md). The public status of each milestone is in [docs/status.md](docs/status.md). Milestones and their
