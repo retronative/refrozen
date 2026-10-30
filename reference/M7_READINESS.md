@@ -15,7 +15,7 @@ yet resolved).
 | 2 | A 30+ minute DotA multiplayer session without desync | **VERIFIED** on release candidate 2: session A, 33.7 minutes, 20029 of 20029 turns identical ("Release candidate 2") |
 | 3 | Map transfer and disconnect recovery | Map transfer **VERIFIED** both directions; disconnect (Wi-Fi off) and recovery **VERIFIED** on release candidate 2: session B ("Release candidate 2") |
 | 4 | M4–M6 regression protection | **VERIFIED** on release candidate 2: suites, ctest, M4 3/3, M5 3/3, the full mutation gate (349: 347 KILLED, 2 EQUIVALENT); the one 30-minute M6 run failed with R1's known crash ("Release candidate 2") |
-| 5 | Clean install, packaging, signing, human verification | Manual playtest **PASSED** on the patch 0028 build (the owner, 2026-10-29, below); on release candidate 2 the release checks, dmg read-back, signature and clean install in a fresh data folder **VERIFIED** (Gatekeeper rejects: not notarized, as for v0.1.0), and the owner played sessions A and B on it; R6 sign-off on the final build: **PASSED** (the owner, 2026-10-30); see "Local Network permission" |
+| 5 | Clean install, packaging, signing, human verification | Manual playtest **PASSED** on the patch 0028 build (the owner, 2026-10-29, below); on release candidate 2 the release checks, dmg read-back, signature and clean install in a fresh data folder **VERIFIED** (Gatekeeper rejects: not notarized, as for v0.1.0), and the owner played sessions A and B on it; R6 on the final build: **APPROVED** by the owner on 2026-10-30, with R8, in reply to the release package that asked for both ("Published"); see "Local Network permission" |
 | 6 | Website, compatibility docs, release notes | Known issues, changelog, status and compatibility pages and the release-notes draft updated (2026-10-29); the site and the published notes at publication (R8): **VERIFIED** (2026-10-30, "Published") |
 
 **Windows 1.26a interoperability (the owner, 2026-10-29):** outside v0.2.0's verification; the
@@ -227,7 +227,8 @@ is unchanged.
 
 ## Published (2026-10-30)
 
-With the owner's approval (R6, R8; M7 passed and signed off): tag `v0.2.0` on `64ef120` (release
+The owner approved v0.2.0 on 2026-10-30, in reply to the release package that asked for the R6 and R8
+approvals, chose to publish it that day, and chose "passed, signed off" for M7 on the status page: tag `v0.2.0` on `64ef120` (release
 candidate 2), GitHub pre-release "reFrozen 0.2.0 Beta (LAN multiplayer)" with `reFrozen-0.2.0.dmg`
 (SHA-256 `db1ff96c3e839bb7c2450db525f37ceca8ff08ba367fe200cb0a7af550685643`) and `SHA256SUMS`,
 verified by downloading them back; the website updated and deployed, showing v0.2.0, its checksum

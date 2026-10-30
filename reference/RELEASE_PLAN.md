@@ -7,7 +7,7 @@ downloading them back; the website updated and deployed. Gate outcomes are in th
 checklist below. Release candidates 1 and 2 were not published: release candidate 3 fixed an
 intermittent launch failure found in R6 (x86recomp patch 0022) and added the installer UX.
 
-**v0.2.0 Beta published 2026-10-30, with the owner's approval (R6, R8):** tag `v0.2.0` on
+**v0.2.0 Beta published 2026-10-30, with the owner's approval (given for R6 and R8 together):** tag `v0.2.0` on
 `64ef120` (release candidate 2), GitHub pre-release with `reFrozen-0.2.0.dmg` (SHA-256
 `db1ff96c3e839bb7c2450db525f37ceca8ff08ba367fe200cb0a7af550685643`) and `SHA256SUMS`, verified by
 downloading them back; the website updated and deployed. Gate outcomes are in `M7_READINESS.md`.
