@@ -12,12 +12,12 @@ Not released. What is planned and how far it is tested are in [docs/status.md](d
 ### Fixed
 
 - **The intermittent crash in long AI matches** (a known issue of 0.1.0 and 0.2.0). A map's trigger
-  that waited, then asked which unit attacked or damaged (`GetAttacker` and the damage-source
-  response), could find that the game had discarded the event's information during the wait, and
-  the game stopped. reFrozen now answers "no unit" in that case, as the game does for a unit that
+  that waited, then asked which unit attacked (`GetAttacker`, for attacks on any of a player's units
+  or on one unit), could find that the game had discarded the event's information during the wait,
+  and the game stopped. reFrozen now answers "no unit" in that case, as the game does for a unit that
   has left the game, and play continues. Verified with a regression test and mutation testing for
-  both responses, a test map that forces the condition, and a real DotA AI match in which the guard
-  took effect on `GetAttacker` and the game continued without a crash.
+  both kinds of attack event, a test map that forces the condition, and a real DotA AI match in
+  which the guard took effect and the game continued without a crash.
 
 ### Known issues
 

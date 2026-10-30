@@ -25,7 +25,7 @@ given), **OPEN** (not yet done), **OWNER** (the owner's decision or session).
 | Mutants | R-E1–R-E10 KILLED; the affected gate after merging main: 63 mutants, all KILLED in the end (61 at once; R-B7 re-expressed, then KILLED; R-G15's timing-dependent check made deterministic, then KILLED); the gate's 21 re-run on the branch tip: KILLED |
 | Forced fault (a test map, a test-only build that clears the event's data during the wait) | original code: the fatal fault of R1's reports; with the guard: the trigger gets "no unit" and the game continues |
 | Real DotA AI matches (a test-only build: the guard plus logging) | 3 runs on m1-air: two complete 65-minute matches (the guard not needed, no crash), and in the third the guard took effect six times in one frame at about 21.5 minutes, on the attacker lookup of R1's reports; the game went on (two further frame reports at 62.5 and 62.3 frames a second, memory flat, no fatal error). One activation: the guard is exercised, not an endurance result |
-| Not exercised in a real match | the damage-event path of the guard (unit test and builds only) |
+| Not exercised in a real match | the guard's second path (`GetAttacker` for an attack event registered on one unit): its helper ran with the event's data present, never without (unit test and builds only) |
 
 ## Release requirements
 
@@ -88,7 +88,8 @@ R-E12, the corrected audit's mutant); `test_event_data` passes there.
 - The secondary defect (a lookup after a wait that may refer to a different object): unresolved,
   rare, does not stop the game. The checks used so far cannot see its likely form (an id reused by
   an event of the same kind), so no observation of it is evidence that it is gone.
-- The guard's damage-event path has not been exercised in a real match (unit test and builds only).
+- The guard's second path (`GetAttacker` for an attack event registered on one unit) has not taken
+  effect in a real match (unit test and builds only).
 - One real-match activation of the guard, on the test build (the guard plus logging); whether it
   took effect during release candidate 2's 30-minute run is unknown (the shipped build does not
   log it). Endurance is verified separately.

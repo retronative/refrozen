@@ -11,11 +11,11 @@ built on your Mac from your own game files, with LAN games between Macs.
 ## What's fixed
 
 - **The intermittent crash in long AI matches.** A map's trigger can wait, then ask which unit
-  attacked or damaged (`GetAttacker` and the damage-source response). If the game had discarded
+  attacked (`GetAttacker`, for attacks on any of a player's units or on one unit). If the game had discarded
   that event's information during the wait, the game stopped. reFrozen now answers "no unit" in
   that case, as the game does for a unit that has left the game, and play continues. In testing,
-  the guard took effect on `GetAttacker` during a real DotA AI match and the game continued
-  without a crash; the damage-source path is covered by the regression tests.
+  the guard took effect during a real DotA AI match (an attack on a player's unit) and the game
+  continued without a crash; attacks registered on one unit are covered by the regression tests.
 
 ## Upgrading from 0.2.0
 
