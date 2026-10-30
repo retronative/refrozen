@@ -46,7 +46,7 @@ published on 30 October 2026:
 - Everything in 0.1.0: offline custom games and DotA AI maps with computer players, audio, mouse
   and keyboard, borderless fullscreen and Retina / HiDPI, and replays
 - Experimental: LAN games with the original Windows 1.26a client are not yet officially verified;
-  official testing is planned for v0.2.1
+  official testing is planned for v0.2.2
 
 ### Known issues in v0.2.0
 

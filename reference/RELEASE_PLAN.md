@@ -122,6 +122,14 @@ decided that v0.2.0 ships with R1 as a documented known issue, not a blocker; th
 continues separately for v0.2.1. No unverified R1 change (in particular no GetAttacker
 workaround) goes into v0.2.0, and nothing may claim the crash is fixed.
 
+*v0.2.1 (the owner, 2026-10-30).* A focused maintenance release: the R1 guard (an attack or damage
+event response read after a wait whose event data is gone gives "no unit"), with its regression
+test, mutants and a real-match activation (`READINESS_v0.2.1.md`). The related secondary defect
+stays unresolved and documented, with no change to handle lifetimes or allocation; nothing may
+claim that every R1-related issue is fixed. Official verification with the native Windows 1.26a
+client moves to v0.2.2; the Wine check stays preliminary evidence. The release gates apply as for
+0.2.0, reusing evidence only where the reason is recorded; endurance runs are verified separately.
+
 *Consequences for M6 and R3.* ROADMAP M6 step 1 reads "the crash fixed, or accepted under the
 revised R1". Steps 2 and 3 keep every pass condition. Any crash during an M6 stress or acceptance
 run fails that run and reopens R1.

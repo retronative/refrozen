@@ -5,14 +5,26 @@ All notable changes to reFrozen are recorded here. The format follows
 [Semantic Versioning](https://semver.org/). Each published release also has its notes on
 [GitHub Releases](https://github.com/retronative/refrozen/releases).
 
-## [Unreleased]
+## [Unreleased]: 0.2.1, maintenance (in preparation)
+
+Not released. What is planned and how far it is tested are in [docs/status.md](docs/status.md).
 
 ### Fixed
 
-- The intermittent crash in long AI matches: a map's trigger that read an attack or damage event
-  response after a wait could find the event's data gone, and the game stopped. The response is
-  now "no unit", as for a unit that has left the game.
-  *Provisional:* to be confirmed by the v0.2.1 AI stress runs before this entry is released.
+- **The intermittent crash in long AI matches** (a known issue of 0.1.0 and 0.2.0). A map's trigger
+  that waited, then asked which unit attacked or damaged, could find that the game had discarded
+  the event's information during the wait, and the game stopped. The answer is now "no unit", as
+  for a unit that has left the game, and play continues.
+
+### Known issues
+
+- **A related, rarer case is not fixed.** In the same situation, the answer may in rare cases be a
+  different unit instead of none. It does not stop the game, but a map's script may then act on
+  the wrong unit. It is under investigation.
+- As in 0.2.0: Terror of the Tides stops the game when you start it; saved games of DotA v6.83d AI
+  (PMV 1.42 EN) can't be loaded; the game opens on the Mac's main display.
+- LAN games with the original Windows 1.26a client stay experimental; official testing is planned
+  for 0.2.2.
 
 ## [0.2.0]: 2026-10-30, Beta (LAN multiplayer)
 

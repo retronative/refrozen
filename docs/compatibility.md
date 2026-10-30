@@ -56,7 +56,7 @@ Displays).
 | Saved games | Saving and loading verified on Booty Bay (melee) and DotA v6.78c AI 1.4e. One map version, DotA v6.83d AI (PMV 1.42 EN), saves but its saves can't be loaded: the game reports an error, then crashes (a known limitation, specific to that version; not yet compared with the original client) |
 | The Frozen Throne campaigns (v0.2.0 Beta) | The Founding of Durotar starts and its opening sequence plays (the rest of it is not verified). Terror of the Tides stops the game when you start it: the game plays its opening cinematic through DirectShow, which reFrozen does not provide, and does not recover when that fails; a known limitation, planned for after v0.2.0. The other campaigns are not verified yet |
 | LAN games between Macs (v0.2.0 Beta) | Hosting, finding and joining games, lobby and chat, custom map download (verified between two Macs, both host directions) |
-| LAN games with the Windows 1.26a client (v0.2.0 Beta) | Experimental: not yet officially verified. Community reports are welcome (connections, disconnections, synchronization issues); official testing is planned for v0.2.1 |
+| LAN games with the Windows 1.26a client (v0.2.0 Beta) | Experimental: not yet officially verified. Community reports are welcome (connections, disconnections, synchronization issues); official testing is planned for v0.2.2 |
 | Private servers | Not supported yet (M7b) |
 | iCCup online | Not supported (M8), only ever with iCCup's official cooperation |
 | Battle.net | Not supported |
