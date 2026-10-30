@@ -32,7 +32,8 @@ ctest --test-dir tools/x86recomp/out/build/debug   # "pacing" is a known timing 
 /opt/homebrew/bin/python3 -I tests/test_font_keydata.py       # needs game/wine-oracle + the readme
 /opt/homebrew/bin/python3 -I tests/test_jumptable_corrections.py
 /opt/homebrew/bin/python3 -I tests/test_run_on_stack.py      # patch 0022: the main guest stack's end frame
-/opt/homebrew/bin/python3 -I tests/mutate.py [--milestone M3]  # the mutation gate (scratch tree): sign-off
+/opt/homebrew/bin/python3 -I tests/mutate.py --focused --jobs 3  # the release gate: every mutant (attached, idle Mac)
+/opt/homebrew/bin/python3 -I tests/mutate.py [--milestone M3]  # the default run: whole tests, one tree (the reference)
 /opt/homebrew/bin/python3 -I tests/mutate.py --changed main --focused  # focused gate while working
 /opt/homebrew/bin/python3 -I tests/test_mutate.py            # the gate's own rules
 /opt/homebrew/bin/python3 -I tests/test_lan_broadcast.py     # patch 0025: LAN discovery broadcast targets
@@ -127,9 +128,23 @@ scripts/wine_loadtest.sh game/wine-oracle 'Maps\Download\<map>.w3x' 60 game/load
   `CHANGE_SCOPE`), each test_win32 mutant on the `--modes` group that prints its expected check
   (`WIN32_GROUPS`; the group's unmutated run must print that check) with the compiled test
   program reused while its inputs are unchanged. Only a kill by the expected check counts there;
-  anything else is decided by the whole test. Run it attached (mode N). It does not replace the
-  default run, which signs off milestones and releases. A new check-name prefix goes into
-  `WIN32_GROUPS`, a new indirect dependency into `CHANGE_SCOPE` or `TEST_IMPORTS`.
+  anything else is decided by the whole test. Run it attached (mode N). A new check-name prefix
+  goes into `WIN32_GROUPS` (`SETUP_GROUPS`, `BUILDER_GROUPS`), a new indirect dependency into
+  `CHANGE_SCOPE` or `TEST_IMPORTS`.
+- **The release gate (the owner, 2026-10-30; from v0.2.0 release candidate 2):** milestones and
+  releases are signed off by `tests/mutate.py --focused --jobs 3` over every registered mutant, run
+  attached on an otherwise idle Mac. test_win32, test_first_run_setup and test_builder_poc have
+  focused groups (`FOCUS_GROUPS`); test_win32's test program, test_builder_poc's launcher and its
+  lift are reused while every input is unchanged (content keys; `scripts/poc/lift_fixture.sh`),
+  and its cases that must stop before the lift use a lifter that fails at once. The rules above
+  hold: one mutant at a time per tree, the group's unmutated run must pass and print the expected
+  check, only that check's kill counts, anything else goes to the whole test, which always builds
+  and lifts for real. Parallel-safe mutants run on separate scratch trees (`build/mutate`,
+  `build/mutate-2`, ...); `SERIAL_TESTS` and `SERIAL_GROUPS` (timing, the LAN port, all-core
+  builds), and a whole test of a test that has such groups, then run alone on `build/mutate`. A new
+  test or group with timing, network or all-core work goes into those lists. The default run
+  (whole tests, one tree, about 2.8 h) stays available as the reference and the fallback; the
+  two gave the same result for every mutant (`reference/TEST_COVERAGE.md`).
 - Tests stay deterministic; never weaken an assertion, suppress a failure or change production
   behaviour only to satisfy a test.
 
