@@ -40,12 +40,47 @@ WIN32_GROUPS = (
     ("A:", "A"), ("iocp:", "A"), ("wsock:", "A"), ("profile:", "A"), ("named", "A"), ("display", "A"),
     ("reg", "A"), ("cs:", "A"), ("lang", "A"), ("wave", "A"), ("console", "A"), ("tick:", "A"),
 )
+# test_first_run_setup --modes groups and test_builder_poc --modes cases, the same way.
+SETUP_GROUPS = (
+    ("key:", "input"), ("owner:", "input"), ("verify:", "input"), ("status:", "state"), ("map:", "state"),
+    ("progress:", "progress"), ("bar:", "look"), ("details:", "look"), ("install:", "install"),
+)
+BUILDER_GROUPS = (
+    ("no Command Line Tools", "clt"), ("an installed file missing", "missing"), ("not enough free disk", "disk"),
+    ("a file does not compile", "compile"), ("cancelled while compiling", "cancel"),
+    ("a data folder with a space", "space"), ("launcher:", "launcher"),
+)
+FOCUS_GROUPS = {"win32": WIN32_GROUPS, "setup": SETUP_GROUPS, "builder": BUILDER_GROUPS}
+
+# Parallel runs (mutate.py --jobs N): what runs alone, after the parallel phase, on
+# one scratch tree with nothing else running. A test, or a test's group, that waits
+# on or measures real time, uses the network or a fixed port, or loads every core.
+# A whole-test run of a test with groups runs alone whenever any of its groups does.
+SERIAL_TESTS = {
+    "bcast": "LAN discovery datagrams to UDP 6112",
+    "builder": "compiles with every core; a cancel after 20 s, launchers stopped after 20 s",
+}
+SERIAL_GROUPS = {
+    "win32": {
+        "A": "the 64 Hz tick's steps, a completion-port worker woken after a Sleep",
+        "N": "sockets on loopback, a LAN broadcast, waits on GetTickCount",
+        "Q": "socket completion ports, timed waits",
+        "B": "UDP 6112 on this host",
+        "D": "a timer due after a Sleep",
+        "F": "a timed input script, a follow file read in time",
+        "S": "the stall recorder's frame timings",
+        "T": "the stall recorder's frame timings",
+        "V": "wave callbacks in time",
+    },
+    "setup": {"install": "the installer's cancel within 3 s"},
+}
 
 # mutate.py --changed: what a changed path can affect beyond the mutants in
 # that file (patches/x86recomp/*.patch count as the files they change). Each
 # rule: (changed path prefix, changed path suffix, the mutants it selects: a
 # file prefix, or "test:<key>").
-TEST_IMPORTS = {"test_loader.py": ("win32", "lifter")}  # test_win32/test_lifter_patches import it
+TEST_IMPORTS = {"test_loader.py": ("win32", "lifter"),  # test_win32/test_lifter_patches import it
+                "test_builder_poc.py": ("mutate",)}  # test_mutate imports it (launcher_key)
 CHANGE_SCOPE = (
     ("tools/x86recomp/src/runtime/", ".h", "tools/x86recomp/src/runtime/"),  # a runtime header
     ("tools/x86recomp/tools/lifter/", "", "test:lifter"),  # the lifter lifts every test's guest code
@@ -1536,8 +1571,8 @@ MUTANTS = [
          expect='focused: TIMEOUT goes to the whole test'),
     dict(id='R-G6', milestone="R", area="gate", file='tests/mutate.py', test="mutate",
          fault='the group is used without checking that it prints the expected check',
-         old='        if g is not None and not any(m["expect"] in l for l in self.baseline("win32", self.args(g))):\n',
-         new='        if g is not None and not any(True for l in self.baseline("win32", self.args(g))):\n',
+         old='        if g is not None and not any(m["expect"] in l for l in self.baseline(m["test"], self.args(m["test"], g))):\n',
+         new='        if g is not None and not any(True for l in self.baseline(m["test"], self.args(m["test"], g))):\n',
          expect='focused: a group that does not print the expected check: the whole test'),
     dict(id='R-G7', milestone="R", area="gate", file='tests/mutate.py', test="mutate",
          fault='a timeout is classified KILLED',
@@ -1640,6 +1675,56 @@ MUTANTS = [
          old='    names |= set(git("ls-files", "--others", "--exclude-standard").split())  # new, not yet added\n',
          new='',
          expect='changed: a new patch not yet added selects the mutants in the files it changes'),
+    dict(id="R-G12", milestone="R", area="gate", file="tests/mutate.py", test="mutate",
+         fault="a whole test of a test with serial groups shares the Mac (--jobs)",
+         old="bool(groups) and (whole or group_of(m) is None",
+         new="bool(groups) and (group_of(m) is None",
+         expect="serial: a whole test_win32 run runs alone"),
+    dict(id="R-G13", milestone="R", area="gate", file="tests/mutate.py", test="mutate",
+         fault="the mutants that must run alone run in the parallel phase (--jobs)",
+         old="alone, shared = [m for m in sel if serial(m)], [m for m in sel if not serial(m)]",
+         new="alone, shared = [], list(sel)",
+         expect="parallel: a mutant that must run alone runs with nothing else"),
+    dict(id="R-G14", milestone="R", area="gate", file="tests/mutate.py", test="mutate",
+         fault="every worker uses build/mutate (--jobs)",
+         old='SCRATCH if i == 0 else f"{SCRATCH}-{i + 1}"',
+         new="SCRATCH",
+         expect="parallel: each worker has its own scratch tree"),
+    dict(id="R-G15", milestone="R", area="gate", file="tests/mutate.py", test="mutate",
+         fault="a whole test that must run alone runs in the parallel phase (--jobs)",
+         old="            elif serial(m, whole=True):\n",
+         new="            elif False:\n",
+         expect="parallel: a whole test of test_win32 runs alone, on build/mutate"),
+    dict(id="R-G16", milestone="R", area="gate", file="scripts/poc/lift_fixture.sh", test="mutate",
+         fault="the lift fixture's key ignores the input files' contents",
+         old='    elif [ -f "$a" ]; then echo "<file>"; shasum -a 256 < "$a"\n',
+         new='    elif [ -f "$a" ]; then echo "<file>"\n',
+         expect="lift fixture: a changed input file lifts again"),
+    dict(id="R-G17", milestone="R", area="gate", file="scripts/poc/lift_fixture.sh", test="mutate",
+         fault="the lift fixture's key ignores the contents of the files in an input folder",
+         old='      echo "$f"; shasum -a 256 < "$f"; done)',
+         new='      echo "$f"; done)',
+         expect="lift fixture: a changed file in an input folder lifts again"),
+    dict(id="R-G18", milestone="R", area="gate", file="scripts/poc/lift_fixture.sh", test="mutate",
+         fault="the lift fixture's key ignores the lifter",
+         old='key=$( { shasum -a 256 < "$LIFTER"; cat "$STAMP"',
+         new='key=$( { cat "$STAMP"',
+         expect="lift fixture: another lifter lifts again"),
+    dict(id="R-G19", milestone="R", area="gate", file="scripts/poc/lift_fixture.sh", test="mutate",
+         fault="a failed lift is kept",
+         old='"$LIFTER" "$@" || exit\n',
+         new='"$LIFTER" "$@"\n',
+         expect="lift fixture: a failed lift is not kept"),
+    dict(id="R-G20", milestone="R", area="gate", file="tests/test_builder_poc.py", test="mutate",
+         fault="the launcher's cache key ignores src/main.cpp",
+         old='    with open(os.path.join(ROOT, "src", "main.cpp"), "rb") as f:\n        h.update(f.read())\n',
+         new='',
+         expect="launcher key: a changed main.cpp"),
+    dict(id="R-G21", milestone="R", area="gate", file="tests/test_builder_poc.py", test="mutate",
+         fault="the launcher's cache key ignores the runtime headers",
+         old='if base.endswith("lib") or n.endswith((".h", ".hpp", ".inc", ".def")):',
+         new='if base.endswith("lib"):',
+         expect="launcher key: a changed runtime header"),
     dict(id='R-F1', milestone="R", area="gdi", file=WIN, test="win32",
          fault='FillRect includes the right and bottom edges',
          old='  for (int32_t y = t; y < b; y++)\n    for (int32_t x = l; x < r; x++)',

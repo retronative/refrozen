@@ -7,6 +7,13 @@ downloading them back; the website updated and deployed. Gate outcomes are in th
 checklist below. Release candidates 1 and 2 were not published: release candidate 3 fixed an
 intermittent launch failure found in R6 (x86recomp patch 0022) and added the installer UX.
 
+**v0.2.0 Beta published 2026-10-30, with the owner's approval (R6, R8):** tag `v0.2.0` on
+`64ef120` (release candidate 2), GitHub pre-release with `reFrozen-0.2.0.dmg` (SHA-256
+`db1ff96c3e839bb7c2450db525f37ceca8ff08ba367fe200cb0a7af550685643`) and `SHA256SUMS`, verified by
+downloading them back; the website updated and deployed. Gate outcomes are in `M7_READINESS.md`.
+Release candidate 1 was not published: release candidate 2 added patches 0026–0028. R1 ships as a
+documented known issue (below).
+
 **Approved framework, 2026-10-26.** The user accepted the R1–R8 gates and the revised M6 acceptance
 below. Nothing is implemented, tagged, published or pushed by this plan: each implementation step
 (the first-run builder prototype included) and the publication itself need the user's separate
@@ -46,7 +53,7 @@ stay as the game has them and are not supported or tested.
 | Gate | What must be shown | Class |
 |---|---|---|
 | **R1 Crash correctness** | The intermittent `GetAttacker()` crash: root cause VERIFIED (FEASIBILITY), fix committed, targeted regression test(s) and mutants in the registry, all KILLED. **For the v0.1.0 alpha (approved 2026-10-26):** instead, a documented known limitation with the conditions below; it reopens as a mandatory blocker on any reopening trigger | Mandatory blocker (alpha risk accepted, see below) |
-| **R2 Regression** | All suites and ctest pass; the full mutation registry (earlier mutants re-run, AGENTS.md) plus focused new mutants for every changed critical path (R1's fix, local build, first-run setup, packaging checks); two lifts byte-identical; `validate_lift.py` HARD PASS; patches reapply; M4 and M5 acceptance on the release-candidate build | Mandatory |
+| **R2 Regression** | All suites and ctest pass; the full mutation registry (earlier mutants re-run, AGENTS.md; from v0.2.0 release candidate 2 by the release gate `mutate.py --focused --jobs 3`, with the default whole-test run as its reference, the owner 2026-10-30) plus focused new mutants for every changed critical path (R1's fix, local build, first-run setup, packaging checks); two lifts byte-identical; `validate_lift.py` HARD PASS; patches reapply; M4 and M5 acceptance on the release-candidate build | Mandatory |
 | **R3 M6** | M6 passed and signed off under the revised acceptance in ROADMAP (R1 met; 3–5 clean 25–30-minute AI stress runs; one clean 65-minute run with every existing pass condition), on the release-candidate build | Mandatory blocker |
 | **R4 Release candidate** | One commit built from a clean checkout, packaged, bundle checks, content gate (no PE image, MPQ, map, key-shaped string or lifted-function symbol in any shipped file), dmg round trip, checksums, manifest. The game module the gates use is produced by the packaged app's own first-run builder | Mandatory, automated |
 | **R5 Clean install** | A fresh macOS account; the dmg downloaded through a browser (quarantine attribute present); first run from the player's installers to the main menu; scripted negative cases (wrong installer or patch, cancel, low disk); uninstall; disk use and build time recorded | Mandatory blocker |

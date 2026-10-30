@@ -3,7 +3,7 @@
 the sources and check that its test catches it (ReCarbon's practice).
 
   /opt/homebrew/bin/python3 -I tests/mutate.py [--only ID,...] [--milestone M3] [--tsv OUT]
-                                               [--changed REF] [--focused]
+                                               [--changed REF] [--focused [--jobs N]]
 
 The real tree is never modified. build/mutate/ holds a copy of
 tools/x86recomp (sources only), scripts/ and tests/, and its own x86recomp
@@ -28,14 +28,24 @@ Exit 0 iff every selected mutant is KILLED or EQUIVALENT.
 Without --focused this is the release-level gate: every selected
 mutant, its whole test, one at a time.
 
---focused: a test_win32 mutant runs only the --modes group that prints its
-expected check (WIN32_GROUPS in mutants.py), and the compiled test program is
-reused while every input of its compile is unchanged (test_win32 --cache).
-Before a group is used on a scratch tree, its unmutated run there must pass
-and print the mutant's expected check as ok; otherwise the mutant runs its
-whole test. A focused run counts only when it is KILLED by the expected check:
-any other outcome (survived, another check, a timeout, a crash) is decided by
-the whole test, and the result says so.
+--focused: a mutant of test_win32, test_first_run_setup or test_builder_poc
+runs only the --modes group of its test that prints its expected check
+(FOCUS_GROUPS in mutants.py). Compiled test programs are reused while every
+input of their compile is unchanged (test_win32 and test_builder_poc --cache),
+and test_builder_poc's focused cases reuse the real lifter's output while every
+input of the lift is unchanged. Before a group is used on a scratch tree, its
+unmutated run there must pass and print the mutant's expected check as ok;
+otherwise the mutant runs its whole test. A focused run counts only when it is
+KILLED by the expected check: any other outcome (survived, another check, a
+timeout, a crash) is decided by the whole test, which never reuses a lift, and
+the result says so.
+
+--jobs N (with --focused): N scratch trees (build/mutate, build/mutate-2, ...),
+each with its own sources, build, test caches and bytecode. First every mutant
+that may share the Mac runs, one per tree at a time; then, on build/mutate with
+nothing else running, the mutants that must run alone (SERIAL_TESTS and
+SERIAL_GROUPS in mutants.py: real-time waits and measurements, the network and
+fixed ports, every core) and the whole-test runs of tests with such groups.
 
 --changed REF: only the mutants that the changes since REF (committed, not
 yet committed, or in new files not yet added) can affect: those in changed files (a changed patches/x86recomp patch
@@ -51,7 +61,9 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SCRATCH = os.path.join(ROOT, "build", "mutate")
@@ -62,7 +74,9 @@ LLVM = "/opt/homebrew/opt/llvm"
 X86_TARGETS = ["recomp_lift", "recomp_runtime", "recomp_x87", "recomp_image", "recomp_opengl"]
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from mutants import CHANGE_SCOPE, MUTANTS, TEST_IMPORTS, TESTS, WIN32_GROUPS  # noqa: E402
+from mutants import (CHANGE_SCOPE, FOCUS_GROUPS, MUTANTS, SERIAL_GROUPS, SERIAL_TESTS, TEST_IMPORTS,  # noqa: E402
+                     TESTS)
+CACHED = ("win32", "builder")  # tests that take --cache DIR
 
 
 def sync(scratch=SCRATCH):
@@ -179,19 +193,28 @@ def mutate_one(m, timeout, scratch=SCRATCH, args=()):
             mark_restored(scratch, rel)
 
 
+PRINT = threading.Lock()
+
+
 def report(m, status, detail, t0):
-    print(f"{status:12} {m['id']:10} {m['milestone']} {m['area']}: {m['fault']}  [{time.time() - t0:.0f} s]")
-    print(f"             expected: {m['expect']}")
-    print(f"             observed: {detail}")
+    with PRINT:
+        print(f"{status:12} {m['id']:10} {m['milestone']} {m['area']}: {m['fault']}  [{time.time() - t0:.0f} s]")
+        print(f"             expected: {m['expect']}")
+        print(f"             observed: {detail}", flush=True)
 
 
 # --- focused runs -------------------------------------------------------
 
 def group_of(m):
-    """The test_win32 group that prints m's expected check, or None."""
-    if m["test"] != "win32":
-        return None
-    return next((g for prefix, g in WIN32_GROUPS if m["expect"].startswith(prefix)), None)
+    """The --modes group of m's test that prints m's expected check, or None."""
+    return next((g for prefix, g in FOCUS_GROUPS.get(m["test"], ()) if m["expect"].startswith(prefix)), None)
+
+
+def serial(m, whole=False):
+    """Whether m's run must have the Mac to itself: its test, its focused group or,
+    for a whole-test run, any group of its test (SERIAL_TESTS, SERIAL_GROUPS)."""
+    groups = SERIAL_GROUPS.get(m["test"], {})
+    return m["test"] in SERIAL_TESTS or bool(groups) and (whole or group_of(m) is None or group_of(m) in groups)
 
 
 class Baseline(Exception):
@@ -201,9 +224,9 @@ class Baseline(Exception):
 class Tree:
     """The scratch tree and the unmutated runs made on it."""
 
-    def __init__(self, needs_x86, timeout):
-        self.path, self.needs_x86, self.timeout = SCRATCH, needs_x86, timeout
-        self.cache = os.path.join(SCRATCH, "test-cache")
+    def __init__(self, needs_x86, timeout, path=SCRATCH):
+        self.path, self.needs_x86, self.timeout = path, needs_x86, timeout
+        self.cache = os.path.join(path, "test-cache")
         self.ok = {}  # (test, args) -> the ok lines of its passing unmutated run
 
     def prepare(self):
@@ -214,8 +237,8 @@ class Tree:
             if not ok:
                 raise Baseline("baseline build of the scratch tree failed:\n" + log)
 
-    def args(self, group):
-        return ("--modes", group, "--cache", self.cache)
+    def args(self, test, group):
+        return ("--modes", group) + (("--cache", self.cache) if test in CACHED else ())
 
     def baseline(self, test, args):
         """The ok lines of the unmutated run; Baseline if it does not pass."""
@@ -227,24 +250,26 @@ class Tree:
                     raise Baseline("rebuild of the unmutated scratch tree failed:\n" + log)
             code, out = run_test(test, self.timeout, self.path, args)
             shown = f"--modes {args[1]}" if args[:1] == ("--modes",) else ""
+            shown += f" ({os.path.basename(self.path)})" if self.path != SCRATCH else ""
             if code != 0:
                 raise Baseline(f"baseline: {TESTS[test]} {shown} does not pass on the unmutated tree:\n"
                                f"{out[-3000:]}")
             self.ok[key] = [l for l in out.splitlines() if l.startswith("ok  ")]
-            print(f"baseline {TESTS[test]} {shown}".rstrip() + ": pass", flush=True)
+            with PRINT:
+                print(f"baseline {TESTS[test]} {shown}".rstrip() + ": pass", flush=True)
         return self.ok[key]
 
     def whole_args(self, m):
-        return ("--cache", self.cache) if m["test"] == "win32" else ()
+        return ("--cache", self.cache) if m["test"] in CACHED else ()
 
     def focused(self, m):
         """(status, detail, decided): decided False means the whole test must decide."""
         g = group_of(m)
-        if g is not None and not any(m["expect"] in l for l in self.baseline("win32", self.args(g))):
+        if g is not None and not any(m["expect"] in l for l in self.baseline(m["test"], self.args(m["test"], g))):
             g = None  # the mapping does not hold for this check: the whole test
         if g is None:
             return None, "no focused group", False
-        status, detail = mutate_one(m, self.timeout, self.path, self.args(g))
+        status, detail = mutate_one(m, self.timeout, self.path, self.args(m["test"], g))
         if status == "KILLED":
             return status, detail, True
         if status == "INVALID":  # does not apply or does not build: the same for the whole test
@@ -256,22 +281,70 @@ class Tree:
         return mutate_one(m, self.timeout, self.path, self.whole_args(m))
 
 
-def run_focused(sel, needs_x86, timeout):
-    tree = Tree(needs_x86, timeout)
-    tree.prepare()
-    results = []
-    for m in sel:
-        t0 = time.time()
+def decide(tree, m, focused_status=None, t0=None):
+    """m's result on tree: its focused run, then its whole test if that does not decide
+    (focused_status: the focused run already made, the whole test still to run)."""
+    t0 = t0 or time.time()
+    if focused_status is None:
         status, detail, decided = tree.focused(m)
-        if not decided:
-            fs = status
-            status, detail = tree.whole(m)
-            detail += f"  (whole test; focused: {fs or 'none'})"
-        results.append((m, status, detail))
-        report(m, status, detail, t0)
+        if decided:
+            report(m, status, detail, t0)
+            return status, detail
+        focused_status = status or "none"
+    status, detail = tree.whole(m)
+    detail += f"  (whole test; focused: {focused_status})"
+    report(m, status, detail, t0)
+    return status, detail
+
+
+def run_focused(sel, needs_x86, timeout, jobs=1):
+    trees = [Tree(needs_x86, timeout, SCRATCH if i == 0 else f"{SCRATCH}-{i + 1}") for i in range(jobs)]
+    with ThreadPoolExecutor(jobs) as ex:
+        list(ex.map(Tree.prepare, trees))
+    results = {}
+    if jobs == 1:
+        alone, shared = sel, []
+    else:
+        alone, shared = [m for m in sel if serial(m)], [m for m in sel if not serial(m)]
+    later = []  # (m, focused status, t0): whole tests that must run alone
+
+    def worker(tree):
+        while True:
+            with PRINT:
+                if not shared:
+                    return
+                m = shared.pop(0)
+            t0 = time.time()
+            try:
+                status, detail, decided = tree.focused(m)
+                if decided:
+                    report(m, status, detail, t0)
+                    results[m["id"]] = (status, detail)
+                elif serial(m, whole=True):
+                    with PRINT:
+                        later.append((m, status or "none", t0))
+                else:
+                    results[m["id"]] = decide(tree, m, status or "none", t0)
+            except Baseline:
+                with PRINT:
+                    shared.clear()  # the other workers stop after their current mutant
+                raise
+
+    if shared:
+        with ThreadPoolExecutor(jobs) as ex:
+            list(ex.map(worker, trees))  # re-raises a worker's Baseline
+        if jobs > 1:
+            with PRINT:
+                print(f"parallel phase done: {len(results)} decided, {len(later)} whole tests to run alone, "
+                      f"{len(alone)} mutants to run alone", flush=True)
+    for m in alone:
+        results[m["id"]] = decide(trees[0], m)
+    for m, fs, t0 in later:
+        results[m["id"]] = decide(trees[0], m, fs, t0)
     if needs_x86:
-        build()  # leave the scratch build matching the sources
-    return results
+        for tree in trees:
+            build(tree.path)  # leave the scratch builds matching the sources
+    return [(m, *results[m["id"]]) for m in sel]
 
 
 # --- selection by change ------------------------------------------------
@@ -327,7 +400,10 @@ def main():
     ap.add_argument("--timeout", type=int, default=600)
     ap.add_argument("--changed", metavar="REF", help="only the mutants that changes since REF can affect")
     ap.add_argument("--focused", action="store_true", help="focused runs (see above)")
+    ap.add_argument("--jobs", type=int, default=1, help="with --focused: parallel scratch trees (see above)")
     a = ap.parse_args()
+    if a.jobs < 1 or a.jobs > 1 and not a.focused:
+        sys.exit("--jobs N: N >= 1, and more than one only with --focused")
     sel = [m for m in MUTANTS
            if (not a.only or m["id"] in a.only.split(",")) and (not a.milestone or m["milestone"] == a.milestone)]
     if a.changed:
@@ -341,7 +417,7 @@ def main():
 
     if a.focused:
         try:
-            results = run_focused(sel, needs_x86, a.timeout)
+            results = run_focused(sel, needs_x86, a.timeout, a.jobs)
         except Baseline as e:
             sys.exit(str(e))
     else:

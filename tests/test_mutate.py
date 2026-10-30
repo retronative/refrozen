@@ -11,7 +11,15 @@
 - classify never turns a timeout or a crash into KILLED.
 - --changed: a file's mutants, a patch's files, a runtime header, an imported
   test, a changed registry entry.
-- Every test_win32 mutant maps to a group test_win32 --modes knows.
+- Every test_win32, test_first_run_setup and test_builder_poc mutant maps to a
+  group its test's --modes knows.
+- --jobs: which mutants run alone; a mutant or whole test that must run alone
+  overlaps no other run; each worker has its own scratch tree; results keep the
+  selection's order.
+- The focused runs' reused fixtures are invalidated by any change of their
+  inputs: test_builder_poc's launcher (launcher_key) and the lift
+  (scripts/poc/lift_fixture.sh: a changed input file, a file added to an input
+  folder, an argument, the lifter, the kit's stamp; a failed lift is not kept).
 Prints a FAIL line per failing check.
 """
 import ast
@@ -19,11 +27,16 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import mutate  # noqa: E402
+import test_builder_poc  # noqa: E402
 from mutants import MUTANTS  # noqa: E402
+
+SCRIPTS = os.environ.get("REFROZEN_SCRIPTS",
+                         os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "scripts"))
 
 failures = 0
 
@@ -150,11 +163,141 @@ def changed(tmp):
 
 
 def registry_groups():
-    src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "test_win32.py")).read()
-    groups = next(ast.literal_eval(n.value) for n in ast.parse(src).body
-                  if isinstance(n, ast.Assign) and getattr(n.targets[0], "id", "") == "MODE_GROUPS")
-    unmapped = [m["id"] for m in MUTANTS if m["test"] == "win32" and mutate.group_of(m) not in groups]
-    check("registry: every test_win32 mutant maps to a --modes group", unmapped, [])
+    for test, name in (("win32", "MODE_GROUPS"), ("setup", "GROUPS"), ("builder", "CASES")):
+        src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), mutate.TESTS[test])).read()
+        groups = next(ast.literal_eval(n.value) for n in ast.parse(src).body
+                      if isinstance(n, ast.Assign) and getattr(n.targets[0], "id", "") == name)
+        unmapped = [m["id"] for m in MUTANTS if m["test"] == test and mutate.group_of(m) not in groups]
+        check(f"registry: every {mutate.TESTS[test]} mutant maps to a --modes group", unmapped, [])
+
+
+def parallel():
+    w = lambda expect, test="win32", **k: dict(id=expect[:2] + test, test=test, expect=expect, file="x", **k)
+    check("serial: a stall-recorder group runs alone", mutate.serial(w("S: a frame")), True)
+    check("serial: a window-message group may share", mutate.serial(w("W: popup")), False)
+    check("serial: a test_win32 mutant without a group runs alone", mutate.serial(w("zz: x")), True)
+    check("serial: a whole test_win32 run runs alone", mutate.serial(w("W: popup"), whole=True), True)
+    check("serial: the setup's install runs alone", mutate.serial(w("install: x", "setup")), True)
+    check("serial: the setup's input checks may share", mutate.serial(w("key: x", "setup")), False)
+    check("serial: every builder case runs alone", mutate.serial(w("launcher: x", "builder")), True)
+    check("serial: the LAN broadcast test runs alone", mutate.serial(w("x", "bcast")), True)
+    check("serial: a loader mutant may share, whole or not", mutate.serial(w("x", "loader"), whole=True), False)
+
+    runs, lock = [], threading.Lock()
+
+    class Fake:
+        def __init__(self, needs_x86, timeout, path):
+            self.path = path
+
+        def prepare(self):
+            pass
+
+        def _run(self, m, kind):
+            t0 = time.time()
+            time.sleep(0.03)
+            with lock:
+                runs.append((self.path, kind, m["id"], t0, time.time()))
+
+        def focused(self, m):
+            self._run(m, "focused")
+            return ("KILLED", "d", True) if m.get("kill", True) else ("SURVIVED", "d", False)
+
+        def whole(self, m):
+            self._run(m, "whole")
+            return "KILLED", "d"
+
+    sel = ([w(f"W: {i}") for i in range(6)] + [w(f"S: {i}") for i in range(3)] + [w("x", "bcast")]
+           + [w(f"x{i}", "loader", kill=False) for i in range(3)] + [w("W: survives", kill=False)])
+    for i, m in enumerate(sel):
+        m["id"] = f"P{i}"
+    alone = {m["id"] for m in sel if mutate.serial(m)} | {"P13"}  # P13: its whole test_win32 run
+    saved, saved_report = mutate.Tree, mutate.report
+    mutate.Tree, mutate.report = Fake, lambda *a: None
+    try:
+        out = mutate.run_focused(sel, False, 60, jobs=3)
+        check("parallel: results in the selection's order", [m["id"] for m, _, _ in out], [m["id"] for m in sel])
+        check("parallel: each worker has its own scratch tree", len({r[0] for r in runs}), 3)
+        clash = [(a[2], a[1], b[2], b[1]) for a in runs for b in runs if a is not b and
+                 (a[2] in alone and (a[1] == "whole" or a[2] != "P13")) and a[3] < b[4] and b[3] < a[4]]
+        check("parallel: a mutant that must run alone runs with nothing else", clash, [])
+        whole13 = [r for r in runs if r[2] == "P13" and r[1] == "whole"]
+        check("parallel: a whole test of test_win32 runs alone, on build/mutate",
+              [(r[0] == mutate.SCRATCH, any(o[3] < r[4] and r[3] < o[4] for o in runs if o is not r))
+               for r in whole13], [(True, False)])
+        check("parallel: a sharing test's whole test runs in the parallel phase",
+              sorted(r[2] for r in runs if r[1] == "whole" and r[2] != "P13"), ["P10", "P11", "P12"])
+        runs.clear()
+        mutate.run_focused(sel[:4], False, 60, jobs=1)
+        check("parallel: --jobs 1 runs every mutant in order on build/mutate",
+              [(r[0], r[2]) for r in runs], [(mutate.SCRATCH, m["id"]) for m in sel[:4]])
+    finally:
+        mutate.Tree, mutate.report = saved, saved_report
+
+
+def lift_fixture(tmp):
+    d = os.path.join(tmp, "lf")
+    lifter, stamp, cache, inp, count = (os.path.join(d, n) for n in ("lifter.sh", "stamp.txt", "cache", "in", "count"))
+    lifter_text = ("#!/bin/bash\necho x >> " + count + "\nfor a; do [ \"$p\" = --out ] && o=$a; p=$a; done\n"
+                   "[ -e " + os.path.join(d, "fail") + " ] && exit 3\ncat " + os.path.join(inp, "*.tsv") +
+                   " > \"$o/gen.cpp\"\n")
+    write(lifter, lifter_text)
+    os.chmod(lifter, 0o755)
+    write(stamp, "s1\n")
+    write(os.path.join(inp, "f.tsv"), "one\n")
+    write(os.path.join(d, "m.manifest"), "m1\n")
+
+    def lift(arg="A"):
+        out = tempfile.mkdtemp(dir=d)
+        r = subprocess.run(["/bin/bash", os.path.join(SCRIPTS, "poc", "lift_fixture.sh"), lifter, stamp, cache,
+                            "--symbols", inp, "--manifest", os.path.join(d, "m.manifest"), "--x", arg, "--out", out],
+                           capture_output=True, text=True)
+        got = open(os.path.join(out, "gen.cpp")).read() if os.path.exists(os.path.join(out, "gen.cpp")) else None
+        return r.returncode, got, len(open(count).read().split()) if os.path.exists(count) else 0
+
+    check("lift fixture: the first lift runs the lifter", lift(), (0, "one\n", 1))
+    check("lift fixture: the same inputs reuse its output", lift(), (0, "one\n", 1))
+    write(os.path.join(inp, "f.tsv"), "two\n")
+    check("lift fixture: a changed file in an input folder lifts again", lift(), (0, "two\n", 2))
+    write(os.path.join(inp, "g.tsv"), "")
+    check("lift fixture: a file added to an input folder lifts again", lift()[2], 3)
+    write(os.path.join(d, "m.manifest"), "m2\n")
+    check("lift fixture: a changed input file lifts again", lift()[2], 4)
+    check("lift fixture: another argument lifts again", lift("B")[2], 5)
+    write(stamp, "s2\n")
+    check("lift fixture: another kit stamp lifts again", lift("B")[2], 6)
+    write(lifter, lifter_text + "# another lifter\n")
+    check("lift fixture: another lifter lifts again", lift("B")[2], 7)
+    write(os.path.join(d, "fail"), "")
+    write(stamp, "s3\n")
+    check("lift fixture: a failed lift fails", lift("B")[0], 3)
+    os.remove(os.path.join(d, "fail"))
+    check("lift fixture: a failed lift is not kept", lift("B")[2], 9)
+
+
+def launcher_cache(tmp):
+    d = os.path.join(tmp, "lk")
+    for rel, text in (("root/src/main.cpp", "int main(){}"), ("x86/src/runtime/a.h", "#pragma once"),
+                      ("x86/src/runtime/a.cpp", "int a;"), ("kit/lib/librecomp_runtime.dylib", "lib1")):
+        write(os.path.join(d, rel), text)
+    saved = test_builder_poc.ROOT, test_builder_poc.X86, test_builder_poc.KIT
+    test_builder_poc.ROOT, test_builder_poc.X86, test_builder_poc.KIT = (os.path.join(d, n) for n in ("root", "x86", "kit"))
+    try:
+        key = lambda: test_builder_poc.launcher_key(["clang++", os.path.join(d, "t", "refrozen")], os.path.join(d, "t"))
+        k0 = key()
+        check("launcher key: unchanged inputs, the same key", key(), k0)
+        write(os.path.join(d, "x86/src/runtime/a.cpp"), "int b;")
+        check("launcher key: a runtime source the launcher does not compile", key(), k0)
+        for rel, text, what in (("root/src/main.cpp", "int main(){return 1;}", "a changed main.cpp"),
+                                ("x86/src/runtime/a.h", "#pragma once\n#define X", "a changed runtime header"),
+                                ("kit/lib/librecomp_runtime.dylib", "lib2", "a changed kit library")):
+            write(os.path.join(d, rel), text)
+            k1 = key()
+            check(f"launcher key: {what}", k1 != k0, True)
+            k0 = k1
+        k1 = test_builder_poc.launcher_key(["clang++", "-O2", os.path.join(d, "t", "refrozen")], os.path.join(d, "t"))
+        check("launcher key: another compile command", k1 != k0, True)
+    finally:
+        test_builder_poc.ROOT, test_builder_poc.X86, test_builder_poc.KIT = saved
 
 
 def main():
@@ -164,6 +307,9 @@ def main():
         classify()
         changed(tmp)
         registry_groups()
+        parallel()
+        lift_fixture(tmp)
+        launcher_cache(tmp)
     print("ALL PASS" if not failures else f"{failures} FAILED")
     return 1 if failures else 0
 
