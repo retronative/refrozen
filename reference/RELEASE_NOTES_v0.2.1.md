@@ -14,7 +14,7 @@ built on your Mac from your own game files, with LAN games between Macs.
   attacked or damaged. If the game had discarded that event's information during the wait, the
   game stopped. reFrozen now answers "no unit" in that case, as the game does for a unit that has
   left the game, and play continues. In testing, the guard took effect during a real DotA AI match
-  and the match went on normally.
+  and the game continued without a crash.
 
 ## Upgrading from 0.2.0
 
@@ -68,8 +68,8 @@ On release candidate 2 (`23c28ec`; `reFrozen-0.2.1.dmg`, SHA-256
 `576a1e5836251c23b9751c7dded8922faf280c81de4f56b0fae820990a47a3cc`), details in `READINESS_v0.2.1.md`:
 
 - The crash guard: a regression test, mutation testing, a test map that forces the condition (the
-  game no longer stops), and a real DotA AI match in which the guard took effect and the match went
-  on normally.
+  game no longer stops), and a real DotA AI match in which the guard took effect and the game
+  continued without a crash (a test build with logging; the guard's code is the same).
 - Release checks, the dmg read back, signature, a clean install in a fresh data folder (the
   installers, cancel, the first build), an upgrade over a 0.2.0 installation (the game module
   rebuilt, maps kept), suites and ctest, two identical lifts, M4 3/3, M5 3/3, and the full mutation
