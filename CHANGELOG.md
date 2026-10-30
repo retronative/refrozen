@@ -27,7 +27,8 @@ Not released. What is planned and how far it is tested are in [docs/status.md](d
   unit. It is unresolved and under investigation; this release does not fix every issue related
   to the crash.
 - As in 0.2.0: Terror of the Tides stops the game when you start it; saved games of DotA v6.83d AI
-  (PMV 1.42 EN) can't be loaded; the game opens on the Mac's main display.
+  (PMV 1.42 EN) can't be loaded; the game opens on the Mac's main display; short pauses while the
+  game loads, and an occasional freeze of about a second during a match.
 - LAN games with the original Windows 1.26a client stay experimental; official testing is planned
   for 0.2.2.
 

@@ -45,8 +45,10 @@ keys and the official 1.26a English patch, and maps you supply.
 - **The game opens on the Mac's main display** and can't be moved to another display. To play
   on an external monitor, make it the main display in System Settings → Displays before you
   start the game.
-- As in 0.1.0: a short pause before a map starts loading, and a loading bar that freezes for a
-  few seconds on large maps.
+- Short pauses while the game loads: before a map loads, a loading bar that freezes for a few
+  seconds on large maps, a pause of a few seconds when the match first appears, and on the way
+  back to the menu. During a match the game can occasionally freeze for about a second. These
+  pauses are the same as in earlier versions.
 - reFrozen is not notarized: macOS blocks the first open until you choose **Open Anyway** (see
   Getting started).
 
@@ -77,5 +79,8 @@ On release candidate 2 (`23c28ec`; `reFrozen-0.2.1.dmg`, SHA-256
   installers, cancel, the first build), an upgrade over a 0.2.0 installation (the game module
   rebuilt, maps kept), suites and ctest, two identical lifts, M4 3/3, M5 3/3, and the full mutation
   gate (362 mutants: 360 killed, 2 equivalent).
-- One 30-minute AI match on the release candidate: no crash, stable frame pacing and memory.
-- LAN play between Macs: verified for 0.2.0; 0.2.1 changes no network code.
+- AI endurance on the release candidate: three 30-minute matches and one 65-minute match, with no
+  crash, stable frame pacing and memory.
+- A manual session with the release candidate's dmg (launch, map loading, gameplay, controls,
+  graphics, audio, exit): passed.
+- LAN play between Macs: verified for 0.2.0 and not repeated; 0.2.1 changes no network code.

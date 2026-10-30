@@ -1,7 +1,8 @@
 # Release readiness: reFrozen v0.2.1 (maintenance)
 
 Status of the v0.2.1 release, with the evidence behind each item. Prepared 2026-10-30; release
-candidate 2 (`23c28ec`) verified the same day, below.
+candidate 2 (`23c28ec`) verified the same day, below, with R3's endurance runs and the owner's R6
+session.
 
 Labels: **VERIFIED** (tested, evidence kept), **REUSED** (earlier evidence still valid, the reason
 given), **OPEN** (not yet done), **OWNER** (the owner's decision or session).
@@ -33,10 +34,10 @@ given), **OPEN** (not yet done), **OWNER** (the owner's decision or session).
 |---|---|
 | R1 | The known crash: guarded, regression test and mutants KILLED, exercised in a real match. The secondary defect: **unresolved** (Known issues) |
 | R2 Regression | **VERIFIED** on release candidate 2: suites, ctest, two identical lifts, `validate_lift.py` HARD PASS (with the corrected audit, below), M4 3/3, M5 3/3, the release mutation gate 362 mutants: 360 KILLED, 2 EQUIVALENT |
-| R3 M6 | One 30-minute AI run on release candidate 2: **VERIFIED** clean (no fatal error, no watchdog report). The plan's full R3 set on the release-candidate build (3–5 clean 25–30-minute runs and one clean 65-minute run) is **not met**: the two complete 65-minute matches ran on the test build. Publishing before it is a deviation from the plan: **OWNER** decision |
+| R3 M6 | **VERIFIED** on release candidate 2, the plan's full set: three clean 30-minute AI runs and one clean 65-minute run (below) |
 | R4 Release candidate | **VERIFIED**: release candidate 2, `23c28ec` |
 | R5 Clean install and upgrade | **VERIFIED** in a fresh data folder (the dmg as downloaded) and over a 0.2.0 data folder. The fresh macOS account test: deferred, as for 0.2.0 |
-| R6 Human verification | **OWNER** |
+| R6 Human verification | **VERIFIED**: PASSED by the owner (2026-10-30), a short session on darkBook with the release candidate's dmg (below). Mac-to-Mac LAN not repeated (the owner's decision; 0.2.0's evidence reused) |
 | R7a Signing | **VERIFIED**: ad hoc signature valid; Gatekeeper rejects (not notarized), as for 0.2.0 |
 | R7b Distribution and notices | **REUSED**: nothing shipped is added or changed except reFrozen's own code |
 | R8 Publication | **OWNER** |
@@ -76,7 +77,32 @@ during the clean install and was restarted on the same build; its evidence is ke
 | M4 | 3/3 PASS |
 | M5 | 3/3 PASS |
 | M6, one 30-minute run | clean: no fatal error, no watchdog report, pacing median 14.95 ms (drift ×1.03), memory growth ×1.01; marked FAIL only for "no victory announcement" (30 minutes does not reach the end of a match, as for every 30-minute run) |
+| R3: three more AI runs (2 × 30 minutes, 1 × 65 minutes), the launcher and module of the packaged app (`b31c55e4…`), m1-air idle | all clean: no fatal error, no watchdog report. 30-minute runs: pacing median 15.51 and 14.94 ms (drift ×1.04, ×1.01), memory growth ×1.06, ×1.01. 65-minute run: **PASS** on every condition (the match won, the score screen with 10 players, the replay saved), pacing median 15.08 ms (drift ×1.03), memory growth ×1.04. Memory at 15 minutes differs between matches (415–773 MB) and stays flat within each. Evidence: `~/rf-release/evidence-v021-rc2-r3/` |
 | Release mutation gate (`--focused --jobs 3`, cold), on `5ba97fe` | **362 mutants: 360 KILLED, 2 EQUIVALENT** (M3-F9, M7-B6); measured **1583 s (26.4 min)**, the first complete measured run after the builder tripwire (estimated about 27 minutes before) |
+
+**R6 (the owner, 2026-10-30): PASSED.** About ten minutes on darkBook (Apple M5): the packaged
+app from the release candidate's dmg, its game module built on darkBook (byte-identical to
+m1-air's), a DotA AI match of about 8.5 minutes. All seven checks passed: launch, map loading,
+basic gameplay, controls, graphics, audio, normal exit. Shorter than the plan's 30–60 minutes, as
+the owner chose for this maintenance release. Mac-to-Mac LAN was not repeated: no network,
+runtime or launcher code changed, and 0.2.0's two-Mac sessions are reused (below).
+
+The session's stall reporter (frames over 1 s) recorded five freezes, which the owner saw: a
+screen load (1.2 s), the map load (1.0 s), the first moment of the match after loading (2.8 s),
+one during play (1.1 s, the game's own code busy, no file access or waiting), and the return to
+the menu (1.9 s). Each has the same pattern in logs from builds before 0.2.0 (on m1-air, with
+the same files loaded and the same code busy; there 1.4 s, 1.4 s, 4.8–5.8 s and 0.5–1.5 s during
+play). The shipped game code changed since 0.2.0 only by the guard, which none of them involves.
+Classified as **existing behaviour, not a regression**; a known issue (release notes). The R3
+runs did not record freezes under the watchdog's limit; RC2's coverage of freezes over 1 s during
+play is this session. Evidence: `~/rf-test/v021-rc2/evidence/` (darkBook).
+
+**For future test sessions.** `REFROZEN_DATA` moves the setup app's folder (the installed game,
+the module, logs), not the game's own writable files: the game keeps its settings and replays
+(`registry.txt`, `install/Replay`) in `~/Library/Application Support/reFrozen` whatever it says,
+as 0.2.0 does. A test session started with `REFROZEN_DATA` alone therefore writes those files in
+the tester's own folder (the R6 session did: `registry.txt` and `LastReplay.w3g`). The test
+harness (`scripts/m6_accept.sh`) gives each run its own folder; a manual session needs the same.
 
 **After the build commit.** `5ba97fe` changes only `scripts/validate_lift.py` (the audit's function
 pattern), `tests/test_event_data.py`, `tests/mutants.py` and `TEST_COVERAGE.md`; none is in the dmg
@@ -91,18 +117,19 @@ R-E12, the corrected audit's mutant); `test_event_data` passes there.
 - The guard's second path (`GetAttacker` for an attack event registered on one unit) has not taken
   effect in a real match (unit test and builds only).
 - One real-match activation of the guard, on the test build (the guard plus logging); whether it
-  took effect during release candidate 2's 30-minute run is unknown (the shipped build does not
-  log it). Endurance is verified separately.
+  took effect during release candidate 2's AI runs is unknown (the shipped build does not log it).
+  The endurance runs on release candidate 2 (R3) were clean.
 - Whether the original Windows client stops on the same input: not verified.
 - Native Windows 1.26a LAN play: not verified (v0.2.2); the Wine check stays preliminary.
 - The fresh macOS account test: deferred, as for 0.2.0.
-- As in 0.2.0: Terror of the Tides, the DotA v6.83d AI saves, the main display, the load pauses, no
-  notarization.
+- Pauses while the game loads, and an occasional freeze of about a second during a match:
+  existing behaviour (R6, above), not a regression.
+- As in 0.2.0: Terror of the Tides, the DotA v6.83d AI saves, the main display, no notarization.
 
 ## Reused evidence, and why it is still valid
 
 | Evidence (0.2.0 release candidate 2, `M7_READINESS.md`) | Still valid because |
 |---|---|
-| Two-Mac LAN sessions (33.7 minutes, Wi-Fi disconnect and recovery, both host directions) | No network, runtime or launcher code changed. The guard changes the game only where it stopped before, identically on every Mac running 0.2.1 |
+| Two-Mac LAN sessions (33.7 minutes, Wi-Fi disconnect and recovery, both host directions); not repeated for 0.2.1 (the owner's decision, 2026-10-30) | No network, runtime or launcher code changed. The guard changes the game only where it stopped before, identically on every Mac running 0.2.1 |
 | x86recomp patches reapply identically | The x86recomp tree (`b76ce7b`) is unchanged |
 | The preliminary Wine check with the original client | Kept as preliminary evidence only; official Windows testing in v0.2.2 |
