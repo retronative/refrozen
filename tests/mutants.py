@@ -1876,4 +1876,8 @@ MUTANTS = [
          old='kit_missing = [s for s in kit_srcs if not os.path.exists(os.path.join(kit, "src", s))]',
          new='kit_missing = []',
          expect="check_release: a kit with a source missing its builder compiles"),
+    dict(id="R-E12", milestone="R", area="event data", file="scripts/validate_lift.py", test="event",
+         fault="the lift audit does not count a replaced function's translated body (two functions reported not lifted)",
+         old=r'(?:_lifted)?\(::recomp::Ctx', new=r'\(::recomp::Ctx',
+         expect="validate_lift.py: a replaced function's translated body counts as lifted"),
 ]

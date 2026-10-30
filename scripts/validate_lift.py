@@ -28,7 +28,8 @@ import re
 import struct
 import sys
 
-FN_RE = re.compile(r"^void f_([0-9A-F]{8})\(::recomp::Ctx& c\) \{")
+# A function reFrozen replaces (config/*.manifest, "replace") keeps its translated body as f_<address>_lifted.
+FN_RE = re.compile(r"^void f_([0-9A-F]{8})(?:_lifted)?\(::recomp::Ctx& c\) \{")
 INSN_RE = re.compile(r"^  \{ // ([0-9A-F]{8}) (\S+)")
 LABEL_RE = re.compile(r"^L_([0-9A-F]{8}):")
 MARKERS = {

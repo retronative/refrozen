@@ -9,7 +9,7 @@ A missing event data (ecx 0) must leave what the helper's own no-unit path leave
 ecx and the flags as on that path (a zero result: Intel SDM, CF=OF=0, ZF=1, PF=1, SF=0; AF
 not checked), and a return (esp + 4); the translated body never runs. Any other ecx runs the translated body unchanged.
 The game manifest replaces both helpers, and every build of the game module compiles
-src/replaced.cpp. Needs the x86recomp sources (tools/x86recomp) and Homebrew LLVM.
+src/replaced.cpp; validate_lift.py counts a replaced function's translated body as lifted. Needs the x86recomp sources (tools/x86recomp) and Homebrew LLVM.
 """
 import os
 import re
@@ -114,7 +114,19 @@ def wiring():
         check(f"{path} copies every kit source the builder compiles", sorted(compiled - copied), [])
 
 
+def audit():
+    # validate_lift.py counts a replaced function's translated body (f_<address>_lifted) as lifted.
+    sys.path.insert(0, os.path.join(ROOT, "scripts"))
+    import validate_lift
+    with tempfile.TemporaryDirectory() as tmp:
+        open(os.path.join(tmp, "gen_game_000.cpp"), "w").write(
+            "void f_6F40B6C0_lifted(::recomp::Ctx& c) {\n}\nvoid f_6F001000(::recomp::Ctx& c) {\n}\n")
+        fns = validate_lift.parse_generated(tmp)[0]
+    check("validate_lift.py: a replaced function's translated body counts as lifted", sorted(fns), [0x6F001000, 0x6F40B6C0])
+
+
 run()
 wiring()
+audit()
 print("ALL PASS" if not failures else f"{failures} FAILED")
 sys.exit(1 if failures else 0)
