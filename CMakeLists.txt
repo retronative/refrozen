@@ -39,6 +39,8 @@ else()
   if(NOT TARGET war3_lifted)
     message(FATAL_ERROR "no lifted code in ${REFROZEN_GENERATED}: run scripts/lift.sh first")
   endif()
+  # Game functions reFrozen replaces (config/game.manifest).
+  target_sources(war3_lifted PRIVATE src/replaced.cpp)
   add_executable(refrozen src/main.cpp $<TARGET_OBJECTS:war3_lifted>)
 endif()
 target_compile_features(refrozen PRIVATE cxx_std_20)

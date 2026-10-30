@@ -73,11 +73,15 @@ def sync(scratch=SCRATCH):
                            (os.path.join(ROOT, "scripts") + "/", "scripts/", ["__pycache__/"]),
                            (os.path.join(ROOT, "tests") + "/", "tests/", ["__pycache__/"]),
                            (os.path.join(ROOT, "src") + "/", "src/", []),
-                           (os.path.join(ROOT, "app") + "/", "app/", [])):
+                           (os.path.join(ROOT, "app") + "/", "app/", []),
+                           (os.path.join(ROOT, "config") + "/", "config/", [])):
+        if not os.path.isdir(src):
+            continue
         cmd = ["rsync", "-a", "--delete", "--checksum"] + [f"--exclude={e}" for e in excl]
         subprocess.run(cmd + [src, os.path.join(scratch, dst)], check=True)
-    if os.path.exists(os.path.join(ROOT, "VERSION")):  # the release scripts read it from the root
-        shutil.copy2(os.path.join(ROOT, "VERSION"), os.path.join(scratch, "VERSION"))
+    for name in ("VERSION", "CMakeLists.txt"):  # read from the root: the release scripts, test_event_data
+        if os.path.exists(os.path.join(ROOT, name)):
+            shutil.copy2(os.path.join(ROOT, name), os.path.join(scratch, name))
     # rsync gives a restored mutant file its source's (older) mtime again,
     # which would leave the mutant's object in the build: touch it.
     for rel in restored_unbuilt(scratch):

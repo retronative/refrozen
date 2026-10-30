@@ -15,7 +15,7 @@ ReCarbon (`../recarbon`); reusable lessons are in `../game-port-knowledge`.
 | `tools/` | x86recomp (pinned + patches), Wine (dev oracle only) | git-ignored |
 | `patches/x86recomp/` | Our x86recomp patches 0001–0028, applied in order by `scripts/setup_tools.sh` | Each with tests that fail under mutation: lifter patches in `tests/test_lifter_patches.py` (hand-computed) and x86recomp's `lift_atomic_test`; runtime/loader/HLE patches in `tests/test_loader.py` and `tests/test_win32.py`. A patch is a diff against the tree with the earlier ones applied. |
 | `CMakeLists.txt`, `src/` | The game project: `refrozen` = lifted code + x86recomp runtime (`GameConfig` in `src/main.cpp`) | Lifted DLLs listed in dependency order. Win32 functions are added to the runtime (a patch), never stubbed to succeed. |
-| `config/` | Lifter manifests per module (`<module>.manifest`), `unreachable.tsv`, `jumptable_corrections.tsv`, and the pinned lift input `symbols/<module>/functions.tsv`, `jumptables.tsv` | Addresses, flags and evidence only, no game bytes. Every manifest entry and correction says why. Refresh `symbols/` only deliberately (Ghidra varies between runs) and record the new lift hash. |
+| `config/` | Lifter manifests per module (`<module>.manifest`; `replace` lines name the game functions `src/replaced.cpp` replaces), `unreachable.tsv`, `jumptable_corrections.tsv`, and the pinned lift input `symbols/<module>/functions.tsv`, `jumptables.tsv` | Addresses, flags and evidence only, no game bytes. Every manifest entry and correction says why. Refresh `symbols/` only deliberately (Ghidra varies between runs) and record the new lift hash. |
 | `scripts/` | Install/patch (incl. the CD-key step, `font_keydata.py`), lift (`lift.sh`, `jumptable_corrections.py`), audit (`validate_lift.py`), import coverage (`import_coverage.py`), launches (`run_attempt.sh`, `m3_accept.sh`, `m4_accept.sh`), Wine oracle (`oracle_menus.sh`, `oracle_keys.c`, `m4_compare.sh`, `wine_loadtest.sh`), Ghidra scripts (`ghidra/`), map checks | |
 | `tests/` | Regression tests and the mutation gate (`mutate.py`, registry `mutants.py`) | See "Mutation gate". |
 | `reference/` | Feasibility, roadmap, research (`research/`) | |
@@ -36,6 +36,7 @@ ctest --test-dir tools/x86recomp/out/build/debug   # "pacing" is a known timing 
 /opt/homebrew/bin/python3 -I tests/mutate.py --changed main --focused  # focused gate while working
 /opt/homebrew/bin/python3 -I tests/test_mutate.py            # the gate's own rules
 /opt/homebrew/bin/python3 -I tests/test_lan_broadcast.py     # patch 0025: LAN discovery broadcast targets
+/opt/homebrew/bin/python3 -I tests/test_event_data.py        # src/replaced.cpp: event responses after a wait
 # Per module (symbols dir names: war3 game storm mss32 msvcr80 ijl15 mp3dec_asi mssfast_m3d
 # msseax2_m3d mssdolby_m3d reverb3_flt), e.g. game.dll: Ghidra analysis + exports (JDK 25, ~4 min for game.dll),
 JAVA_HOME=/opt/homebrew/opt/openjdk@25 MAXMEM=8G /opt/homebrew/opt/ghidra/libexec/support/analyzeHeadless \
