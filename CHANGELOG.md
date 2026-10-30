@@ -7,6 +7,13 @@ All notable changes to reFrozen are recorded here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- The intermittent crash in long AI matches: a map's trigger that read an attack or damage event
+  response after a wait could find the event's data gone, and the game stopped. The response is
+  now "no unit", as for a unit that has left the game.
+  *Provisional:* to be confirmed by the v0.2.1 AI stress runs before this entry is released.
+
 ## [0.2.0]: 2026-10-30, Beta (LAN multiplayer)
 
 reFrozen 0.2.0 Beta adds LAN multiplayer between Macs to the offline game of 0.1.0. The full notes,

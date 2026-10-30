@@ -102,9 +102,9 @@ chmod +x "$TMP/cc.sh"
     sleep 1
   done ) &
 SAMPLER=$!
-echo "compiling $(ls "$TMP"/generated/*.cpp "$KIT/src/lifted_table.cpp" | wc -l | tr -d ' ') files"
+echo "compiling $(ls "$TMP"/generated/*.cpp "$KIT/src/lifted_table.cpp" "$KIT/src/replaced.cpp" | wc -l | tr -d ' ') files"
 # NUL-separated: the default data folder, Application Support, has a space.
-printf '%s\0' "$TMP"/generated/*.cpp "$KIT/src/lifted_table.cpp" | xargs -0 -P "$JOBS" -n 1 "$TMP/cc.sh" &
+printf '%s\0' "$TMP"/generated/*.cpp "$KIT/src/lifted_table.cpp" "$KIT/src/replaced.cpp" | xargs -0 -P "$JOBS" -n 1 "$TMP/cc.sh" &
 WORKERS=$!
 wait "$WORKERS" || { WORKERS=""; fail 14 "a file did not compile"; }
 WORKERS=""
