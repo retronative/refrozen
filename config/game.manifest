@@ -1,2 +1,4 @@
 # recomp_lift manifest for game.dll (1.26a).
 probe 6F009850 GameMain  # milestone marker (M2): logs "probe: GameMain" when war3.exe calls it
+replace 6F40B6C0  # event response helper: a missing event data reads as no unit (src/replaced.cpp)
+replace 6F26FC10  # event response helper: a missing event data reads as no unit (src/replaced.cpp)

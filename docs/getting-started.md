@@ -67,7 +67,7 @@ reFrozen never ships any of these. It contains no game code, assets, maps or key
   silently: the game appears in the list, but **Join** does nothing. The question appears at the
   first join, not when hosting.
 - **The original Windows 1.26a client** is experimental: playing with it has not yet been
-  officially verified, and official testing is planned for v0.2.1. Community reports are welcome,
+  officially verified, and official testing is planned for v0.2.2. Community reports are welcome,
   including successful connections, disconnections and synchronization issues.
 
 ## Known issues

@@ -11,6 +11,7 @@ actually contains.
 - the content gate: no Windows executable (MZ), MPQ archive, Warcraft III map
   (HM3W, .w3x/.w3m), game data name, CD-key-shaped string or lifted-function
   symbol (f_<8 hex digits>) anywhere in the bundle;
+- the kit has every source file its first-run builder (kit/scripts/build_module.sh) compiles;
 - reFrozen's licence, the third-party notices and licence texts, and the fonts'
   licences are in the bundle; Info.plist names the version in VERSION, macOS 14 and
   the games category, and has the local network usage description;
@@ -111,6 +112,14 @@ check("no Warcraft III map or replay", not maps, ", ".join(maps[:5]))
 check("no game file names (.mpq .exe .dll .asi .m3d .flt)", not names, ", ".join(names[:5]))
 check("no CD-key-shaped string (26 characters of the key alphabet)", not keys, ", ".join(keys[:5]))
 check("no lifted game function symbol in a binary", not syms, ", ".join(syms[:5]))
+
+# The first-run builder compiles the kit's sources it names ("$KIT/src/<file>"): each must be in the kit.
+kit = os.path.join(APP, "Contents", "Resources", "kit")
+builder = os.path.join(kit, "scripts", "build_module.sh")
+kit_srcs = sorted(set(re.findall(r'"\$KIT/src/([^"/]+)"', open(builder).read()))) if os.path.exists(builder) else []
+kit_missing = [s for s in kit_srcs if not os.path.exists(os.path.join(kit, "src", s))]
+check("the kit has every source its builder compiles", bool(kit_srcs) and not kit_missing,
+      ", ".join(kit_missing) or "no build_module.sh in the kit")
 
 res = os.path.join(APP, "Contents", "Resources")
 need = ["licenses/COPYING", "licenses/NOTICE", "licenses/THIRD_PARTY_NOTICES.md", "licenses/LICENSES/GPL-3.0.txt",
