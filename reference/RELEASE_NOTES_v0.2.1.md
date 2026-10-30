@@ -19,8 +19,8 @@ built on your Mac from your own game files, with LAN games between Macs.
 ## Upgrading from 0.2.0
 
 Replace reFrozen in Applications with the new version. On the first launch it builds the game
-module again from your installed game files (a few minutes, as on the first install); your games,
-maps and settings are kept. For LAN games, every Mac runs reFrozen 0.2.1.
+module again from your installed game files (a few minutes, as on the first install); your
+installed game files and maps are kept. For LAN games, every Mac runs reFrozen 0.2.1.
 
 ## Requirements
 

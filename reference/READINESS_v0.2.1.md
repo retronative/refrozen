@@ -33,7 +33,7 @@ given), **OPEN** (not yet done), **OWNER** (the owner's decision or session).
 |---|---|
 | R1 | The known crash: guarded, regression test and mutants KILLED, exercised in a real match. The secondary defect: **unresolved** (Known issues) |
 | R2 Regression | **VERIFIED** on release candidate 2: suites, ctest, two identical lifts, `validate_lift.py` HARD PASS (with the corrected audit, below), M4 3/3, M5 3/3, the release mutation gate 362 mutants: 360 KILLED, 2 EQUIVALENT |
-| R3 M6 | One 30-minute AI run on release candidate 2: **VERIFIED** clean (no fatal error, no watchdog report). Endurance runs: **OWNER** (to be verified separately) |
+| R3 M6 | One 30-minute AI run on release candidate 2: **VERIFIED** clean (no fatal error, no watchdog report). The plan's full R3 set on the release-candidate build (3–5 clean 25–30-minute runs and one clean 65-minute run) is **not met**: the two complete 65-minute matches ran on the test build. Publishing before it is a deviation from the plan: **OWNER** decision |
 | R4 Release candidate | **VERIFIED**: release candidate 2, `23c28ec` |
 | R5 Clean install and upgrade | **VERIFIED** in a fresh data folder (the dmg as downloaded) and over a 0.2.0 data folder. The fresh macOS account test: deferred, as for 0.2.0 |
 | R6 Human verification | **OWNER** |
@@ -89,7 +89,9 @@ R-E12, the corrected audit's mutant); `test_event_data` passes there.
   rare, does not stop the game. The checks used so far cannot see its likely form (an id reused by
   an event of the same kind), so no observation of it is evidence that it is gone.
 - The guard's damage-event path has not been exercised in a real match (unit test and builds only).
-- One real-match activation of the guard; endurance is verified separately.
+- One real-match activation of the guard, on the test build (the guard plus logging); whether it
+  took effect during release candidate 2's 30-minute run is unknown (the shipped build does not
+  log it). Endurance is verified separately.
 - Whether the original Windows client stops on the same input: not verified.
 - Native Windows 1.26a LAN play: not verified (v0.2.2); the Wine check stays preliminary.
 - The fresh macOS account test: deferred, as for 0.2.0.
