@@ -12,6 +12,7 @@ The game manifest replaces both helpers, and every build of the game module comp
 src/replaced.cpp. Needs the x86recomp sources (tools/x86recomp) and Homebrew LLVM.
 """
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -99,6 +100,18 @@ def wiring():
                                                 for l in lines("scripts/poc/build_module.sh"))}
     for path, ok in wired.items():
         check(f"{path} builds src/replaced.cpp into the game module", ok, True)
+    # The two kits (development: make_kit.sh; the release app: make_release_app.sh) copy every kit source
+    # the builder compiles.
+    compiled = set()
+    for l in lines("scripts/poc/build_module.sh"):
+        if "| xargs" in l:
+            compiled |= set(re.findall(r'"\$KIT/src/([^"/]+)"', l))
+    for path in ("scripts/poc/make_kit.sh", "scripts/release/make_release_app.sh"):
+        copied = set()
+        for l in lines(path):
+            if l.startswith("cp ") and l.rstrip().endswith('"$KIT/src/"'):
+                copied |= {os.path.basename(a.strip('"')) for a in re.findall(r'"[^"]+"', l)[:-1]}
+        check(f"{path} copies every kit source the builder compiles", sorted(compiled - copied), [])
 
 
 run()

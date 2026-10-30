@@ -29,7 +29,7 @@ cp "$DEPS/lib/libSDL3.0.dylib" "$DEPS/lib/libstorm.dylib" "$KIT/lib/" 2>/dev/nul
   cp "$(ls "$DEPS"/lib/libstorm*.dylib | head -1)" "$KIT/lib/libstorm.dylib"
 }
 for h in ctx lifted simd64 sse x87; do cp "$X86/src/runtime/$h.h" "$KIT/include/runtime/"; done
-cp "$X86/src/runtime/lifted_table.cpp" "$KIT/src/"
+cp "$X86/src/runtime/lifted_table.cpp" "$ROOT/src/replaced.cpp" "$KIT/src/"
 cp -R "$ROOT/config/symbols" "$ROOT"/config/*.manifest "$ROOT/config/jumptable_corrections.tsv" "$KIT/config/"
 cp "$X86/tools/pe_symbols.py" "$ROOT/scripts/jumptable_corrections.py" "$ROOT/scripts/native_install.py" \
   "$ROOT/scripts/font_keydata.py" "$ROOT/scripts/poc/build_module.sh" "$KIT/scripts/"

@@ -40,6 +40,18 @@ given), **OPEN** (not yet done), **OWNER** (the owner's decision or session).
 | R7b Distribution and notices | **REUSED**: nothing shipped is added or changed except reFrozen's own code |
 | R8 Publication | **OWNER** |
 
+## Release candidate 1 (2026-10-30, `580077e`): stopped
+
+Built by the release pipeline on m1-air (`reFrozen-0.2.1.dmg`, SHA-256
+`75b8a14b4a99970b9915b3d2916dca14054929eb81e74ec484eb03b662a8da37`). The release checks passed
+(24), the dmg read back, its signature verified and the setup installed, but the packaged app's
+first-run build failed: a file did not compile. Cause: the release app's kit lacked
+`src/replaced.cpp` (`scripts/release/make_release_app.sh` keeps its own list of the kit's files;
+only the development kit's script had been changed, and the earlier build checks used that kit).
+Fixed in the next commit, with a release check that the kit has every source its builder compiles,
+a test that both kit scripts copy every such source, and mutants R-E11 and R-R4 (KILLED). The
+remaining gates were not run on release candidate 1; it is not a release candidate for publication.
+
 ## Reused evidence, and why it is still valid
 
 | Evidence (0.2.0 release candidate 2, `M7_READINESS.md`) | Still valid because |
